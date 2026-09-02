@@ -16,7 +16,7 @@ from pokemon_env import PokemonFireRedEnv
 # ================================================================
 # Die wichtigsten Werte stehen absichtlich hier oben.
 
-NUM_ENVS = 30
+NUM_ENVS = 40
 
 # Endlos-Training: laeuft in Bloecken weiter, bis du Ctrl+C drueckst.
 # TRAIN_CHUNK_TIMESTEPS ist nur die Groesse eines learn()-Blocks.
@@ -43,9 +43,9 @@ TRAIN_DEVICE = "auto"
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 RUNTIME_DIR = os.path.join(PROJECT_ROOT, "runtime")
 BASE_DIR = PROJECT_ROOT
-EXPLORATION_MEMORY_DIR = os.path.join(BASE_DIR, "exploration_memory")
-CURRICULUM_DIR = os.path.join(BASE_DIR, "curriculum_states")
-SHARED_CURRICULUM_DIR = os.path.join(BASE_DIR, "curriculum_shared")
+EXPLORATION_MEMORY_DIR = os.path.join(RUNTIME_DIR, "exploration_memory")
+CURRICULUM_DIR = os.path.join(RUNTIME_DIR, "curriculum_states")
+SHARED_CURRICULUM_DIR = os.path.join(RUNTIME_DIR, "curriculum_shared")
 
 # ================================================================
 # INTERNAL PATHS - normalerweise nicht aendern
@@ -314,10 +314,21 @@ def main():
     shared_maps = manager.dict(seed_maps)
     shared_transitions = manager.dict(seed_transitions)
 
-    # Seed journey-depth high-water from already globally known maps.
-    # Conservative on purpose: old progress is never rewarded again.
+    # V8: persistierter ECHTER Episoden-Depth-Rekord.
+    progress_file = os.path.join(
+        EXPLORATION_MEMORY_DIR, "global_progress.json"
+    )
+    persisted_depth = 0
+    try:
+        with open(progress_file, "r") as f:
+            persisted_depth = int(
+                (json.load(f) or {}).get("max_episode_maps", 0)
+            )
+    except Exception:
+        persisted_depth = 0
+
     shared_progress = manager.dict({
-        "max_episode_maps": int(len(seed_maps)),
+        "max_episode_maps": persisted_depth,
     })
     shared_lock = manager.RLock()
 
@@ -327,13 +338,10 @@ def main():
         f"{len(seed_maps)} Maps | "
         f"{len(seed_transitions)} Warps"
     )
-    print(
-        "🎓 V7.5 Rollen: "
-        "2 Intro | 2 Treppe | 3 Ausgang | 13 Progress | 10 Full Chain"
-    )
+    print("🎓 V7.7 Rollen: 1 Intro | 1 Treppe | 1 Ausgang | 8 Starter Rush | 7 Progress | 12 Full")
 
-    print("🎮 V7.5 Actions: A | B | START | UP | DOWN | LEFT | RIGHT")
-    print("🧭 V7.5 Observation: 64x64 Bild + 20 RAM/Nav Features")
+    print("🎮 V7.7 Actions: A | B | START | UP | DOWN | LEFT | RIGHT")
+    print("🧭 V7.7 Observation: UNVERAENDERT 64x64 Bild + 20 RAM/Nav Features")
     print("🌲 V7.5 Progress Focus: 23/30 Agents Richtung Vertania/Wald\n⚡ V7.5 Speed Cache: adjacency/frontier/distance caching aktiv")
 
     vec_env = SubprocVecEnv(

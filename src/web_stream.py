@@ -287,6 +287,94 @@ def _global_exploration_summary():
         except Exception:
             pass
     return {"known_edges":len(edges),"known_maps":len(maps),"known_transitions":len(transitions)}
+
+def _v8_direct_skill_stats():
+    totals = {}
+    stats_dir = os.path.join(RUNTIME_DIR, "training_stats")
+    keys = (
+        "v2_intro_episodes","v2_intro_success","v2_stairs_episodes","v2_stairs_success",
+        "v2_exit_episodes","v2_exit_success","v2_full_episodes","v2_full_intro",
+        "v2_full_stairs","v2_full_left_house","v2_full_starter",
+        "v8_starter_episodes","v8_starter_success","v8_battle_episodes","v8_battle_success",
+        "v8_level_episodes","v8_level_success","v8_badge_episodes","v8_badge_success",
+        "v7_full_badge1","battles_started","battles_completed","enemy_faints","enemy_damage_hp"
+    )
+    for k in keys: totals[k] = 0
+    for path in glob.glob(os.path.join(stats_dir, "agent_*.json")):
+        try:
+            with open(path, "r") as f: d = json.load(f)
+            if not isinstance(d, dict): continue
+            for k in keys: totals[k] += int(d.get(k, 0) or 0)
+        except Exception:
+            pass
+    def rate(s,e):
+        ee=int(totals.get(e,0)); ss=int(totals.get(s,0))
+        return round(100.0*ss/ee,2) if ee else 0.0
+    full_ep=int(totals.get("v2_full_episodes",0))
+    return {
+        "totals":totals,
+        "rates":{
+            "intro":rate("v2_intro_success","v2_intro_episodes"),
+            "stairs":rate("v2_stairs_success","v2_stairs_episodes"),
+            "exit":rate("v2_exit_success","v2_exit_episodes"),
+            "starter":rate("v8_starter_success","v8_starter_episodes"),
+            "battle":rate("v8_battle_success","v8_battle_episodes"),
+            "level":rate("v8_level_success","v8_level_episodes"),
+            "badge":rate("v8_badge_success","v8_badge_episodes"),
+            "full_intro":round(100.0*totals["v2_full_intro"]/full_ep,2) if full_ep else 0.0,
+            "full_stairs":round(100.0*totals["v2_full_stairs"]/full_ep,2) if full_ep else 0.0,
+            "full_exit":round(100.0*totals["v2_full_left_house"]/full_ep,2) if full_ep else 0.0,
+            "full_starter":round(100.0*totals["v2_full_starter"]/full_ep,2) if full_ep else 0.0,
+            "full_badge1":round(100.0*totals["v7_full_badge1"]/full_ep,2) if full_ep else 0.0,
+        }
+    }
+
+@app.get("/api/v8_skills")
+def get_v8_skills():
+    return _v8_direct_skill_stats()
+
+def _v81_skill_health():
+    totals = {}
+    stats_dir = os.path.join(RUNTIME_DIR, "training_stats")
+    keys = (
+        "v2_intro_episodes","v2_intro_success","v2_stairs_episodes","v2_stairs_success",
+        "v2_exit_episodes","v2_exit_success","v2_full_episodes","v2_full_intro",
+        "v2_full_stairs","v2_full_left_house","v2_full_starter",
+        "v8_starter_episodes","v8_starter_success","v8_battle_episodes","v8_battle_success",
+        "v8_level_episodes","v8_level_success","v8_badge_episodes","v8_badge_success",
+        "v7_full_badge1","battles_started","battles_completed","enemy_faints"
+    )
+    for k in keys: totals[k] = 0
+    for p in glob.glob(os.path.join(stats_dir, "agent_*.json")):
+        try:
+            with open(p,"r") as f: d=json.load(f)
+            for k in keys: totals[k] += int(d.get(k,0) or 0)
+        except Exception: pass
+    def rate(ok,ep):
+        e=int(totals.get(ep,0)); o=int(totals.get(ok,0))
+        return round(100.0*o/e,2) if e else 0.0
+    full_ep=int(totals.get("v2_full_episodes",0))
+    def fr(k): return round(100.0*int(totals.get(k,0))/full_ep,2) if full_ep else 0.0
+    return {"skills":[
+        ["Intro",rate("v2_intro_success","v2_intro_episodes"),totals["v2_intro_success"],totals["v2_intro_episodes"]],
+        ["Treppe",rate("v2_stairs_success","v2_stairs_episodes"),totals["v2_stairs_success"],totals["v2_stairs_episodes"]],
+        ["Haus Exit",rate("v2_exit_success","v2_exit_episodes"),totals["v2_exit_success"],totals["v2_exit_episodes"]],
+        ["Starter",rate("v8_starter_success","v8_starter_episodes"),totals["v8_starter_success"],totals["v8_starter_episodes"]],
+        ["Battle KO",rate("v8_battle_success","v8_battle_episodes"),totals["v8_battle_success"],totals["v8_battle_episodes"]],
+        ["Level-Up",rate("v8_level_success","v8_level_episodes"),totals["v8_level_success"],totals["v8_level_episodes"]],
+        ["Gym / Badge",rate("v8_badge_success","v8_badge_episodes"),totals["v8_badge_success"],totals["v8_badge_episodes"]],
+        ["Full Intro",fr("v2_full_intro"),totals["v2_full_intro"],full_ep],
+        ["Full Treppe",fr("v2_full_stairs"),totals["v2_full_stairs"],full_ep],
+        ["Full Exit",fr("v2_full_left_house"),totals["v2_full_left_house"],full_ep],
+        ["Full Starter",fr("v2_full_starter"),totals["v2_full_starter"],full_ep],
+        ["Full Badge 1",fr("v7_full_badge1"),totals["v7_full_badge1"],full_ep]
+    ],"totals":totals}
+
+@app.get("/api/v81_skills")
+def api_v81_skills():
+    return _v81_skill_health()
+
+
 @app.get("/api/state")
 def get_state():
     files = glob.glob(os.path.join(INSTANCES_DIR, "inst_*.json"))
@@ -623,10 +711,14 @@ def get_global_mapping():
         except Exception:
             pass
 
-    warp_points = _cluster_warp_points(
+    warp_points_raw = _cluster_warp_points(
         sorted(transitions),
         radius=2,
     )
+    warp_points = [
+        p for p in warp_points_raw
+        if int(p.get("samples", 0)) >= 3
+    ]
 
     return {
         "tiles": [list(x) for x in sorted(tiles)],
@@ -708,10 +800,162 @@ def index():
     <meta charset="utf-8">
     <title>Pokemon FireRed AI Live Dashboard</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
+        async function v8RefreshSelectedAgent() {
+            try {
+                const r = await fetch('/api/state', {cache:'no-store'});
+                const d = await r.json();
+                const list = d.instances || [];
+                let inst = null;
+                if (selectedAgentId !== null) {
+                    inst = list.find(x => Number(x.id) === Number(selectedAgentId));
+                }
+                if (!inst) inst = list.find(x => Number(x.id) === 99) || null;
+                if (!inst) return;
+
+                const role = document.getElementById('v8-agent-role');
+                if (role) role.textContent =
+                    (inst.agent_role || inst.training_objective || 'watcher') +
+                    ' · ' + (inst.name || ('Agent '+inst.id));
+
+                const grid = document.getElementById('v8-party-grid');
+                if (grid) {
+                    const party = inst.party || [];
+                    if (!party.length) {
+                        grid.innerHTML = '<div class="v8-mon"><span>Noch kein Pokémon / keine Party-Telemetrie</span></div>';
+                    } else {
+                        grid.innerHTML = party.map(m => {
+                            const moves = (m.moves || []).map(x => x.name || ('Move '+x.id)).join(', ');
+                            return `<div class="v8-mon"><b>${m.name || ('Species #'+m.species_id)} Lv.${m.level || 0}</b><span>HP ${m.cur_hp || 0}/${m.max_hp || 0}</span><br><span>${moves || '—'}</span></div>`;
+                        }).join('');
+                    }
+                }
+
+                const rb = document.getElementById('v8-reward-breakdown');
+                if (rb) {
+                    const rs = inst.reward_stats || {};
+                    const ev = rs.event_counts || {};
+                    const keys = Object.keys(ev).sort((a,b)=>(ev[b]||0)-(ev[a]||0));
+                    rb.innerHTML =
+                        '<b style="color:#7df9b7">TRAINING REWARD DETAILS</b><br>' +
+                        `Current Episode: ${Number(inst.reward || 0).toFixed(2)}<br>` +
+                        `Ø Episode: ${Number(rs.avg_episode_reward || 0).toFixed(2)}<br>` +
+                        `Best: ${Number(rs.best_episode_reward || 0).toFixed(2)}<br><br>` +
+                        (keys.slice(0,20).map(k => `${k}: ${ev[k]}`).join('<br>') || 'noch keine Events') +
+                        '<br><br><b>Letzter Step</b><br>' +
+                        ((inst.reward_events || []).join('<br>') || '—');
+                }
+            } catch(e) {}
+        }
+
+        document.addEventListener('click', function(e) {
+            if (e.target.closest('#detail-reward')) {
+                const box = document.getElementById('v8-reward-breakdown');
+                if (box) box.classList.toggle('open');
+            }
+        });
+        setInterval(v8RefreshSelectedAgent, 1200);
+
+    
+        let v8SkillChart = null;
+        function v8SkillCard(label,pct,success,episodes){
+            return `<div class="v8-skill-card"><div class="n">${label}</div><div class="v">${Number(pct||0).toFixed(1)}%</div><div class="s">${success||0}/${episodes||0} Erfolge</div></div>`;
+        }
+        async function refreshV8SkillGraph(){
+            try{
+                const d=await (await fetch('/api/v8_skills',{cache:'no-store'})).json();
+                const r=d.rates||{}, t=d.totals||{};
+                const rows=[
+                    ['Intro',r.intro,t.v2_intro_success,t.v2_intro_episodes],
+                    ['Treppe',r.stairs,t.v2_stairs_success,t.v2_stairs_episodes],
+                    ['Haus Exit',r.exit,t.v2_exit_success,t.v2_exit_episodes],
+                    ['Starter',r.starter,t.v8_starter_success,t.v8_starter_episodes],
+                    ['Battle KO',r.battle,t.v8_battle_success,t.v8_battle_episodes],
+                    ['Level-Up',r.level,t.v8_level_success,t.v8_level_episodes],
+                    ['Gym/Badge',r.badge,t.v8_badge_success,t.v8_badge_episodes],
+                    ['Full Intro',r.full_intro,t.v2_full_intro,t.v2_full_episodes],
+                    ['Full Treppe',r.full_stairs,t.v2_full_stairs,t.v2_full_episodes],
+                    ['Full Exit',r.full_exit,t.v2_full_left_house,t.v2_full_episodes],
+                    ['Full Starter',r.full_starter,t.v2_full_starter,t.v2_full_episodes],
+                    ['Full Badge 1',r.full_badge1,t.v7_full_badge1,t.v2_full_episodes]
+                ];
+                const cards=document.getElementById('v8-skill-cards');
+                if(cards) cards.innerHTML=rows.map(x=>v8SkillCard(x[0],x[1],x[2],x[3])).join('');
+                const canvas=document.getElementById('v8-skill-chart');
+                if(!canvas || typeof Chart==='undefined') return;
+                const labels=rows.map(x=>x[0]), values=rows.map(x=>Number(x[1]||0));
+                if(!v8SkillChart){
+                    v8SkillChart=new Chart(canvas,{type:'bar',data:{labels,datasets:[{label:'Skill %',data:values}]},options:{responsive:true,maintainAspectRatio:false,animation:false,scales:{y:{min:0,max:100,ticks:{callback:v=>v+'%'}}},plugins:{legend:{display:false}}}});
+                }else{
+                    v8SkillChart.data.labels=labels;
+                    v8SkillChart.data.datasets[0].data=values;
+                    v8SkillChart.update('none');
+                }
+            }catch(e){}
+        }
+        setInterval(refreshV8SkillGraph,1500);
+        setTimeout(refreshV8SkillGraph,300);
+
+            let v81chart=null;
+        async function refreshV81Skills(){
+            try{
+                const d=await (await fetch('/api/v81_skills',{cache:'no-store'})).json();
+                const rows=d.skills||[];
+                const g=document.getElementById('v81skills');
+                if(g) g.innerHTML=rows.map(x=>`<div class="v81card"><div class="v81n">${x[0]}</div><div class="v81v">${Number(x[1]||0).toFixed(1)}%</div><div class="v81s">${x[2]||0}/${x[3]||0}</div></div>`).join('');
+                const c=document.getElementById('v81skillschart');
+                if(c && typeof Chart!=='undefined'){
+                    const labels=rows.map(x=>x[0]), vals=rows.map(x=>Number(x[1]||0));
+                    if(!v81chart){v81chart=new Chart(c,{type:'bar',data:{labels,datasets:[{label:'Skill %',data:vals}]},options:{responsive:true,maintainAspectRatio:false,animation:false,scales:{y:{min:0,max:100,ticks:{callback:v=>v+'%'}}},plugins:{legend:{display:false}}}})}
+                    else{v81chart.data.labels=labels;v81chart.data.datasets[0].data=vals;v81chart.update('none')}
+                }
+            }catch(e){}
+        }
+        setInterval(refreshV81Skills,1500);setTimeout(refreshV81Skills,250);
+
+    </script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <style>
         * { box-sizing: border-box; }
+        /* V81 NIGHT SKILLS */
+        .v81skills{position:absolute;top:14px;left:14px;z-index:930;width:min(800px,calc(100vw - 300px));background:rgba(7,12,18,.94);border:1px solid #29384a;border-radius:13px;padding:9px;backdrop-filter:blur(10px)}
+        .v81grid{display:grid;grid-template-columns:repeat(6,1fr);gap:5px}.v81card{background:#101821;border:1px solid #243244;border-radius:8px;padding:6px}.v81n{font-size:8px;color:#8190a3}.v81v{font-size:15px;font-weight:900;color:#79f5b2}.v81s{font-size:7px;color:#617085}
+        /* V8 SKILL GRAPH FIX */
+        .v8-skill-panel{background:#111821;border:1px solid #263446;border-radius:12px;padding:12px;margin-bottom:12px}
+        .v8-skill-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+        .v8-skill-title b{font-size:13px}.v8-skill-title span{font-size:9px;color:#7f8ea1}
+        .v8-skill-cards{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr));gap:7px;margin-bottom:12px}
+        .v8-skill-card{background:#0b1118;border:1px solid #243244;border-radius:9px;padding:8px}
+        .v8-skill-card .n{font-size:8px;color:#7b8a9d;text-transform:uppercase}
+        .v8-skill-card .v{font-size:18px;font-weight:900;color:#7df9b7;margin-top:3px}
+        .v8-skill-card .s{font-size:8px;color:#647286;margin-top:2px}
+        .v8-skill-chart-wrap{height:280px;position:relative}
+        /* V8 NIGHT MAP */
+        #map-view {
+            background: radial-gradient(circle at 50% 45%, #14252d 0%, #091117 46%, #05080d 100%);
+        }
+        #map-view .leaflet-image-layer {
+            filter: brightness(.38) saturate(.72) contrast(1.28);
+        }
+        .v8-agent-party {
+            margin-top:8px;padding:8px;border-radius:10px;
+            background:rgba(8,13,19,.94);border:1px solid #263446;
+        }
+        .v8-agent-party-title {
+            display:flex;justify-content:space-between;font-size:10px;
+            color:#8392a8;margin-bottom:7px;text-transform:uppercase;
+        }
+        .v8-party-grid {display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+        .v8-mon {padding:6px;border:1px solid #263446;border-radius:8px;background:#101821}
+        .v8-mon b {display:block;font-size:10px;color:#edf7ff}
+        .v8-mon span {font-size:9px;color:#8796aa}
+        .v8-reward-breakdown {
+            display:none;margin-top:8px;padding:8px;border-radius:10px;
+            background:#091017;border:1px solid #243345;font-size:9px;
+            max-height:170px;overflow:auto;
+        }
+        .v8-reward-breakdown.open {display:block}
+        #detail-reward {cursor:pointer;color:#7df9b7}
         body { margin: 0; background: #0c0e14; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
         
         header { 
@@ -1027,7 +1271,7 @@ def index():
                 <button class="filter-btn" onclick="setFilter(5)">5</button>
                 <button class="filter-btn" onclick="setFilter(10)">10</button>
                 <button class="filter-btn" onclick="setFilter(20)">20</button>
-                <button class="filter-btn" onclick="setFilter(40)">Alle</button>
+                <button class="filter-btn" onclick="setFilter(40)">Alle 40</button>
             </div>
         </div>
 
@@ -1041,7 +1285,7 @@ def index():
     </header>
 
     <div id="main-container">
-        <div id="map-view">
+        <div id="map-view"><div class="v81skills"><div style="font-size:11px;font-weight:800;margin-bottom:6px">V8.1 TRAINING SKILLS · 40 AGENTS</div><div class="v81grid" id="v81skills"></div></div>
             <div class="live-global">
                 <div class="live-global-title"><span><span class="live-dot"></span>GLOBAL AI</span><span id="live-model">v0</span></div>
                 <div class="live-global-grid">
@@ -1055,7 +1299,7 @@ def index():
             </div>
         </div>
         <div id="rooms-view"><div class="room-grid" id="room-grid"></div></div>
-        <div id="graphs-view">
+        <div id="graphs-view"><div class="graph-card" style="min-height:350px;margin-bottom:12px"><div class="graph-title">V8.1 – Alle Skill-Raten</div><div class="graph-sub">Spezialisten + Full-Chain</div><div class="graph-canvas-wrap" style="height:300px"><canvas id="v81skillschart"></canvas></div></div><div class="v8-skill-panel"><div class="v8-skill-title"><b>V8 Skill Matrix</b><span>direkt aus Training-Stats · nicht Watcher</span></div><div class="v8-skill-cards" id="v8-skill-cards"></div><div class="v8-skill-chart-wrap"><canvas id="v8-skill-chart"></canvas></div></div>
             <div class="journey-wrap">
                 <div class="journey-title"><h3>🚀 Journey Skills</h3><span>Early Game → Vertania → Wald → Orden 1</span></div>
                 <div class="journey-grid">
@@ -1083,7 +1327,7 @@ def index():
                 <div class="graph-card"><div class="graph-title">Festfahren / Anti-Loop</div><div class="graph-sub">Loops pro 100 echte Beginning-Runs; Curriculum wird separat gezählt.</div><div class="graph-canvas-wrap"><canvas id="graph-loops"></canvas></div></div>
             </div>
         </div>
-        <div class="hud-overlay" id="hud">Lade 40 Agenten...</div>
+        <div class="hud-overlay" id="hud">Lade 35 Agenten...</div>
 
         <div class="detail-panel" id="detail-panel">
             <div class="detail-title">
@@ -1105,6 +1349,16 @@ def index():
                 <div class="chart-label">Letztes Reward-Event</div>
                 <div id="detail-event" style="font-size:12px;color:#00e676;padding:6px 8px;">-</div>
             </div>
+            <div class="v8-agent-party" id="v8-agent-party">
+                <div class="v8-agent-party-title">
+                    <span>Selected Agent Team</span>
+                    <span id="v8-agent-role">-</span>
+                </div>
+                <div class="v8-party-grid" id="v8-party-grid">
+                    <div class="v8-mon"><span>Agent anklicken</span></div>
+                </div>
+            </div>
+            <div class="v8-reward-breakdown" id="v8-reward-breakdown"></div>
             <div class="chart-wrap">
                 <div class="chart-label">Reward-Verlauf</div>
                 <canvas id="reward-chart" class="mini-chart" width="360" height="72"></canvas>

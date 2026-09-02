@@ -187,6 +187,7 @@ def build_v7_obs(
     known_edges,
     known_maps,
     known_transitions,
+    party=None,
 ):
     valid = bool(
         loc.get("valid", False)
@@ -198,7 +199,7 @@ def build_v7_obs(
     y = int(loc.get("y_pos", 0)) if valid else 0
 
     # Watcher fuehrt die Policy als Full-Chain-Agent aus.
-    vec = [0.0, 0.0, 0.0, 0.0, 1.0]
+    vec = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
     in_battle = int(info.get("in_battle", 0))
     p_lvl = int(info.get("p1_level", 0))
@@ -259,9 +260,27 @@ def build_v7_obs(
         float(np.clip(badges / 8.0, 0.0, 1.0)),
     ])
 
+    party = party or []
+    levels = [int(m.get("level", 0)) for m in party if int(m.get("level", 0)) > 0]
+    hp_values = [
+        float(m.get("hp_ratio", 0.0))
+        for m in party
+        if int(m.get("max_hp", 0)) > 0
+    ]
+    party_size = len(levels)
+    party_max = max(levels) if levels else 0
+    party_avg = sum(levels) / len(levels) if levels else 0.0
+    party_hp = sum(hp_values) / len(hp_values) if hp_values else 0.0
+    vec.extend([
+        float(np.clip(party_size / 6.0, 0.0, 1.0)),
+        float(np.clip(party_max / 100.0, 0.0, 1.0)),
+        float(np.clip(party_avg / 100.0, 0.0, 1.0)),
+        float(np.clip(party_hp, 0.0, 1.0)),
+    ])
+
     nav = np.asarray(vec, dtype=np.float32)
-    if nav.shape != (20,):
-        raise RuntimeError(f"Watcher V7 nav shape invalid: {nav.shape}")
+    if nav.shape != (28,):
+        raise RuntimeError(f"Watcher V8 nav shape invalid: {nav.shape}")
 
     return {
         "image": process_image(screen),
@@ -688,7 +707,7 @@ def main():
                 # Watcher-eigene Funde sofort mitverwenden.
                 global_nav_edges |= watcher_known_edges
                 global_nav_maps |= watcher_known_maps
-                global_nav_transitions |= watcher_known_transitions
+                # V8.1.1 watcher-only transitions do not steer navigation.
                 last_global_nav_reload = now_nav
 
             obs = build_v7_obs(
@@ -698,6 +717,7 @@ def main():
                 global_nav_edges,
                 global_nav_maps,
                 global_nav_transitions,
+                watcher_party,
             )
 
             if model is not None:

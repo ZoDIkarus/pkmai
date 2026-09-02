@@ -7,7 +7,7 @@ import time
 import glob
 
 from stable_baselines3 import PPO
-from firered_ram import read_player_location
+from firered_ram import read_player_location, read_player_party
 
 
 # ================================================================
@@ -58,6 +58,24 @@ CUSTOM_DIR = os.path.join(LOCAL_DIR, "custom_integrations")
 INSTANCES_DIR = os.path.join(RUNTIME_DIR, "instances_data")
 
 os.makedirs(INSTANCES_DIR, exist_ok=True)
+WATCHER_BATTLE_FILE = os.path.join(RUNTIME_DIR, "watcher_battle_stats.json")
+
+def load_watcher_battle_stats():
+    try:
+        with open(WATCHER_BATTLE_FILE, "r") as f:
+            d=json.load(f)
+        return {"started":int(d.get("started",0)), "completed":int(d.get("completed",0))}
+    except Exception:
+        return {"started":0,"completed":0}
+
+def save_watcher_battle_stats(d):
+    try:
+        tmp=WATCHER_BATTLE_FILE+".tmp"
+        with open(tmp,"w") as f: json.dump(d,f,separators=(",",":"))
+        os.replace(tmp,WATCHER_BATTLE_FILE)
+    except Exception:
+        pass
+
 
 
 def get_latest_version():
@@ -542,7 +560,13 @@ def main():
     x = 0
     y = 0
     in_battle = 0
+    watcher_battle_stats = load_watcher_battle_stats()
     p1_level = 0
+    watcher_party = []
+    last_party_read_step = -999999
+    previous_party_exp = {}
+    watcher_exp_gained = 0
+    watcher_last_exp_gain = 0
     badge_count = 0
 
     last_coord = None
@@ -753,7 +777,14 @@ def main():
                 x = 0
                 y = 0
 
+        previous_battle_state = int(in_battle)
         in_battle = int(info.get("in_battle", in_battle))
+        if previous_battle_state == 0 and in_battle == 1:
+            watcher_battle_stats["started"] += 1
+            save_watcher_battle_stats(watcher_battle_stats)
+        elif previous_battle_state == 1 and in_battle == 0:
+            watcher_battle_stats["completed"] += 1
+            save_watcher_battle_stats(watcher_battle_stats)
 
         # -------------------------------------------------------------
         # GAMEPLAY GATE
@@ -808,6 +839,42 @@ def main():
             gate_last_loc = (bank, map_id, x, y)
 
         p1_level = int(info.get("p1_level", p1_level))
+        if total_steps - last_party_read_step >= 32:
+            try:
+                decoded_party = read_player_party(env)
+                watcher_last_exp_gain = 0
+
+                if decoded_party:
+                    for mon in decoded_party:
+                        slot = int(mon.get("slot", -1))
+                        exp_now = int(mon.get("experience", 0))
+                        exp_before = previous_party_exp.get(slot)
+
+                        exp_delta = 0
+                        if (
+                            exp_before is not None
+                            and exp_now >= exp_before
+                        ):
+                            exp_delta = exp_now - exp_before
+
+                        mon["exp_delta"] = int(exp_delta)
+
+                        if exp_delta > 0:
+                            watcher_exp_gained += int(exp_delta)
+                            watcher_last_exp_gain += int(exp_delta)
+
+                        previous_party_exp[slot] = exp_now
+
+                    watcher_party = decoded_party
+
+                elif p1_level <= 0:
+                    watcher_party = []
+                    previous_party_exp = {}
+
+            except Exception:
+                pass
+
+            last_party_read_step = total_steps
 
         badges_raw = int(info.get("badges", 0))
         badge_count = (
@@ -1152,8 +1219,17 @@ def main():
                     "step_reward": round(watcher_step_reward, 4),
                     "stuck_counter": watcher_stuck_counter,
                     "level": p1_level,
+                    "party": watcher_party,
+                    "exp_stats": {
+                        "gained_total": int(watcher_exp_gained),
+                        "last_gain": int(watcher_last_exp_gain),
+                    },
                     "badges": badge_count,
                     "in_battle": in_battle,
+                    "battle_stats": {
+                        "started": int(watcher_battle_stats.get("started", 0)),
+                        "completed": int(watcher_battle_stats.get("completed", 0)),
+                    },
                     "new_visible_tiles": map_new_tiles,
                     "total_mapped_tiles": total_new_tiles,
                     "ram_source": loc.get("source", "unknown"),

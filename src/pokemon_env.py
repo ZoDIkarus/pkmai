@@ -7,7 +7,7 @@ import os
 import json
 import gzip
 import random
-from firered_ram import read_player_location
+from firered_ram import read_player_location, read_enemy_party
 
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -61,7 +61,13 @@ class PokemonFireRedEnv(gym.Env):
     # Mapping-Novelty ist nur ein kleiner Bonus. Story-/Zielnavigation
     # bleibt deutlich wichtiger.
     NEW_EDGE_REWARD = 0.10
-    NEW_MAP_REWARD = 5.0
+    # V7.5: echter Weltfortschritt soll lokales Herumlaufen klar schlagen.
+    NEW_MAP_REWARD = 25.0
+    NEW_GLOBAL_DEPTH_REWARD = 50.0
+    STARTER_REWARD = 250.0
+    ENEMY_DAMAGE_REWARD_PER_HP = 0.75
+    ENEMY_FAINT_REWARD = 20.0
+    ENEMY_HP_READ_EVERY = 2
     NEW_TRANSITION_REWARD = 20.0
 
     # Bekannte Wege: erster Durchgang in einer Episode ist erlaubt.
@@ -86,16 +92,22 @@ class PokemonFireRedEnv(gym.Env):
 
     # Die 30 Agents werden als Spezialisten verteilt:
     # 0-7 Intro, 8-15 Treppe, 16-23 Hausausgang, 24-29 Full Chain.
-    INTRO_SPECIALISTS = 5
-    STAIRS_SPECIALISTS = 5
-    EXIT_SPECIALISTS = 5
-    PROGRESS_SPECIALISTS = 10
-    FULL_SPECIALISTS = 5
+    INTRO_SPECIALISTS = 2
+    STAIRS_SPECIALISTS = 2
+    EXIT_SPECIALISTS = 3
+    PROGRESS_SPECIALISTS = 13
+    FULL_SPECIALISTS = 10
 
     # Dynamic FireRed SaveBlock RAM is relatively expensive to copy.
     # Exploration position is sampled every 4 agent steps (~32 emulator frames).
     LOCATION_READ_EVERY = 4
     LOCATION_DISCOVERY_EVERY = 512
+
+    # V7.3.2 Performance:
+    # RAM cadence bleibt gleich; nur Python-Navigation wird gecacht.
+    NAV_TARGET_REFRESH_EVERY = 8
+    SHARED_SNAPSHOT_EVERY = 256
+    EXPLORATION_SAVE_EVERY = 512
 
     # FireRed: Bank 3 = Towns/Routes (Aussenwelt).
     OVERWORLD_BANK = 3
@@ -106,6 +118,7 @@ class PokemonFireRedEnv(gym.Env):
         shared_edges=None,
         shared_maps=None,
         shared_transitions=None,
+        shared_progress=None,
         shared_lock=None,
     ):
         super().__init__()
@@ -114,13 +127,39 @@ class PokemonFireRedEnv(gym.Env):
         self.shared_edges = shared_edges
         self.shared_maps = shared_maps
         self.shared_transitions = shared_transitions
+        self.shared_progress = shared_progress
         self.shared_lock = shared_lock
         self.shared_edge_snapshot = set()
         self.shared_transition_snapshot = set()
+
+        # V7.3.2 Navigation caches.
+        # Revision wird nur erhoeht, wenn sich die bekannte Graph-Struktur aendert.
+        self.navigation_revision = 0
+        self._adjacency_cache = {}
+        self._frontier_cache = {}
+        self._transition_target_cache = {}
+        self._distance_field_cache = {}
+        self._nav_target_cache = None
+        self._nav_target_cache_step = -999999
+        self._last_exploration_save_step = -999999
         self.training_objective = "full"
         self.objective_success = False
         self.last_gameplay_ready = False
         self.last_in_battle = 0
+        self.episode_battles_started = 0
+        self.episode_battles_completed = 0
+        self.enemy_party_cache = []
+        self.enemy_hp_min = {}
+        self.enemy_fainted_rewarded = set()
+        self.episode_enemy_damage_hp = 0
+        self.episode_enemy_damage_reward = 0.0
+        self.episode_enemy_faints = 0
+        self.journey_seen_starter = False
+        self.journey_seen_map5 = False
+        self.journey_seen_map10 = False
+        self.journey_seen_warp5 = False
+        self.journey_seen_progress_checkpoint = False
+        self.journey_seen_badge1 = False
         self.start_spam_count = 0
         self.last_start_step = -999999
         self.rank_state_dir = os.path.join(
@@ -267,6 +306,18 @@ class PokemonFireRedEnv(gym.Env):
             "v7_progress_badge1": 0,
             "v7_full_episodes": 0,
             "v7_full_badge1": 0,
+            "battles_started": 0,
+            "battles_completed": 0,
+            "journey_starter": 0,
+            "journey_map5": 0,
+            "journey_map10": 0,
+            "journey_warp5": 0,
+            "journey_progress_checkpoint": 0,
+            "journey_badge1": 0,
+            "global_depth_records": 0,
+            "enemy_damage_hp": 0,
+            "enemy_damage_reward": 0.0,
+            "enemy_faints": 0,
         }
         self.episode_anti_loop_resets = 0
         self._load_run_stats()
@@ -402,6 +453,13 @@ class PokemonFireRedEnv(gym.Env):
 
         self._save_run_stats()
 
+    def _claim_journey_milestone(self, key, attr_name):
+        if getattr(self, attr_name, False):
+            return
+        setattr(self, attr_name, True)
+        self.run_stats[key] = int(self.run_stats.get(key, 0)) + 1
+        self._save_run_stats()
+
     def _process_image(self, screen):
         gray = cv2.cvtColor(screen, cv2.COLOR_RGB2GRAY)
         resized = cv2.resize(
@@ -418,71 +476,141 @@ class PokemonFireRedEnv(gym.Env):
             for name in names
         ]
 
-    def _progress_targets_for_map(self, bank, map_id, x, y):
-        """
-        Generisches, selbst entdecktes Navigationsziel.
-        Keine FireRed-Loesungskoordinaten:
-        1) bekannte Warps zu Maps, die in dieser Episode noch nicht besucht sind
-        2) sonst naechster bekannter Frontier-Knoten
-        """
-        transitions = (
-            set(self.persistent_known_transitions)
-            | set(self.shared_transition_snapshot)
+    def _invalidate_navigation_cache(self):
+        self.navigation_revision += 1
+        self._adjacency_cache.clear()
+        self._frontier_cache.clear()
+        self._transition_target_cache.clear()
+        self._distance_field_cache.clear()
+        self._nav_target_cache = None
+        self._nav_target_cache_step = -999999
+
+    def _combined_edges(self):
+        # Keine unnoetigen set()-Kopien wenn eine Seite leer ist.
+        if not self.shared_edge_snapshot:
+            return self.persistent_known_edges
+        if not self.persistent_known_edges:
+            return self.shared_edge_snapshot
+        return self.persistent_known_edges | self.shared_edge_snapshot
+
+    def _combined_transitions(self):
+        if not self.shared_transition_snapshot:
+            return self.persistent_known_transitions
+        if not self.persistent_known_transitions:
+            return self.shared_transition_snapshot
+        return (
+            self.persistent_known_transitions
+            | self.shared_transition_snapshot
         )
 
-        warp_targets = []
-        for t in transitions:
-            if len(t) != 8:
-                continue
-            a = tuple(map(int, t[:4]))
-            b = tuple(map(int, t[4:]))
-            for here, other in ((a, b), (b, a)):
-                if (here[0], here[1]) != (bank, map_id):
-                    continue
-                if (other[0], other[1]) not in self.visited_maps:
-                    warp_targets.append((here[2], here[3]))
-
-        if warp_targets:
-            return list(set(warp_targets))
-
-        edges = (
-            set(self.persistent_known_edges)
-            | set(self.shared_edge_snapshot)
+    def _adjacency_for_map(self, bank, map_id):
+        key = (
+            self.navigation_revision,
+            int(bank),
+            int(map_id),
         )
-        nodes = set()
+        cached = self._adjacency_cache.get(key)
+        if cached is not None:
+            return cached
+
         adjacency = {}
-        for e in edges:
+        nodes = set()
+        for e in self._combined_edges():
             if len(e) != 6:
                 continue
-            eb, em, x1, y1, x2, y2 = map(int, e)
-            if (eb, em) != (bank, map_id):
+            eb, em, x1, y1, x2, y2 = e
+            if int(eb) != int(bank) or int(em) != int(map_id):
                 continue
-            a = (x1, y1)
-            b = (x2, y2)
+            a = (int(x1), int(y1))
+            b = (int(x2), int(y2))
             nodes.add(a)
             nodes.add(b)
             adjacency.setdefault(a, set()).add(b)
             adjacency.setdefault(b, set()).add(a)
 
-        if not nodes:
-            return []
+        self._adjacency_cache[key] = (adjacency, nodes)
+        return adjacency, nodes
 
-        frontiers = []
-        for nx, ny in nodes:
-            # Weniger als vier bekannte Nachbarn = moeglicher Frontier.
-            # Das ist absichtlich generisch und basiert nur auf eigener Karte.
-            if len(adjacency.get((nx, ny), ())) < 4:
-                frontiers.append((nx, ny))
+    def _frontiers_for_map(self, bank, map_id):
+        key = (
+            self.navigation_revision,
+            int(bank),
+            int(map_id),
+        )
+        cached = self._frontier_cache.get(key)
+        if cached is not None:
+            return cached
 
+        adjacency, nodes = self._adjacency_for_map(bank, map_id)
+        frontiers = tuple(
+            p for p in nodes
+            if len(adjacency.get(p, ())) < 4
+        )
+        self._frontier_cache[key] = frontiers
+        return frontiers
+
+    def _progress_targets_for_map(self, bank, map_id, x, y):
+        """
+        V7.3.2:
+        Graph/Frontier-Struktur wird pro Map + Revision nur einmal gebaut.
+        Nur die billige Entfernungssortierung bleibt positionsabhaengig.
+        """
+        map_key = (int(bank), int(map_id))
+
+        warp_targets = []
+        for t in self._combined_transitions():
+            if len(t) != 8:
+                continue
+            a = (
+                int(t[0]), int(t[1]),
+                int(t[2]), int(t[3])
+            )
+            b = (
+                int(t[4]), int(t[5]),
+                int(t[6]), int(t[7])
+            )
+
+            if (a[0], a[1]) == map_key:
+                if (b[0], b[1]) not in self.visited_maps:
+                    warp_targets.append((a[2], a[3]))
+
+            if (b[0], b[1]) == map_key:
+                if (a[0], a[1]) not in self.visited_maps:
+                    warp_targets.append((b[2], b[3]))
+
+        if warp_targets:
+            return list(dict.fromkeys(warp_targets))
+
+        frontiers = self._frontiers_for_map(bank, map_id)
         if not frontiers:
             return []
 
-        frontiers.sort(
+        # Kein komplettes sort() mehr: maximal acht beste Kandidaten
+        # werden in einem kleinen laufenden Puffer gehalten.
+        nearest = sorted(
+            frontiers,
             key=lambda p: abs(p[0] - x) + abs(p[1] - y)
-        )
-        return frontiers[:8]
+        )[:8]
+        return nearest
 
     def _nav_target(self, bank, map_id, x, y):
+        cache_key = (
+            self.navigation_revision,
+            self.training_objective,
+            int(bank), int(map_id),
+        )
+
+        cached = self._nav_target_cache
+        if (
+            cached is not None
+            and cached[0] == cache_key
+            and (
+                self.total_steps - self._nav_target_cache_step
+                < self.NAV_TARGET_REFRESH_EVERY
+            )
+        ):
+            return cached[1]
+
         targets = self._target_coords_for_stage(bank, map_id)
 
         if (
@@ -495,12 +623,16 @@ class PokemonFireRedEnv(gym.Env):
             )
 
         if not targets:
-            return None
+            target = None
+        else:
+            target = min(
+                targets,
+                key=lambda p: abs(p[0] - x) + abs(p[1] - y)
+            )
 
-        return min(
-            targets,
-            key=lambda p: abs(p[0] - x) + abs(p[1] - y)
-        )
+        self._nav_target_cache = (cache_key, target)
+        self._nav_target_cache_step = self.total_steps
+        return target
 
     def _build_nav_vector(
         self,
@@ -746,18 +878,68 @@ class PokemonFireRedEnv(gym.Env):
             # Fail-open: Training soll bei IPC-Problemen nicht stehenbleiben.
             return True
 
-    def _refresh_shared_snapshots(self):
+    def _claim_global_depth(self, map_count):
+        """
+        True nur wenn dieser Agent erstmals den globalen Episoden-Map-Rekord
+        aller laufenden Agents uebertrifft.
+
+        Der Rekord wird vom Trainer mit der bereits bekannten globalen Map-Anzahl
+        initialisiert, damit ein Neustart keine alten Tiefen-Boni erneut farmt.
+        """
+        map_count = int(map_count)
+        if map_count <= 0 or self.shared_progress is None:
+            return False
+
         try:
-            if self.shared_edges is not None:
-                self.shared_edge_snapshot = set(
-                    self.shared_edges.keys()
+            if self.shared_lock is not None:
+                self.shared_lock.acquire()
+
+            try:
+                current = int(
+                    self.shared_progress.get("max_episode_maps", 0)
                 )
-            if self.shared_transitions is not None:
-                self.shared_transition_snapshot = set(
-                    self.shared_transitions.keys()
-                )
+                if map_count <= current:
+                    return False
+
+                self.shared_progress["max_episode_maps"] = map_count
+                return True
+            finally:
+                if self.shared_lock is not None:
+                    self.shared_lock.release()
+
         except Exception:
-            pass
+            # Fail-closed: ein IPC-Problem darf keinen farmbaren Bonus erzeugen.
+            return False
+
+    def _refresh_shared_snapshots(self):
+        old_edges = self.shared_edge_snapshot
+        old_transitions = self.shared_transition_snapshot
+
+        try:
+            new_edges = set(self.shared_edges) if self.shared_edges is not None else set()
+        except Exception:
+            new_edges = old_edges
+
+        try:
+            new_transitions = (
+                set(self.shared_transitions)
+                if self.shared_transitions is not None
+                else set()
+            )
+        except Exception:
+            new_transitions = old_transitions
+
+        changed = (
+            new_edges != old_edges
+            or new_transitions != old_transitions
+        )
+
+        self.shared_edge_snapshot = new_edges
+        self.shared_transition_snapshot = new_transitions
+
+        if changed:
+            self._invalidate_navigation_cache()
+
 
     def _exploration_memory_path(self):
         return os.path.join(
@@ -801,32 +983,51 @@ class PokemonFireRedEnv(gym.Env):
         require_overworld=False,
         require_indoor=False,
     ):
+        cache_key = (
+            self.navigation_revision,
+            int(bank),
+            int(map_id),
+            bool(require_overworld),
+            bool(require_indoor),
+        )
+        cached = self._transition_target_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         targets = []
         key = (int(bank), int(map_id))
 
-        transitions = (
-            set(self.persistent_known_transitions)
-            | set(self.shared_transition_snapshot)
-        )
-
-        for t in transitions:
+        for t in self._combined_transitions():
             if len(t) != 8:
                 continue
 
-            a = (int(t[0]), int(t[1]), int(t[2]), int(t[3]))
-            b = (int(t[4]), int(t[5]), int(t[6]), int(t[7]))
+            a = (
+                int(t[0]), int(t[1]),
+                int(t[2]), int(t[3])
+            )
+            b = (
+                int(t[4]), int(t[5]),
+                int(t[6]), int(t[7])
+            )
 
-            pairs = ((a, b), (b, a))
-            for here, other in pairs:
+            for here, other in ((a, b), (b, a)):
                 if (here[0], here[1]) != key:
                     continue
-                if require_overworld and other[0] != self.OVERWORLD_BANK:
+                if (
+                    require_overworld
+                    and other[0] != self.OVERWORLD_BANK
+                ):
                     continue
-                if require_indoor and other[0] == self.OVERWORLD_BANK:
+                if (
+                    require_indoor
+                    and other[0] == self.OVERWORLD_BANK
+                ):
                     continue
                 targets.append((here[2], here[3]))
 
-        return list(set(targets))
+        result = list(dict.fromkeys(targets))
+        self._transition_target_cache[cache_key] = result
+        return result
 
     def _target_coords_for_stage(self, bank, map_id):
         # Bedroom/F2: sobald Treppen-Warp bekannt ist, dorthin navigieren.
@@ -852,49 +1053,51 @@ class PokemonFireRedEnv(gym.Env):
         if not targets:
             return None
 
-        target_set = set(targets)
-        if start_xy in target_set:
+        target_tuple = tuple(sorted(set(targets)))
+        if start_xy in target_tuple:
             return 0
 
-        edges = (
-            set(self.persistent_known_edges)
-            | set(self.shared_edge_snapshot)
+        cache_key = (
+            self.navigation_revision,
+            int(bank),
+            int(map_id),
+            target_tuple,
         )
+        distance_field = self._distance_field_cache.get(cache_key)
 
-        adjacency = {}
-        for e in edges:
-            if len(e) != 6:
-                continue
-            eb, em, x1, y1, x2, y2 = map(int, e)
-            if eb != bank or em != map_id:
-                continue
-            a = (x1, y1)
-            b = (x2, y2)
-            adjacency.setdefault(a, set()).add(b)
-            adjacency.setdefault(b, set()).add(a)
+        if distance_field is None:
+            adjacency, _ = self._adjacency_for_map(bank, map_id)
 
-        # BFS ueber selbst entdeckte begehbare Kanten.
-        queue = [(start_xy, 0)]
-        seen = {start_xy}
-        head = 0
+            # Reverse BFS von allen Targets gleichzeitig.
+            distance_field = {}
+            queue = []
+            for target in target_tuple:
+                distance_field[target] = 0
+                queue.append(target)
 
-        while head < len(queue):
-            node, dist = queue[head]
-            head += 1
+            head = 0
+            while head < len(queue):
+                node = queue[head]
+                head += 1
+                next_dist = distance_field[node] + 1
 
-            for nxt in adjacency.get(node, ()):
-                if nxt in seen:
-                    continue
-                if nxt in target_set:
-                    return dist + 1
-                seen.add(nxt)
-                queue.append((nxt, dist + 1))
+                for nxt in adjacency.get(node, ()):
+                    if nxt in distance_field:
+                        continue
+                    distance_field[nxt] = next_dist
+                    queue.append(nxt)
 
-        # Falls die Karte noch Luecken hat: Manhattan als sanfter Fallback.
+            self._distance_field_cache[cache_key] = distance_field
+
+        cached_dist = distance_field.get(start_xy)
+        if cached_dist is not None:
+            return cached_dist
+
+        # Karte hat noch Luecken: Manhattan-Fallback wie vorher.
         sx, sy = start_xy
         return min(
             abs(sx - tx) + abs(sy - ty)
-            for tx, ty in target_set
+            for tx, ty in target_tuple
         )
 
     def _load_exploration_memory(self):
@@ -930,23 +1133,40 @@ class PokemonFireRedEnv(gym.Env):
             or (not self.exploration_memory_dirty and not force)
         ):
             return
+
+        if (
+            not force
+            and (
+                self.total_steps - self._last_exploration_save_step
+                < self.EXPLORATION_SAVE_EVERY
+            )
+        ):
+            return
+
         path = self._exploration_memory_path()
         tmp = path + ".tmp"
         try:
             data = {
                 "schema": 1,
-                "edges": [list(x) for x in self.persistent_known_edges],
-                "maps": [list(x) for x in self.persistent_known_maps],
+                "edges": [
+                    list(x) for x in self.persistent_known_edges
+                ],
+                "maps": [
+                    list(x) for x in self.persistent_known_maps
+                ],
                 "transitions": [
-                    list(x) for x in self.persistent_known_transitions
+                    list(x)
+                    for x in self.persistent_known_transitions
                 ],
             }
             with open(tmp, "w") as f:
                 json.dump(data, f, separators=(",", ":"))
             os.replace(tmp, path)
             self.exploration_memory_dirty = False
+            self._last_exploration_save_step = self.total_steps
         except Exception:
             pass
+
 
     def _milestone_number(self, name, prefix):
         try:
@@ -1044,36 +1264,25 @@ class PokemonFireRedEnv(gym.Env):
         if self._save_curriculum_state(name):
             self.last_progress_checkpoint_step = self.total_steps
             self.last_progress_advance_step = self.total_steps
+            self._claim_journey_milestone("journey_progress_checkpoint","journey_seen_progress_checkpoint")
             return name
 
         return None
 
     def _choose_episode_start(self):
-        """
-        V7 Rollen:
-        00-04 Intro
-        05-09 Treppe
-        10-14 Ausgang
-        15-24 Progress ab bestem selbst erreichtem Checkpoint
-        25-29 Full Chain ab Spielbeginn
-
-        Alle 30 trainieren weiterhin EINE gemeinsame MultiInput-Policy.
-        """
+        """V7.2: 2 Intro | 2 Treppe | 3 Exit | 13 Progress | 10 Full."""
         self.saved_milestones = self._discover_saved_milestones()
         slot = self.rank % 30
-
-        if slot < 5:
+        if slot < 2:
             self.training_objective = "intro"
             return "beginning"
-
-        if slot < 10:
+        if slot < 4:
             if "intro_complete" in self.saved_milestones:
                 self.training_objective = "stairs"
                 return "intro_complete"
             self.training_objective = "intro"
             return "beginning"
-
-        if slot < 15:
+        if slot < 7:
             if "stairs_down" in self.saved_milestones:
                 self.training_objective = "exit"
                 return "stairs_down"
@@ -1082,11 +1291,9 @@ class PokemonFireRedEnv(gym.Env):
                 return "intro_complete"
             self.training_objective = "intro"
             return "beginning"
-
-        if slot < 25:
+        if slot < 20:
             self.training_objective = "progress"
             return self._best_progress_milestone()
-
         self.training_objective = "full"
         return "beginning"
 
@@ -1184,6 +1391,14 @@ class PokemonFireRedEnv(gym.Env):
         self.env.reset()
 
         self.total_steps = 0
+        self.episode_battles_started = 0
+        self.episode_battles_completed = 0
+        self.enemy_party_cache = []
+        self.enemy_hp_min = {}
+        self.enemy_fainted_rewarded = set()
+        self.episode_enemy_damage_hp = 0
+        self.episode_enemy_damage_reward = 0.0
+        self.episode_enemy_faints = 0
         self.seen_coords = set()
         self.visited_maps = set()
         self.recent_path = []
@@ -1368,6 +1583,21 @@ class PokemonFireRedEnv(gym.Env):
         x = int(loc["x_pos"]) if loc["valid"] else 0
         y = int(loc["y_pos"]) if loc["valid"] else 0
         in_battle = int(info.get("in_battle", 0))
+        previous_battle_state = int(self.last_in_battle)
+        if previous_battle_state == 0 and in_battle == 1:
+            self.run_stats["battles_started"] += 1
+            self.episode_battles_started += 1
+            self.enemy_party_cache = []
+            self.enemy_hp_min = {}
+            self.enemy_fainted_rewarded = set()
+            self._save_run_stats()
+        elif previous_battle_state == 1 and in_battle == 0:
+            self.run_stats["battles_completed"] += 1
+            self.episode_battles_completed += 1
+            self.enemy_party_cache = []
+            self.enemy_hp_min = {}
+            self.enemy_fainted_rewarded = set()
+            self._save_run_stats()
 
         p_lvl = int(info.get("p1_level", 0))
         badges_raw = int(info.get("badges", 0))
@@ -1383,7 +1613,10 @@ class PokemonFireRedEnv(gym.Env):
             and self._valid_coord(bank, map_id, x, y)
         )
 
-        if self.total_steps == 1 or self.total_steps % 128 == 0:
+        if (
+            self.total_steps == 1
+            or self.total_steps % self.SHARED_SNAPSHOT_EVERY == 0
+        ):
             self._refresh_shared_snapshots()
 
         self.last_gameplay_ready = gameplay_ready
@@ -1398,6 +1631,61 @@ class PokemonFireRedEnv(gym.Env):
         reward_events = []
         truncated = False
         objective_done = False
+
+        # V7.5.1: reward only NEW opponent HP damage.
+        if in_battle == 1 and self.total_steps % self.ENEMY_HP_READ_EVERY == 0:
+            try:
+                enemy_party = read_enemy_party(self.env)
+            except Exception:
+                enemy_party = []
+
+            if enemy_party:
+                self.enemy_party_cache = enemy_party
+                for mon in enemy_party:
+                    slot = int(mon.get("slot", -1))
+                    species = int(mon.get("species_id", 0))
+                    personality = int(mon.get("personality", 0))
+                    cur_hp = int(mon.get("cur_hp", 0))
+                    max_hp = int(mon.get("max_hp", 0))
+                    if slot < 0 or species <= 0 or max_hp <= 0 or not (0 <= cur_hp <= max_hp):
+                        continue
+
+                    mon_key = (slot, species, personality)
+                    if mon_key not in self.enemy_hp_min:
+                        self.enemy_hp_min[mon_key] = cur_hp
+                        continue
+
+                    previous_min = int(self.enemy_hp_min[mon_key])
+                    if cur_hp < previous_min:
+                        hp_damage = previous_min - cur_hp
+                        damage_reward = hp_damage * self.ENEMY_DAMAGE_REWARD_PER_HP
+                        reward += damage_reward
+                        self.enemy_hp_min[mon_key] = cur_hp
+
+                        self.episode_enemy_damage_hp += hp_damage
+                        self.episode_enemy_damage_reward += damage_reward
+                        self.run_stats["enemy_damage_hp"] = int(
+                            self.run_stats.get("enemy_damage_hp", 0)
+                        ) + hp_damage
+                        self.run_stats["enemy_damage_reward"] = round(
+                            float(self.run_stats.get("enemy_damage_reward", 0.0))
+                            + damage_reward, 3
+                        )
+                        reward_events.append(
+                            f"enemy_damage:{hp_damage}hp:+{damage_reward:.2f}"
+                        )
+
+                        if cur_hp == 0 and previous_min > 0 and mon_key not in self.enemy_fainted_rewarded:
+                            reward += self.ENEMY_FAINT_REWARD
+                            self.enemy_fainted_rewarded.add(mon_key)
+                            self.episode_enemy_faints += 1
+                            self.run_stats["enemy_faints"] = int(
+                                self.run_stats.get("enemy_faints", 0)
+                            ) + 1
+                            reward_events.append(
+                                f"enemy_faint:+{self.ENEMY_FAINT_REWARD:.2f}"
+                            )
+                        self._save_run_stats()
 
         # ---------------------------------------------------------
         # START ANTI-SPAM
@@ -1718,14 +2006,18 @@ class PokemonFireRedEnv(gym.Env):
         # sonst waeren es unbeabsichtigt +225.
         if not self.has_starter and p_lvl >= 5:
             self.has_starter = True
-            reward += 150.0
-            reward_events.append("first_pokemon:+150")
+            reward += self.STARTER_REWARD
+            reward_events.append(
+                f"first_pokemon:+{self.STARTER_REWARD:.0f}"
+            )
             self.reward_event_counts["first_pokemon"] += 1
             self.episode_milestone_steps.setdefault(
                 "first_pokemon", self.total_steps
             )
             self.last_level = p_lvl
             self.last_progress_advance_step = self.total_steps
+            if p_lvl >= 5:
+                self._claim_journey_milestone("journey_starter","journey_seen_starter")
 
             bridge = self._maybe_save_progress_bridge("starter")
             if bridge:
@@ -1763,6 +2055,8 @@ class PokemonFireRedEnv(gym.Env):
             reward_events.append(f"badge:+{badge_gain * 500}")
             self.last_badges = badges
             self.last_progress_advance_step = self.total_steps
+            if badges >= 1:
+                self._claim_journey_milestone("journey_badge1","journey_seen_badge1")
             bridge = self._maybe_save_progress_bridge("badge")
             if bridge:
                 milestone_saved = bridge
@@ -1787,6 +2081,7 @@ class PokemonFireRedEnv(gym.Env):
                 if map_key not in self.persistent_known_maps:
                     self.persistent_known_maps.add(map_key)
                     self.exploration_memory_dirty = True
+                    self._nav_target_cache = None
 
                     if self._claim_shared(
                         self.shared_maps, map_key
@@ -1800,6 +2095,28 @@ class PokemonFireRedEnv(gym.Env):
 
                 # Zusaetzliche Zwischenstaende nach wachsender Episode-Map-Abdeckung.
                 map_count = len(self.visited_maps)
+
+                # V7.5 Journey Depth:
+                # Keine Stadt-Strafe. Stattdessen wird nur ein NEUER globaler
+                # Episoden-Rekord belohnt. 5 bekannte Maps -> erster Agent mit
+                # 6 Maps +50, danach erst wieder 7 Maps usw.
+                if self._claim_global_depth(map_count):
+                    reward += self.NEW_GLOBAL_DEPTH_REWARD
+                    reward_events.append(
+                        "global_depth:"
+                        f"{map_count}:"
+                        f"+{self.NEW_GLOBAL_DEPTH_REWARD:.2f}"
+                    )
+                    self.run_stats["global_depth_records"] += 1
+                    self._save_run_stats()
+                    self.last_progress_advance_step = self.total_steps
+
+                    bridge = self._maybe_save_progress_bridge(
+                        f"global_depth_{map_count}"
+                    )
+                    if bridge:
+                        milestone_saved = bridge
+
                 if map_count in (3, 6, 10, 15, 25):
                     milestone_name = f"maps_{map_count}"
                     if self._save_curriculum_state(milestone_name):
@@ -1836,6 +2153,7 @@ class PokemonFireRedEnv(gym.Env):
                         if local_new:
                             self.persistent_known_edges.add(edge_key)
                             self.exploration_memory_dirty = True
+                            self._invalidate_navigation_cache()
 
                             if self._claim_shared(
                                 self.shared_edges, edge_key
@@ -1926,6 +2244,7 @@ class PokemonFireRedEnv(gym.Env):
                             transition_key
                         )
                         self.exploration_memory_dirty = True
+                        self._invalidate_navigation_cache()
                         self.steps_since_new_edge = 0
 
                         if self._claim_shared(
@@ -1943,6 +2262,8 @@ class PokemonFireRedEnv(gym.Env):
                         self.shared_transition_snapshot.add(
                             transition_key
                         )
+                        if len(self.persistent_known_transitions | self.shared_transition_snapshot) >= 5:
+                            self._claim_journey_milestone("journey_warp5","journey_seen_warp5")
                         bridge = self._maybe_save_progress_bridge(
                             "new_transition"
                         )
@@ -2105,6 +2426,32 @@ class PokemonFireRedEnv(gym.Env):
                     "level": self.last_level,
                     "badges": self.last_badges,
                     "in_battle": in_battle,
+                    "battle_stats": {
+                        "started": int(self.run_stats.get("battles_started", 0)),
+                        "completed": int(self.run_stats.get("battles_completed", 0)),
+                        "episode_started": int(self.episode_battles_started),
+                        "episode_completed": int(self.episode_battles_completed),
+                        "enemy_damage_hp": int(self.episode_enemy_damage_hp),
+                        "enemy_damage_reward": round(float(self.episode_enemy_damage_reward), 2),
+                        "enemy_faints": int(self.episode_enemy_faints),
+                    },
+                    "enemy_party": self.enemy_party_cache,
+                    "global_depth": {
+                        "episode_maps": int(len(self.visited_maps)),
+                        "record_maps": int(
+                            self.shared_progress.get(
+                                "max_episode_maps", 0
+                            )
+                        ) if self.shared_progress is not None else 0,
+                    },
+                    "journey_stats": {
+                        "starter": int(self.run_stats.get("journey_starter", 0)),
+                        "map5": int(self.run_stats.get("journey_map5", 0)),
+                        "map10": int(self.run_stats.get("journey_map10", 0)),
+                        "warp5": int(self.run_stats.get("journey_warp5", 0)),
+                        "progress": int(self.run_stats.get("journey_progress_checkpoint", 0)),
+                        "badge1": int(self.run_stats.get("journey_badge1", 0)),
+                    },
                     "explored_tiles": len(self.seen_coords),
                     "visited_maps": len(self.visited_maps),
                     "stuck_counter": self.stuck_counter,
@@ -2138,8 +2485,8 @@ class PokemonFireRedEnv(gym.Env):
                             int(self.steps_since_new_edge),
                         "target_guidance_active":
                             bool(
-                                self._target_coords_for_stage(
-                                    bank, map_id
+                                self._nav_target(
+                                    bank, map_id, x, y
                                 )
                             ),
                     },

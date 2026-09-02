@@ -42,12 +42,10 @@ TRAIN_DEVICE = "auto"
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 RUNTIME_DIR = os.path.join(PROJECT_ROOT, "runtime")
-ASSETS_DIR = os.path.join(PROJECT_ROOT, "assets")
-LOCAL_DIR = os.path.join(PROJECT_ROOT, "local")
 BASE_DIR = PROJECT_ROOT
-EXPLORATION_MEMORY_DIR = os.path.join(RUNTIME_DIR, "exploration_memory")
-CURRICULUM_DIR = os.path.join(RUNTIME_DIR, "curriculum_states")
-SHARED_CURRICULUM_DIR = os.path.join(RUNTIME_DIR, "curriculum_shared")
+EXPLORATION_MEMORY_DIR = os.path.join(BASE_DIR, "exploration_memory")
+CURRICULUM_DIR = os.path.join(BASE_DIR, "curriculum_states")
+SHARED_CURRICULUM_DIR = os.path.join(BASE_DIR, "curriculum_shared")
 
 # ================================================================
 # INTERNAL PATHS - normalerweise nicht aendern
@@ -143,6 +141,7 @@ def make_env(
     shared_edges,
     shared_maps,
     shared_transitions,
+    shared_progress,
     shared_lock,
 ):
     def _init():
@@ -151,6 +150,7 @@ def make_env(
             shared_edges=shared_edges,
             shared_maps=shared_maps,
             shared_transitions=shared_transitions,
+            shared_progress=shared_progress,
             shared_lock=shared_lock,
         )
     return _init
@@ -313,6 +313,12 @@ def main():
     shared_edges = manager.dict(seed_edges)
     shared_maps = manager.dict(seed_maps)
     shared_transitions = manager.dict(seed_transitions)
+
+    # Seed journey-depth high-water from already globally known maps.
+    # Conservative on purpose: old progress is never rewarded again.
+    shared_progress = manager.dict({
+        "max_episode_maps": int(len(seed_maps)),
+    })
     shared_lock = manager.RLock()
 
     print(
@@ -322,13 +328,13 @@ def main():
         f"{len(seed_transitions)} Warps"
     )
     print(
-        "🎓 V7.1 Rollen: "
-        "5 Intro | 5 Treppe | 5 Ausgang | 10 Progress | 5 Full Chain"
+        "🎓 V7.5 Rollen: "
+        "2 Intro | 2 Treppe | 3 Ausgang | 13 Progress | 10 Full Chain"
     )
 
-    print("🎮 V7.1 Actions: A | B | START | UP | DOWN | LEFT | RIGHT")
-    print("🧭 V7.1 Observation: 64x64 Bild + 20 RAM/Nav Features")
-    print("🌉 V7.1 Progress Bridge: Checkpoints + Stall-Restart aktiv")
+    print("🎮 V7.5 Actions: A | B | START | UP | DOWN | LEFT | RIGHT")
+    print("🧭 V7.5 Observation: 64x64 Bild + 20 RAM/Nav Features")
+    print("🌲 V7.5 Progress Focus: 23/30 Agents Richtung Vertania/Wald\n⚡ V7.5 Speed Cache: adjacency/frontier/distance caching aktiv")
 
     vec_env = SubprocVecEnv(
         [
@@ -337,6 +343,7 @@ def main():
                 shared_edges,
                 shared_maps,
                 shared_transitions,
+                shared_progress,
                 shared_lock,
             )
             for i in range(NUM_ENVS)

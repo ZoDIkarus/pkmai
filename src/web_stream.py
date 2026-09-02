@@ -1,6 +1,8 @@
 import os
 import glob
 import json
+import threading
+import tempfile
 from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse, FileResponse
 import uvicorn
@@ -9,7 +11,6 @@ app = FastAPI()
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 RUNTIME_DIR = os.path.join(PROJECT_ROOT, "runtime")
 ASSETS_DIR = os.path.join(PROJECT_ROOT, "assets")
-LOCAL_DIR = os.path.join(PROJECT_ROOT, "local")
 BASE_DIR = PROJECT_ROOT
 ROOMS_DIR = os.path.join(RUNTIME_DIR, "room_captures")
 MAP_FILE = os.path.join(ASSETS_DIR, "maps", "kanto_map.png")
@@ -17,6 +18,7 @@ INSTANCES_DIR = os.path.join(RUNTIME_DIR, "instances_data")
 VERSION_FILE = os.path.join(RUNTIME_DIR, "model_version.json")
 SKELETON_FILE = os.path.join(RUNTIME_DIR, "skeleton_map.json")
 HISTORY_FILE = os.path.join(RUNTIME_DIR, "training_history.json")
+HISTORY_LOCK = threading.Lock()
 EXPLORATION_MEMORY_DIR = os.path.join(RUNTIME_DIR, "exploration_memory")
 WATCHER_MAPPING_FILE = os.path.join(RUNTIME_DIR, "watcher_mapping.json")
 
@@ -41,10 +43,28 @@ def _load_training_history():
 
 
 def _save_training_history(history):
-    tmp = HISTORY_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(history[-1000:], f, separators=(",", ":"))
-    os.replace(tmp, HISTORY_FILE)
+    os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
+
+    # Unique temp file prevents concurrent FastAPI requests from
+    # fighting over one shared "training_history.json.tmp".
+    fd, tmp = tempfile.mkstemp(
+        prefix="training_history_",
+        suffix=".tmp",
+        dir=os.path.dirname(HISTORY_FILE),
+        text=True,
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(history[-1000:], f, separators=(",", ":"))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, HISTORY_FILE)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
 
 
 def _aggregate_training_stats(instances):
@@ -85,6 +105,14 @@ def _aggregate_training_stats(instances):
         "v2_full_intro": 0,
         "v2_full_stairs": 0,
         "v2_full_left_house": 0,
+        "battles_started": 0,
+        "battles_completed": 0,
+        "journey_starter": 0,
+        "journey_map5": 0,
+        "journey_map10": 0,
+        "journey_warp5": 0,
+        "journey_progress_checkpoint": 0,
+        "journey_badge1": 0,
     }
 
     for inst in agents:
@@ -192,44 +220,60 @@ def _aggregate_training_stats(instances):
 
 
 def _maybe_record_history(version_meta, instances):
-    version = int(version_meta.get("version", 0))
-    timesteps = int(version_meta.get("timesteps", 0))
-    if version <= 0 or timesteps <= 0:
-        return
+    with HISTORY_LOCK:
+        version = int(version_meta.get("version", 0))
+        timesteps = int(version_meta.get("timesteps", 0))
+        if version <= 0 or timesteps <= 0:
+            return
 
-    history = _load_training_history()
-    if history and int(history[-1].get("version", -1)) == version:
-        return
+        history = _load_training_history()
+        if history and int(history[-1].get("version", -1)) == version:
+            return
 
-    stats = _aggregate_training_stats(instances)
-    history.append({
-        "version": version,
-        "timesteps": timesteps,
-        "max_level": max(stats["max_level"], int(version_meta.get("max_level", 0))),
-        "max_badges": max(stats["max_badges"], int(version_meta.get("max_badges", 0))),
-        "max_maps": max(stats["max_maps"], int(version_meta.get("max_maps", 0))),
-        "episodes": stats["episodes"],
-        "avg_episode_reward": stats["avg_episode_reward"],
-        "best_episode_reward": stats["best_episode_reward"],
-        "beginning_episodes": stats["run_totals"]["beginning_episodes"],
-        "curriculum_episodes": stats["run_totals"]["curriculum_episodes"],
-        "beginning_loop_resets": stats["beginning_loop_resets"],
-        "beginning_loops_per_100_runs":
-            stats["beginning_loops_per_100_runs"],
-        "beginning_success_rates": stats["beginning_success_rates"],
-        "v6_skill_rates": stats["v6_skill_rates"],
-        "v6_skill_totals": {
-            "intro_episodes": stats["run_totals"]["v2_intro_episodes"],
-            "intro_success": stats["run_totals"]["v2_intro_success"],
-            "stairs_episodes": stats["run_totals"]["v2_stairs_episodes"],
-            "stairs_success": stats["run_totals"]["v2_stairs_success"],
-            "exit_episodes": stats["run_totals"]["v2_exit_episodes"],
-            "exit_success": stats["run_totals"]["v2_exit_success"],
-        },
-        "stats_schema": 3,
-    })
-    _save_training_history(history)
+        stats = _aggregate_training_stats(instances)
+        history.append({
+            "version": version,
+            "timesteps": timesteps,
+            "max_level": max(stats["max_level"], int(version_meta.get("max_level", 0))),
+            "max_badges": max(stats["max_badges"], int(version_meta.get("max_badges", 0))),
+            "max_maps": max(stats["max_maps"], int(version_meta.get("max_maps", 0))),
+            "episodes": stats["episodes"],
+            "avg_episode_reward": stats["avg_episode_reward"],
+            "best_episode_reward": stats["best_episode_reward"],
+            "beginning_episodes": stats["run_totals"]["beginning_episodes"],
+            "curriculum_episodes": stats["run_totals"]["curriculum_episodes"],
+            "beginning_loop_resets": stats["beginning_loop_resets"],
+            "beginning_loops_per_100_runs":
+                stats["beginning_loops_per_100_runs"],
+            "beginning_success_rates": stats["beginning_success_rates"],
+            "v6_skill_rates": stats["v6_skill_rates"],
+            "v6_skill_totals": {
+                "intro_episodes": stats["run_totals"]["v2_intro_episodes"],
+                "intro_success": stats["run_totals"]["v2_intro_success"],
+                "stairs_episodes": stats["run_totals"]["v2_stairs_episodes"],
+                "stairs_success": stats["run_totals"]["v2_stairs_success"],
+                "exit_episodes": stats["run_totals"]["v2_exit_episodes"],
+                "exit_success": stats["run_totals"]["v2_exit_success"],
+            },
+            "stats_schema": 3,
+        })
+        _save_training_history(history)
 
+
+    def _global_exploration_summary():
+        edges=set(); maps=set(); transitions=set()
+        for path in glob.glob(os.path.join(EXPLORATION_MEMORY_DIR,"agent_*.json")):
+            try:
+                with open(path,"r") as f: d=json.load(f)
+                for x in d.get("edges",[]):
+                    if isinstance(x,list) and len(x)==6: edges.add(tuple(x))
+                for x in d.get("maps",[]):
+                    if isinstance(x,list) and len(x)==2: maps.add(tuple(x))
+                for x in d.get("transitions",[]):
+                    if isinstance(x,list) and len(x)==8: transitions.add(tuple(x))
+            except Exception:
+                pass
+        return {"known_edges":len(edges),"known_maps":len(maps),"known_transitions":len(transitions)}
 
 @app.get("/api/state")
 def get_state():
@@ -272,6 +316,16 @@ def get_state():
 
     training_stats = _aggregate_training_stats(instances)
     _maybe_record_history(version_meta, instances)
+    try:
+        global_exploration = _global_exploration_summary()
+    except Exception:
+        global_exploration = {
+            "known_edges": 0,
+            "known_maps": 0,
+            "known_transitions": 0,
+        }
+    battle_started = int(training_stats["run_totals"].get("battles_started",0))
+    battle_completed = int(training_stats["run_totals"].get("battles_completed",0))
 
     return {
         "trainer_name": trainer_name,
@@ -281,6 +335,16 @@ def get_state():
         "max_badges": max(max_badges, training_stats["max_badges"]),
         "total_steps": total_steps,
         "training_stats": training_stats,
+        "global_exploration": global_exploration,
+        "battle_stats": {"started":battle_started,"completed":battle_completed},
+        "journey_stats": {
+            "starter": int(training_stats["run_totals"].get("journey_starter",0)),
+            "map5": int(training_stats["run_totals"].get("journey_map5",0)),
+            "map10": int(training_stats["run_totals"].get("journey_map10",0)),
+            "warp5": int(training_stats["run_totals"].get("journey_warp5",0)),
+            "progress": int(training_stats["run_totals"].get("journey_progress_checkpoint",0)),
+            "badge1": int(training_stats["run_totals"].get("journey_badge1",0)),
+        },
         "party": party,
         "instances": instances
     }
@@ -404,6 +468,92 @@ def get_skeleton():
     }
 
 
+def _cluster_warp_points(transitions, radius=2):
+    """
+    Convert noisy transition samples into physical-looking warp endpoints.
+
+    Training positions are sampled every few agent steps, so the same doorway
+    can be recorded at adjacent tiles. We keep the raw transitions untouched
+    and cluster only the visualization/API warp points.
+    """
+    candidates = []
+
+    for t in transitions:
+        if not isinstance(t, (tuple, list)) or len(t) != 8:
+            continue
+
+        a = tuple(int(v) for v in t[:4])
+        b = tuple(int(v) for v in t[4:])
+
+        # Each side is a possible physical entrance/exit.
+        candidates.append({
+            "bank": a[0], "map": a[1], "x": a[2], "y": a[3],
+            "to_bank": b[0], "to_map": b[1],
+        })
+        candidates.append({
+            "bank": b[0], "map": b[1], "x": b[2], "y": b[3],
+            "to_bank": a[0], "to_map": a[1],
+        })
+
+    # Group only endpoints on the same source map going to the same target map.
+    grouped = {}
+    for p in candidates:
+        key = (
+            p["bank"], p["map"],
+            p["to_bank"], p["to_map"],
+        )
+        grouped.setdefault(key, []).append(p)
+
+    out = []
+    for key, points in grouped.items():
+        clusters = []
+
+        for p in points:
+            matched = None
+            for c in clusters:
+                # Manhattan <= radius means "same doorway area".
+                if abs(p["x"] - c["cx"]) + abs(p["y"] - c["cy"]) <= radius:
+                    matched = c
+                    break
+
+            if matched is None:
+                clusters.append({
+                    "points": [p],
+                    "cx": p["x"],
+                    "cy": p["y"],
+                })
+            else:
+                matched["points"].append(p)
+                xs = [q["x"] for q in matched["points"]]
+                ys = [q["y"] for q in matched["points"]]
+                # Median is robust against one bad sampled coordinate.
+                xs.sort()
+                ys.sort()
+                matched["cx"] = xs[len(xs)//2]
+                matched["cy"] = ys[len(ys)//2]
+
+        for c in clusters:
+            sample = c["points"][0]
+            out.append({
+                "bank": int(sample["bank"]),
+                "map": int(sample["map"]),
+                "x": int(c["cx"]),
+                "y": int(c["cy"]),
+                "to_bank": int(sample["to_bank"]),
+                "to_map": int(sample["to_map"]),
+                "samples": len(c["points"]),
+            })
+
+    out.sort(
+        key=lambda p: (
+            p["bank"], p["map"],
+            p["x"], p["y"],
+            p["to_bank"], p["to_map"],
+        )
+    )
+    return out
+
+
 @app.get("/api/global_mapping")
 def get_global_mapping():
     """Union aller Training-Agents plus Watcher, exakt dedupliziert."""
@@ -461,11 +611,19 @@ def get_global_mapping():
         except Exception:
             pass
 
+    warp_points = _cluster_warp_points(
+        sorted(transitions),
+        radius=2,
+    )
+
     return {
         "tiles": [list(x) for x in sorted(tiles)],
         "edges": [list(x) for x in sorted(edges)],
         "maps": [list(x) for x in sorted(maps)],
+        # Raw transitions stay available for graph/history.
         "transitions": [list(x) for x in sorted(transitions)],
+        # Visual warp endpoints are spatially deduplicated.
+        "warp_points": warp_points,
     }
 
 
@@ -558,24 +716,26 @@ def index():
         .logo-title { font-weight: 800; font-size: 15px; color: #00e676; letter-spacing: 0.5px; }
         
         .badge-bar { display: flex; align-items: center; gap: 5px; background: #0e1017; padding: 4px 8px; border-radius: 20px; border: 1px solid #232738; }
-        .badge-slot { 
-            width: 18px; 
-            height: 18px; 
-            border-radius: 50%; 
-            background: #232738; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            font-size: 8px; 
-            font-weight: bold; 
-            color: #555;
-            transition: all 0.3s ease;
-        }
-        .badge-slot.active { 
-            background: linear-gradient(135deg, #ffd700, #ff9100); 
-            color: #000; 
-            box-shadow: 0 0 10px rgba(255, 215, 0, 0.8); 
-        }
+        .badge-slot{width:28px;height:28px;border-radius:9px;background:linear-gradient(145deg,#202432,#10131c);border:1px solid #353b50;display:flex;align-items:center;justify-content:center;font-size:14px;filter:grayscale(1);opacity:.34;transform:scale(.94);transition:.25s;box-shadow:inset 0 0 10px rgba(0,0,0,.45)}
+        .badge-slot.active{filter:none;opacity:1;transform:scale(1);border-color:#ffd54f;background:linear-gradient(145deg,#3b3420,#17191f);box-shadow:0 0 13px rgba(255,213,79,.5)}
+        .live-global{position:absolute;top:16px;right:16px;z-index:950;min-width:245px;background:rgba(12,14,20,.91);border:1px solid #2b3143;border-radius:12px;padding:10px;backdrop-filter:blur(10px);box-shadow:0 10px 28px rgba(0,0,0,.48)}
+        .live-global-title{display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:800;color:#00e676;margin-bottom:8px;letter-spacing:.4px}
+        .live-dot{width:8px;height:8px;border-radius:50%;background:#00e676;display:inline-block;box-shadow:0 0 8px #00e676;margin-right:5px}
+        .live-global-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
+        .live-stat{background:#11151e;border:1px solid #242a3a;border-radius:8px;padding:7px}
+        .live-stat .lv{font-size:15px;font-weight:800;color:#fff}.live-stat .lk{font-size:8px;color:#747d94;text-transform:uppercase;margin-top:2px;letter-spacing:.5px}
+
+        .journey-wrap{margin-bottom:14px;background:#11151e;border:1px solid #242a3a;border-radius:12px;padding:12px}
+        .journey-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+        .journey-title h3{margin:0;font-size:13px}.journey-title span{font-size:9px;color:#7f8799}
+        .journey-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
+        .journey-card{background:#0d1118;border:1px solid #252b3b;border-radius:10px;padding:10px;min-height:82px;position:relative}
+        .journey-card.done{border-color:#00e676;box-shadow:0 0 14px rgba(0,230,118,.12)}
+        .journey-card.locked{opacity:.55;filter:grayscale(.35)}
+        .journey-icon{font-size:22px;margin-bottom:6px}.journey-name{font-size:10px;font-weight:800}
+        .journey-sub{font-size:8px;color:#6f788e;margin-top:2px}.journey-value{position:absolute;right:8px;top:8px;font-size:10px;font-weight:800;color:#00e676}
+        .journey-bar{height:4px;background:#202635;border-radius:99px;overflow:hidden;margin-top:8px}.journey-fill{height:100%;background:linear-gradient(90deg,#00e676,#4dd0e1);width:0%}
+        @media(max-width:1200px){.journey-grid{grid-template-columns:repeat(4,1fr)}}
 
         .team-bar { display: flex; align-items: center; gap: 6px; background: #0e1017; padding: 4px 8px; border-radius: 8px; border: 1px solid #232738; }
         .team-slot {
@@ -626,6 +786,38 @@ def index():
             background: #00e676;
             width: 100%;
         }
+
+        .team-slot.filled { cursor:pointer; }
+        .team-slot.filled:hover { transform:translateY(-1px); box-shadow:0 0 12px rgba(0,230,118,.25); }
+        .team-label { font-size:9px; color:#7f8799; margin-left:2px; cursor:pointer; }
+        .poke-modal-backdrop {
+            display:none; position:fixed; inset:0; z-index:5000;
+            background:rgba(4,6,10,.72); backdrop-filter:blur(5px);
+            align-items:center; justify-content:center;
+        }
+        .poke-modal-backdrop.open { display:flex; }
+        .poke-modal {
+            width:min(560px,92vw); background:#11151e; border:1px solid #31384b;
+            border-radius:16px; box-shadow:0 24px 80px rgba(0,0,0,.65); overflow:hidden;
+        }
+        .poke-modal-head {
+            display:flex; align-items:center; gap:14px; padding:16px;
+            background:linear-gradient(135deg,#17202b,#10131b); border-bottom:1px solid #252c3b;
+        }
+        .poke-modal-head img { width:88px; height:88px; image-rendering:pixelated; }
+        .poke-title { font-size:21px; font-weight:900; }
+        .poke-meta { font-size:11px; color:#8791a8; margin-top:3px; }
+        .poke-close { margin-left:auto; align-self:flex-start; border:0; border-radius:8px; padding:7px 10px; background:#252b39; color:#fff; cursor:pointer; }
+        .poke-body { padding:16px; display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+        .poke-card { background:#0c1017; border:1px solid #252c3a; border-radius:10px; padding:11px; }
+        .poke-card h4 { margin:0 0 9px; font-size:11px; color:#00e676; text-transform:uppercase; letter-spacing:.5px; }
+        .poke-hp-text { display:flex; justify-content:space-between; font-size:11px; margin-bottom:6px; }
+        .poke-hp-bg { height:8px; background:#262c37; border-radius:99px; overflow:hidden; }
+        .poke-hp-fill { height:100%; }
+        .poke-stat-row,.poke-move-row { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid rgba(255,255,255,.05); font-size:11px; }
+        .poke-stat-row:last-child,.poke-move-row:last-child { border-bottom:0; }
+        .poke-move-id { color:#677086; font-size:9px; }
+        @media(max-width:650px){.poke-body{grid-template-columns:1fr}}
 
         /* AGENT FILTER CONTROL */
         .filter-control {
@@ -795,6 +987,7 @@ def index():
             
             <div style="font-size: 12px; color:#888;">Trainer: <b id="hud-trainer" style="color:#00e676;">Alex</b></div>
 
+            <span class="team-label" onclick="openFirstPokemon()">POKÉMON TEAM</span>
             <div class="team-bar">
                 <div class="team-slot" id="slot-0"><span style="font-size: 9px; color: #444;">1</span></div>
                 <div class="team-slot" id="slot-1"><span style="font-size: 9px; color: #444;">2</span></div>
@@ -804,15 +997,15 @@ def index():
                 <div class="team-slot" id="slot-5"><span style="font-size: 9px; color: #444;">6</span></div>
             </div>
 
-            <div class="badge-bar">
-                <div class="badge-slot" id="badge-1">1</div>
-                <div class="badge-slot" id="badge-2">2</div>
-                <div class="badge-slot" id="badge-3">3</div>
-                <div class="badge-slot" id="badge-4">4</div>
-                <div class="badge-slot" id="badge-5">5</div>
-                <div class="badge-slot" id="badge-6">6</div>
-                <div class="badge-slot" id="badge-7">7</div>
-                <div class="badge-slot" id="badge-8">8</div>
+            <div class="badge-bar" title="Kanto Orden">
+                <div class="badge-slot" id="badge-1" title="Felsorden">🪨</div>
+                <div class="badge-slot" id="badge-2" title="Quellorden">💧</div>
+                <div class="badge-slot" id="badge-3" title="Donnerorden">⚡</div>
+                <div class="badge-slot" id="badge-4" title="Farborden">🌿</div>
+                <div class="badge-slot" id="badge-5" title="Seelenorden">☠️</div>
+                <div class="badge-slot" id="badge-6" title="Sumpforden">🔮</div>
+                <div class="badge-slot" id="badge-7" title="Vulkanorden">🔥</div>
+                <div class="badge-slot" id="badge-8" title="Erdorden">🌍</div>
             </div>
 
             <!-- AGENTEN FILTER INPUT -->
@@ -836,9 +1029,33 @@ def index():
     </header>
 
     <div id="main-container">
-        <div id="map-view"></div>
+        <div id="map-view">
+            <div class="live-global">
+                <div class="live-global-title"><span><span class="live-dot"></span>GLOBAL AI</span><span id="live-model">v0</span></div>
+                <div class="live-global-grid">
+                    <div class="live-stat"><div class="lv" id="live-maps">0</div><div class="lk">🌍 Maps</div></div>
+                    <div class="live-stat"><div class="lv" id="live-warps">0</div><div class="lk">🚪 Warps</div></div>
+                    <div class="live-stat"><div class="lv" id="live-edges">0</div><div class="lk">🧭 Edges</div></div>
+                    <div class="live-stat"><div class="lv" id="live-battles">0</div><div class="lk">⚔ Battles</div></div>
+                    <div class="live-stat"><div class="lv" id="live-finished">0</div><div class="lk">✅ Finished</div></div>
+                    <div class="live-stat"><div class="lv" id="live-steps">0</div><div class="lk">🧠 PPO Steps</div></div>
+                </div>
+            </div>
+        </div>
         <div id="rooms-view"><div class="room-grid" id="room-grid"></div></div>
         <div id="graphs-view">
+            <div class="journey-wrap">
+                <div class="journey-title"><h3>🚀 Journey Skills</h3><span>Early Game → Vertania → Wald → Orden 1</span></div>
+                <div class="journey-grid">
+                    <div class="journey-card" id="journey-starter"><div class="journey-value" id="jv-starter">0%</div><div class="journey-icon">🐣</div><div class="journey-name">Starter</div><div class="journey-sub">Starter zuverlässig erhalten</div><div class="journey-bar"><div class="journey-fill" id="jf-starter"></div></div></div>
+                    <div class="journey-card" id="journey-battle"><div class="journey-value" id="jv-battle">0%</div><div class="journey-icon">⚔️</div><div class="journey-name">Battles</div><div class="journey-sub">Kämpfe starten & beenden</div><div class="journey-bar"><div class="journey-fill" id="jf-battle"></div></div></div>
+                    <div class="journey-card" id="journey-map5"><div class="journey-value" id="jv-map5">0/5</div><div class="journey-icon">🗺️</div><div class="journey-name">5 Maps</div><div class="journey-sub">Global erkannte Maps</div><div class="journey-bar"><div class="journey-fill" id="jf-map5"></div></div></div>
+                    <div class="journey-card" id="journey-warps"><div class="journey-value" id="jv-warps">0/5</div><div class="journey-icon">🚪</div><div class="journey-name">Warps</div><div class="journey-sub">Übergänge entdeckt</div><div class="journey-bar"><div class="journey-fill" id="jf-warps"></div></div></div>
+                    <div class="journey-card" id="journey-progress"><div class="journey-value" id="jv-progress">0</div><div class="journey-icon">🌉</div><div class="journey-name">Progress Bridge</div><div class="journey-sub">Fortschritt-Checkpoints</div><div class="journey-bar"><div class="journey-fill" id="jf-progress"></div></div></div>
+                    <div class="journey-card" id="journey-map10"><div class="journey-value" id="jv-map10">0/10</div><div class="journey-icon">🌲</div><div class="journey-name">Forest Push</div><div class="journey-sub">Über die ersten Maps hinaus</div><div class="journey-bar"><div class="journey-fill" id="jf-map10"></div></div></div>
+                    <div class="journey-card locked" id="journey-badge1"><div class="journey-value" id="jv-badge1">LOCKED</div><div class="journey-icon">🪨</div><div class="journey-name">Orden 1</div><div class="journey-sub">Felsorden</div><div class="journey-bar"><div class="journey-fill" id="jf-badge1"></div></div></div>
+                </div>
+            </div>
             <div class="graphs-kpis">
                 <div class="graphs-kpi"><div class="v" id="g-steps">0</div><div class="k">PPO Steps</div></div>
                 <div class="graphs-kpi"><div class="v" id="g-version">v0</div><div class="k">Modell</div></div>
@@ -849,7 +1066,7 @@ def index():
             </div>
             <div class="graphs-grid">
                 <div class="graph-card"><div class="graph-title">Lernkurve</div><div class="graph-sub">Ø Episode-Reward über echte PPO-Trainingsschritte.</div><div class="graph-canvas-wrap"><canvas id="graph-reward"></canvas></div></div>
-                <div class="graph-card"><div class="graph-title">Story-Erfolgsquote</div><div class="graph-sub">V7.1: Spezialisten + Progress-Bridge + Full-Chain.</div><div class="graph-canvas-wrap"><canvas id="graph-success"></canvas></div></div>
+                <div class="graph-card"><div class="graph-title">Story-Erfolgsquote</div><div class="graph-sub">V7.4.5: Party + EXP + Warp Markers Hidden.</div><div class="graph-canvas-wrap"><canvas id="graph-success"></canvas></div></div>
                 <div class="graph-card"><div class="graph-title">Spiel-Fortschritt</div><div class="graph-sub">Bestes Level, Orden und Maps je Modellstand.</div><div class="graph-canvas-wrap"><canvas id="graph-progress"></canvas></div></div>
                 <div class="graph-card"><div class="graph-title">Festfahren / Anti-Loop</div><div class="graph-sub">Loops pro 100 echte Beginning-Runs; Curriculum wird separat gezählt.</div><div class="graph-canvas-wrap"><canvas id="graph-loops"></canvas></div></div>
             </div>
@@ -869,6 +1086,8 @@ def index():
                 <div class="detail-stat"><div class="v" id="detail-edges">0</div><div class="k">Known Edges</div></div>
                 <div class="detail-stat"><div class="v" id="detail-knownmaps">0</div><div class="k">Known Maps</div></div>
                 <div class="detail-stat"><div class="v" id="detail-transitions">0</div><div class="k">Transitions</div></div>
+                <div class="detail-stat"><div class="v" id="detail-battles">0</div><div class="k">⚔ Battles</div></div>
+                <div class="detail-stat"><div class="v" id="detail-battle-done">0</div><div class="k">✅ Finished</div></div>
             </div>
             <div class="chart-wrap">
                 <div class="chart-label">Letztes Reward-Event</div>
@@ -885,6 +1104,42 @@ def index():
             <div class="chart-wrap">
                 <div class="chart-label">Letzte 1-Tile-Schritte</div>
                 <div class="step-list" id="step-list"><div class="step-row"><span>-</span><span>warte auf Route</span><span></span></div></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="poke-modal-backdrop" id="poke-modal-bg" onclick="closePokemonModal(event)">
+        <div class="poke-modal" onclick="event.stopPropagation()">
+            <div class="poke-modal-head">
+                <img id="poke-detail-sprite" src="" alt="">
+                <div>
+                    <div class="poke-title" id="poke-detail-name">Pokémon</div>
+                    <div class="poke-meta" id="poke-detail-meta">Lv. ?</div>
+                </div>
+                <button class="poke-close" onclick="closePokemonModal()">✕</button>
+            </div>
+            <div class="poke-body">
+                <div class="poke-card">
+                    <h4>❤️ Health</h4>
+                    <div class="poke-hp-text"><span id="poke-detail-hp">0 / 0 HP</span><span id="poke-detail-hp-state">—</span></div>
+                    <div class="poke-hp-bg"><div class="poke-hp-fill" id="poke-detail-hp-fill"></div></div>
+                    <div style="margin-top:10px;font-size:11px;display:flex;justify-content:space-between">
+                        <span style="color:#7f8799">✨ Total EXP</span>
+                        <b id="poke-detail-exp">0</b>
+                    </div>
+                    <div style="margin-top:4px;font-size:10px;display:flex;justify-content:space-between">
+                        <span style="color:#7f8799">Letzter EXP Gain</span>
+                        <b id="poke-detail-exp-delta" style="color:#00e676">+0</b>
+                    </div>
+                </div>
+                <div class="poke-card">
+                    <h4>📊 Stats</h4>
+                    <div id="poke-detail-stats"></div>
+                </div>
+                <div class="poke-card" style="grid-column:1/-1">
+                    <h4>⚔️ Moves</h4>
+                    <div id="poke-detail-moves"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -1090,8 +1345,69 @@ def index():
             updateDashboard();
         }
 
+        let latestParty = [];
+
+        function hpState(hpPct) {
+            if (hpPct <= 0) return ['FAINTED','#ff1744'];
+            if (hpPct < 30) return ['CRITICAL','#ff1744'];
+            if (hpPct < 60) return ['CAUTION','#ffea00'];
+            return ['HEALTHY','#00e676'];
+        }
+
+        function openPokemonDetail(index) {
+            const p = latestParty[index];
+            if (!p) return;
+
+            const spriteUrl = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/versions/generation-iii/firered-leafgreen/${p.id}.png`;
+            const curHp = Number(p.cur_hp || 0);
+            const maxHp = Number(p.max_hp || 0);
+            const hpPct = maxHp > 0 ? Math.max(0,Math.min(100,(curHp/maxHp)*100)) : 0;
+            const [stateName,stateColor] = hpState(hpPct);
+            const stats = p.stats || {};
+            const moves = Array.isArray(p.moves) ? p.moves : [];
+
+            document.getElementById('poke-detail-sprite').src = spriteUrl;
+            document.getElementById('poke-detail-name').innerText = p.name || `Species #${p.id || '?'}`;
+            document.getElementById('poke-detail-meta').innerText =
+                `Lv. ${p.level || '?'} · Slot ${Number(p.slot || 0)+1} · Species #${p.id || '?'}`;
+            document.getElementById('poke-detail-hp').innerText = `${curHp} / ${maxHp} HP`;
+            document.getElementById('poke-detail-exp').innerText =
+                Number(p.experience || 0).toLocaleString();
+            document.getElementById('poke-detail-exp-delta').innerText =
+                `+${Number(p.exp_delta || 0).toLocaleString()}`;
+            const stateEl=document.getElementById('poke-detail-hp-state');
+            stateEl.innerText=stateName; stateEl.style.color=stateColor;
+            const hpFill=document.getElementById('poke-detail-hp-fill');
+            hpFill.style.width=`${hpPct}%`; hpFill.style.background=stateColor;
+
+            document.getElementById('poke-detail-stats').innerHTML = [
+                ['Attack', stats.attack],
+                ['Defense', stats.defense],
+                ['Speed', stats.speed],
+                ['Sp. Attack', stats.sp_attack],
+                ['Sp. Defense', stats.sp_defense],
+            ].map(([n,v])=>`<div class="poke-stat-row"><span>${n}</span><b>${v ?? '—'}</b></div>`).join('');
+
+            document.getElementById('poke-detail-moves').innerHTML =
+                moves.length
+                ? moves.map(m=>`<div class="poke-move-row"><span>${m.name || 'Move'} <span class="poke-move-id">#${m.id || '?'}</span></span><b>PP ${m.pp ?? '—'}</b></div>`).join('')
+                : '<div style="font-size:11px;color:#727b90">Noch keine Move-Telemetrie verfügbar.</div>';
+
+            document.getElementById('poke-modal-bg').classList.add('open');
+        }
+
+        function openFirstPokemon() {
+            if (latestParty.length) openPokemonDetail(0);
+        }
+
+        function closePokemonModal(ev) {
+            if (ev && ev.target && ev.target.id !== 'poke-modal-bg') return;
+            document.getElementById('poke-modal-bg').classList.remove('open');
+        }
+
         function updateParty(party) {
             party = party || [];
+            latestParty = party;
             for (let i = 0; i < 6; i++) {
                 const slot = document.getElementById(`slot-${i}`);
                 if (i < party.length) {
@@ -1103,7 +1419,8 @@ def index():
                     const hpColor = hpPct > 50 ? '#00e676' : (hpPct > 20 ? '#ffea00' : '#ff1744');
 
                     slot.className = 'team-slot filled';
-                    slot.title = `${p.name || 'Pokemon'} (Lv. ${p.level || '?'}) - HP: ${curHp}/${maxHp}`;
+                    slot.onclick = () => openPokemonDetail(i);
+                    slot.title = `${p.name || 'Pokemon'} (Lv. ${p.level || '?'}) - HP: ${curHp}/${maxHp} - EXP: ${Number(p.experience || 0).toLocaleString()}`;
                     slot.innerHTML = `
                         <div class="hp-bar-bg"><div class="hp-bar-fill" style="width:${hpPct}%; background:${hpColor};"></div></div>
                         <img src="${spriteUrl}" alt="${p.name || 'Pokemon'}">
@@ -1111,6 +1428,7 @@ def index():
                     `;
                 } else {
                     slot.className = 'team-slot';
+                    slot.onclick = null;
                     slot.title = `Slot ${i+1} (Leer / keine Party-Telemetrie)`;
                     slot.innerHTML = `<span style="font-size: 9px; color: #444;">${i+1}</span>`;
                 }
@@ -1200,6 +1518,9 @@ def index():
                 Number(pe.known_maps || 0).toLocaleString();
             document.getElementById('detail-transitions').innerText =
                 Number(pe.known_transitions || 0).toLocaleString();
+            const bs = inst.battle_stats || {};
+            document.getElementById('detail-battles').innerText = Number(bs.started || 0).toLocaleString();
+            document.getElementById('detail-battle-done').innerText = Number(bs.completed || 0).toLocaleString();
 
             const navState = pe.exit_seek_active
                 ? `EXIT SEEK (${Number(pe.steps_since_new_edge || 0)} stale)`
@@ -1273,6 +1594,29 @@ def index():
             }
         }
 
+        function setJourneyCard(id,text,pct,done=false){
+            const card=document.getElementById('journey-'+id), val=document.getElementById('jv-'+id), fill=document.getElementById('jf-'+id);
+            if(val) val.innerText=text;
+            if(fill) fill.style.width=`${Math.max(0,Math.min(100,pct))}%`;
+            if(card){card.classList.toggle('done',!!done);if(done)card.classList.remove('locked');}
+        }
+        function updateJourneySkills(state){
+            const st=state.training_stats||{}, rt=st.run_totals||{}, gx=state.global_exploration||{}, bs=state.battle_stats||{}, jr=state.journey_stats||{};
+            const fullRuns=Number(rt.v2_full_episodes||0), fullStarter=Number(rt.v2_full_starter||0);
+            const starterPct=fullRuns>0?100*fullStarter/fullRuns:0;
+            const battles=Number(bs.started||0), completed=Number(bs.completed||0);
+            const battlePct=battles>0?100*completed/battles:0;
+            const maps=Number(gx.known_maps||0), warps=Number(gx.known_transitions||0), progress=Number(jr.progress||0);
+            const badge1=Number(state.max_badges||0)>=1||Number(jr.badge1||0)>0;
+            setJourneyCard('starter',`${starterPct.toFixed(1)}%`,starterPct,starterPct>=90);
+            setJourneyCard('battle',`${battlePct.toFixed(1)}%`,battlePct,battles>=3&&battlePct>=70);
+            setJourneyCard('map5',`${maps}/5`,100*maps/5,maps>=5);
+            setJourneyCard('warps',`${warps}/5`,100*warps/5,warps>=5);
+            setJourneyCard('progress',`${progress}`,Math.min(100,progress*12.5),progress>=3);
+            setJourneyCard('map10',`${maps}/10`,100*maps/10,maps>=10);
+            setJourneyCard('badge1',badge1?'DONE':'LOCKED',badge1?100:0,badge1);
+        }
+
         async function loadTrainingGraphs() {
             try {
                 const [sr,hr]=await Promise.all([
@@ -1282,6 +1626,7 @@ def index():
                 const state=await sr.json();
                 const histPayload=await hr.json();
                 const hist=histPayload.history||[];
+                updateJourneySkills(state);
                 const st=state.training_stats||{};
                 const rates=st.beginning_success_rates||{};
                 const skillRates=st.v6_skill_rates||{};
@@ -1318,10 +1663,11 @@ def index():
                     {label:'Full Haus raus',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).full_exit||0)),borderWidth:2,pointRadius:1,tension:.2}
                 ],true);
 
+                const runningMax=(arr)=>{let m=0;return arr.map(v=>{m=Math.max(m,Number(v||0));return m;});};
                 upsertTrainingChart('graph-progress',labels,[
-                    {label:'Max Level',data:hist.map(p=>Number(p.max_level||0)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Orden',data:hist.map(p=>Number(p.max_badges||0)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Maps',data:hist.map(p=>Number(p.max_maps||0)),borderWidth:2,pointRadius:1,tension:.2}
+                    {label:'Max Level',data:runningMax(hist.map(p=>p.max_level)),borderWidth:2,pointRadius:1,tension:.2},
+                    {label:'Orden',data:runningMax(hist.map(p=>p.max_badges)),borderWidth:2,pointRadius:1,tension:.2},
+                    {label:'Maps',data:runningMax(hist.map(p=>p.max_maps)),borderWidth:2,pointRadius:1,tension:.2}
                 ]);
 
                 const loopHist=hist.filter(p=>Number(p.stats_schema||0)>=2);
@@ -1512,7 +1858,8 @@ def index():
             tiles: [],
             edges: [],
             maps: [],
-            transitions: []
+            transitions: [],
+            warp_points: []
         };
 
         function canonicalTransitionLabel(t) {
@@ -1524,19 +1871,28 @@ def index():
             try {
                 const res = await fetch('/api/global_mapping?t=' + Date.now());
                 const data = await res.json();
-
                 latestGlobalMapping = {
                     tiles: Array.isArray(data.tiles) ? data.tiles : [],
                     edges: Array.isArray(data.edges) ? data.edges : [],
                     maps: Array.isArray(data.maps) ? data.maps : [],
                     transitions: Array.isArray(data.transitions)
-                        ? data.transitions : []
+                        ? data.transitions : [],
+                    warp_points: Array.isArray(data.warp_points)
+                        ? data.warp_points : []
                 };
+
+                const setLiveMap=(id,v)=>{
+                    const el=document.getElementById(id);
+                    if(el) el.innerText=v;
+                };
+                setLiveMap('live-maps', Number(latestGlobalMapping.maps.length).toLocaleString());
+                setLiveMap('live-warps', '—');
+                setLiveMap('live-edges', Number(latestGlobalMapping.edges.length).toLocaleString());
 
                 const signature =
                     `${latestGlobalMapping.tiles.length}:` +
                     `${latestGlobalMapping.edges.length}:` +
-                    `${latestGlobalMapping.transitions.length}`;
+                    `${latestGlobalMapping.warp_points.length}`;
 
                 if (!force && signature === globalMappingSignature) {
                     if (currentTab === 'rooms') renderIndoorMapping();
@@ -1544,39 +1900,9 @@ def index():
                 }
                 globalMappingSignature = signature;
 
-                // Overworld tab: only warp endpoints that live on bank 3.
+                // V7.4.5: Warp-Marker auf der Global Map vorerst deaktiviert.
+                // Rohdaten/Transitions bleiben erhalten und werden NICHT geloescht.
                 globalWarpLayer.clearLayers();
-
-                latestGlobalMapping.transitions.forEach(t => {
-                    if (!Array.isArray(t) || t.length !== 8) return;
-
-                    const ends = [
-                        [t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7]],
-                        [t[4], t[5], t[6], t[7], t[0], t[1], t[2], t[3]]
-                    ];
-
-                    ends.forEach(e => {
-                        if (Number(e[0]) !== 3) return;
-
-                        const pos = getLeafletCoords(
-                            Number(e[0]), Number(e[1]),
-                            Number(e[2]), Number(e[3])
-                        );
-
-                        L.circleMarker(pos, {
-                            radius: 6,
-                            color: '#ffca28',
-                            fillColor: '#ffca28',
-                            fillOpacity: 0.95,
-                            weight: 2
-                        })
-                        .bindTooltip(
-                            `Warp → Bank ${e[4]} Map ${e[5]} ` +
-                            `(${e[6]},${e[7]})`
-                        )
-                        .addTo(globalWarpLayer);
-                    });
-                });
 
                 if (currentTab === 'rooms') {
                     renderIndoorMapping();
@@ -1801,7 +2127,17 @@ def index():
                 const res = await fetch('/api/state?t=' + Date.now());
                 const state = await res.json();
                 
-                document.getElementById('model-ver').innerText = `v${String(state.version).padStart(6, '0')}`;
+                                const setLiveState=(id,v)=>{
+                    const el=document.getElementById(id);
+                    if(el) el.innerText=v;
+                };
+                const globalBattles=state.battle_stats||{};
+                setLiveState('live-model', `v${String(state.version||0).padStart(6,'0')}`);
+                setLiveState('live-battles', Number(globalBattles.started||0).toLocaleString());
+                setLiveState('live-finished', Number(globalBattles.completed||0).toLocaleString());
+                setLiveState('live-steps', Number(state.training_timesteps||0).toLocaleString());
+
+document.getElementById('model-ver').innerText = `v${String(state.version).padStart(6, '0')}`;
 
                 const instances = state.instances || [];
                 latestInstances = instances;

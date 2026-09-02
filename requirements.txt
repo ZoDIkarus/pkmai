@@ -1,0 +1,7 @@
+gymnasium
+numpy
+opencv-python
+stable-baselines3
+torch
+fastapi
+uvicorn

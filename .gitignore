@@ -1,0 +1,64 @@
+# ------------------------------
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local/private game integration
+# Never publish ROM/game data
+local/
+custom_integrations/
+*.gba
+*.gb
+*.gbc
+*.nds
+*.rom
+*.sav
+# Runtime / training state
+runtime/
+checkpoints/
+brain_backups/
+curriculum_shared/
+curriculum_states/
+exploration_memory/
+training_stats/
+instances_data/
+tensorboard_logs/
+room_captures/
+rooms/
+stitched_maps/
+collision_memory/
+watcher_mapping.json
+model_version.json
+training_history*.json
+skeleton_map.json
+# Models / save states
+*.zip
+*.state
+*.state.gz
+# Temporary / generated
+.tmp.*
+.tmp/
+*.log
+*.out
+*.pid
+test_frame.png
+world_map_progress.png
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+# macOS / editors
+.DS_Store
+.vscode/
+.idea/
+# Project-local migration markers
+.fresh_ai_reset_done_v3
+.v5_brain_mapping_reset_done
+# ---- PKMAI hard safety ----
+scripts/start_all_legacy.sh
+requirements-lock.txt

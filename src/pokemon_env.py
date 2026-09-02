@@ -30,6 +30,7 @@ os.makedirs(STATS_DIR, exist_ok=True)
 
 
 class PokemonFireRedEnv(gym.Env):
+    BUILD_TAG = "V7.6.2_FRONTIER_ENDURANCE"
     metadata = {"render_modes": []}
 
     # Training V2 nutzt feste Spezialisten statt einer 90/10-Zufallsquote.
@@ -37,6 +38,7 @@ class PokemonFireRedEnv(gym.Env):
     # Fuer einen langen 4-5h-Lauf deutlich laengere Episoden als bisher.
     MAX_EPISODE_STEPS = 32768
     PROGRESS_STALL_TIMEOUT = 6000
+    POST_STARTER_STALL_TIMEOUT = 8000
     PROGRESS_CHECKPOINT_COOLDOWN = 800
 
     # ============================================================
@@ -62,9 +64,11 @@ class PokemonFireRedEnv(gym.Env):
     # bleibt deutlich wichtiger.
     NEW_EDGE_REWARD = 0.10
     # V7.5: echter Weltfortschritt soll lokales Herumlaufen klar schlagen.
-    NEW_MAP_REWARD = 25.0
-    NEW_GLOBAL_DEPTH_REWARD = 50.0
-    STARTER_REWARD = 250.0
+    NEW_MAP_REWARD = 50.0
+    # Bekannte notwendige Map, erstmals in dieser Episode erreicht.
+    EPISODE_NEW_MAP_REWARD = 8.0
+    NEW_GLOBAL_DEPTH_REWARD = 100.0
+    STARTER_REWARD = 150.0
     ENEMY_DAMAGE_REWARD_PER_HP = 0.75
     ENEMY_FAINT_REWARD = 20.0
     ENEMY_HP_READ_EVERY = 2
@@ -92,11 +96,11 @@ class PokemonFireRedEnv(gym.Env):
 
     # Die 30 Agents werden als Spezialisten verteilt:
     # 0-7 Intro, 8-15 Treppe, 16-23 Hausausgang, 24-29 Full Chain.
-    INTRO_SPECIALISTS = 2
-    STAIRS_SPECIALISTS = 2
-    EXIT_SPECIALISTS = 3
-    PROGRESS_SPECIALISTS = 13
-    FULL_SPECIALISTS = 10
+    INTRO_SPECIALISTS = 1
+    STAIRS_SPECIALISTS = 1
+    EXIT_SPECIALISTS = 1
+    PROGRESS_SPECIALISTS = 15
+    FULL_SPECIALISTS = 12
 
     # Dynamic FireRed SaveBlock RAM is relatively expensive to copy.
     # Exploration position is sampled every 4 agent steps (~32 emulator frames).
@@ -2076,6 +2080,15 @@ class PokemonFireRedEnv(gym.Env):
             if map_key not in self.visited_maps:
                 self.visited_maps.add(map_key)
 
+                # V7.6.1: reproduzierbarer Fortschritt auf bereits
+                # bekannten notwendigen Maps. Nur 1x pro Episode.
+                if self.has_starter:
+                    reward += self.EPISODE_NEW_MAP_REWARD
+                    reward_events.append(
+                        f"episode_new_map:+{self.EPISODE_NEW_MAP_REWARD:.2f}"
+                    )
+                    self.last_progress_advance_step = self.total_steps
+
                 # Persistenter Map-Reward: nur die allererste Entdeckung dieses
                 # Agents, und erst nachdem das Start-Haus verlassen wurde.
                 if map_key not in self.persistent_known_maps:
@@ -2371,6 +2384,19 @@ class PokemonFireRedEnv(gym.Env):
             self.stuck_counter = 0
             self.last_progress_signature = None
             info["anti_loop_reset"] = False
+
+        # V7.6.1: Progress-Agent nach Starter neu ansetzen,
+        # falls 3000 Steps kein Map/Story/Level-Fortschritt kam.
+        if (
+            self.training_objective == "progress"
+            and self.has_starter
+            and in_battle == 0
+            and self.total_steps - self.last_progress_advance_step
+                >= self.POST_STARTER_STALL_TIMEOUT
+        ):
+            truncated = True
+            self.last_stage_timeout = "post_starter_stall"
+            reward_events.append("post_starter_stall:truncate")
 
         self.current_reward += reward
         info["step_reward"] = round(float(reward), 4)

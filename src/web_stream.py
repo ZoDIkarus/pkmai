@@ -137,6 +137,19 @@ def _aggregate_training_stats(instances):
         for key in run_totals:
             run_totals[key] += int(persistent.get(key, 0))
 
+        # V7.6.1: Battle-Fallback direkt aus Agent-Telemetrie.
+        # Damit Battles nicht 0 bleiben, falls reward_stats.run_stats
+        # in einem Instanzfile fehlt oder hinterherhinkt.
+        bs = inst.get("battle_stats") or {}
+        if int(persistent.get("battles_started", 0)) <= 0:
+            run_totals["battles_started"] += int(
+                bs.get("started", bs.get("episode_started", 0)) or 0
+            )
+        if int(persistent.get("battles_completed", 0)) <= 0:
+            run_totals["battles_completed"] += int(
+                bs.get("completed", bs.get("episode_completed", 0)) or 0
+            )
+
     avg_reward = reward_weighted_sum / episodes if episodes else 0.0
     beginning = run_totals["beginning_episodes"]
 
@@ -260,21 +273,20 @@ def _maybe_record_history(version_meta, instances):
         _save_training_history(history)
 
 
-    def _global_exploration_summary():
-        edges=set(); maps=set(); transitions=set()
-        for path in glob.glob(os.path.join(EXPLORATION_MEMORY_DIR,"agent_*.json")):
-            try:
-                with open(path,"r") as f: d=json.load(f)
-                for x in d.get("edges",[]):
-                    if isinstance(x,list) and len(x)==6: edges.add(tuple(x))
-                for x in d.get("maps",[]):
-                    if isinstance(x,list) and len(x)==2: maps.add(tuple(x))
-                for x in d.get("transitions",[]):
-                    if isinstance(x,list) and len(x)==8: transitions.add(tuple(x))
-            except Exception:
-                pass
-        return {"known_edges":len(edges),"known_maps":len(maps),"known_transitions":len(transitions)}
-
+def _global_exploration_summary():
+    edges=set(); maps=set(); transitions=set()
+    for path in glob.glob(os.path.join(EXPLORATION_MEMORY_DIR,"agent_*.json")):
+        try:
+            with open(path,"r") as f: d=json.load(f)
+            for x in d.get("edges",[]):
+                if isinstance(x,list) and len(x)==6: edges.add(tuple(x))
+            for x in d.get("maps",[]):
+                if isinstance(x,list) and len(x)==2: maps.add(tuple(x))
+            for x in d.get("transitions",[]):
+                if isinstance(x,list) and len(x)==8: transitions.add(tuple(x))
+        except Exception:
+            pass
+    return {"known_edges":len(edges),"known_maps":len(maps),"known_transitions":len(transitions)}
 @app.get("/api/state")
 def get_state():
     files = glob.glob(os.path.join(INSTANCES_DIR, "inst_*.json"))

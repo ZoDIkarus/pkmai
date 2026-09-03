@@ -5,6 +5,7 @@ import os
 import json
 import time
 import glob
+import tempfile
 
 from stable_baselines3 import PPO
 from firered_ram import read_player_location, read_player_party
@@ -41,6 +42,8 @@ MAPPING_EDGE_REWARD = 0.35
 MAPPING_MAP_REWARD = 20.0
 MAPPING_TRANSITION_REWARD = 30.0
 WATCHER_MAPPING_FILE = os.path.join(RUNTIME_DIR, "watcher_mapping.json")
+WATCHER_STREAM_FILE = os.path.join(RUNTIME_DIR, "watcher.jpg")
+WATCHER_STREAM_QUALITY = 85
 
 # Fenster
 GAME_PANEL_W = 720
@@ -84,6 +87,30 @@ INSTANCES_DIR = os.path.join(RUNTIME_DIR, "instances_data")
 
 os.makedirs(INSTANCES_DIR, exist_ok=True)
 WATCHER_BATTLE_FILE = os.path.join(RUNTIME_DIR, "watcher_battle_stats.json")
+
+
+def write_watcher_stream_frame(frame, target=WATCHER_STREAM_FILE):
+    ok, encoded = cv2.imencode(
+        ".jpg",
+        frame,
+        [cv2.IMWRITE_JPEG_QUALITY, WATCHER_STREAM_QUALITY],
+    )
+    if not ok:
+        return False
+    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    fd, temporary_path = tempfile.mkstemp(
+        dir=os.path.dirname(target) or ".",
+        prefix=".watcher-",
+        suffix=".jpg",
+    )
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(encoded.tobytes())
+        os.replace(temporary_path, target)
+        return True
+    finally:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
 
 def load_watcher_battle_stats():
     try:
@@ -611,6 +638,7 @@ def build_mapping_preview(
     }
 
 def main():
+    stream_mode = os.environ.get("PKMAI_WATCHER_STREAM", "") == "1"
     retro.data.Integrations.add_custom_path(CUSTOM_DIR)
 
     env = retro.make(
@@ -665,13 +693,14 @@ def main():
 
     WINDOW = "Pokemon Firered AI by Alex - Watcher + Live Map"
 
-    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WINDOW, CANVAS_W, CANVAS_H)
-    # Auf macOS sicher sichtbar platzieren.
-    try:
-        cv2.moveWindow(WINDOW, 40, 40)
-    except Exception:
-        pass
+    if not stream_mode:
+        cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(WINDOW, CANVAS_W, CANVAS_H)
+        # Auf macOS sicher sichtbar platzieren.
+        try:
+            cv2.moveWindow(WINDOW, 40, 40)
+        except Exception:
+            pass
 
     model = None
     loaded_version = -1
@@ -1645,19 +1674,22 @@ def main():
                 if loaded_version >= 0
                 else "kein Modell"
             )
-            try:
-                cv2.setWindowTitle(
-                    WINDOW,
-                    f"Pokemon Firered AI by Alex - Watcher + Live Map | "
-                    f"{version_text} | {fps_value:.1f} Emulator-FPS | ~50 GUI-FPS"
-                )
-            except Exception:
-                pass
+            if stream_mode:
+                write_watcher_stream_frame(canvas)
+            else:
+                try:
+                    cv2.setWindowTitle(
+                        WINDOW,
+                        f"Pokemon Firered AI by Alex - Watcher + Live Map | "
+                        f"{version_text} | {fps_value:.1f} Emulator-FPS | ~50 GUI-FPS"
+                    )
+                except Exception:
+                    pass
 
-            cv2.imshow(WINDOW, canvas)
+                cv2.imshow(WINDOW, canvas)
 
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
 
         frame_counter += 1
 
@@ -1673,7 +1705,8 @@ def main():
         watcher_known_transitions,
     )
     env.close()
-    cv2.destroyAllWindows()
+    if not stream_mode:
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":

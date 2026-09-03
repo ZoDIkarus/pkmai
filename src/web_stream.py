@@ -24,6 +24,7 @@ HISTORY_LOCK = threading.Lock()
 EXPLORATION_MEMORY_DIR = os.path.join(RUNTIME_DIR, "exploration_memory")
 WATCHER_MAPPING_FILE = os.path.join(RUNTIME_DIR, "watcher_mapping.json")
 TRAINER_STATUS_FILE = os.path.join(RUNTIME_DIR, "trainer_status.json")
+WATCHER_STREAM_FILE = os.path.join(RUNTIME_DIR, "watcher.jpg")
 
 def _live_learner_steps(fallback=0):
     try:
@@ -58,6 +59,31 @@ def get_map():
     if os.path.exists(MAP_FILE):
         return FileResponse(MAP_FILE, media_type="image/png", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     return Response(status_code=404)
+
+
+@app.get("/watcher.jpg")
+def get_watcher_frame():
+    try:
+        with open(WATCHER_STREAM_FILE, "rb") as f:
+            image = f.read()
+        return Response(
+            content=image,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
+    except FileNotFoundError:
+        return Response(status_code=404)
+
+
+@app.get("/watcher", response_class=HTMLResponse)
+def watcher_view():
+    return HTMLResponse("""<!doctype html>
+<html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PKMAI Watcher</title>
+<style>html,body{margin:0;width:100%;height:100%;background:#0a0d14}img{width:100%;height:100%;object-fit:contain}</style>
+</head><body><img id="watcher" alt="PKMAI Watcher wird geladen">
+<script>const img=document.getElementById('watcher');function refresh(){img.src='/watcher.jpg?t='+Date.now()}refresh();setInterval(refresh,100)</script>
+</body></html>""")
 
 
 def _load_training_history():

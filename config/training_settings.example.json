@@ -1,0 +1,14 @@
+{
+  "num_envs": 120,
+  "device": "auto",
+  "train_forever": true,
+  "train_chunk_timesteps": 1000000,
+  "total_timesteps": 100000000,
+  "save_every_timesteps": 25000,
+  "learning_rate": 0.000025,
+  "ppo_n_steps": 64,
+  "ppo_batch_size": 256,
+  "ppo_n_epochs": 4,
+  "ppo_gamma": 0.995,
+  "ppo_ent_coef": 0.008
+}

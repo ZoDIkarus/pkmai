@@ -11,38 +11,26 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.callbacks import BaseCallback
 
 from pokemon_env import PokemonFireRedEnv
+from training_settings import load_training_settings
 
-
-# ================================================================
-# USER CONFIG / TRAINING TUNING
-# ================================================================
-# Die wichtigsten Werte stehen absichtlich hier oben.
-
-NUM_ENVS = 120
-
-# Endlos-Training: laeuft in Bloecken weiter, bis du Ctrl+C drueckst.
-# TRAIN_CHUNK_TIMESTEPS ist nur die Groesse eines learn()-Blocks.
-TRAIN_FOREVER = True
-TRAIN_CHUNK_TIMESTEPS = 1_000_000
-
-# Nur benutzt, wenn TRAIN_FOREVER = False.
-TOTAL_TIMESTEPS = 100_000_000
-
-SAVE_EVERY_TIMESTEPS = 25_000
-
-# PPO
-LEARNING_RATE = 2.5e-05
-PPO_N_STEPS = 64
-PPO_BATCH_SIZE = 256
-PPO_N_EPOCHS = 4
-PPO_GAMMA = 0.995
-PPO_ENT_COEF = 0.008
-
-# "auto" = MPS auf Apple Silicon wenn verfuegbar, sonst CPU.
-# Alternativ: "cpu" oder "mps"
-TRAIN_DEVICE = "auto"
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+TRAINING_SETTINGS, TRAINING_SETTINGS_FILE = load_training_settings(PROJECT_ROOT)
+
+# Lokale Einstellungen: local/training_settings.json (Git-ignoriert).
+NUM_ENVS = TRAINING_SETTINGS.num_envs
+TRAIN_FOREVER = TRAINING_SETTINGS.train_forever
+TRAIN_CHUNK_TIMESTEPS = TRAINING_SETTINGS.train_chunk_timesteps
+TOTAL_TIMESTEPS = TRAINING_SETTINGS.total_timesteps
+SAVE_EVERY_TIMESTEPS = TRAINING_SETTINGS.save_every_timesteps
+LEARNING_RATE = TRAINING_SETTINGS.learning_rate
+PPO_N_STEPS = TRAINING_SETTINGS.ppo_n_steps
+PPO_BATCH_SIZE = TRAINING_SETTINGS.ppo_batch_size
+PPO_N_EPOCHS = TRAINING_SETTINGS.ppo_n_epochs
+PPO_GAMMA = TRAINING_SETTINGS.ppo_gamma
+PPO_ENT_COEF = TRAINING_SETTINGS.ppo_ent_coef
+TRAIN_DEVICE = TRAINING_SETTINGS.device
+
 RUNTIME_DIR = os.path.join(PROJECT_ROOT, "runtime")
 BASE_DIR = PROJECT_ROOT
 EXPLORATION_MEMORY_DIR = os.path.join(RUNTIME_DIR, "exploration_memory")
@@ -158,6 +146,7 @@ def make_env(
     shared_transitions,
     shared_progress,
     shared_lock,
+    agent_count,
 ):
     def _init():
         return PokemonFireRedEnv(
@@ -167,6 +156,7 @@ def make_env(
             shared_transitions=shared_transitions,
             shared_progress=shared_progress,
             shared_lock=shared_lock,
+            agent_count=agent_count,
         )
     return _init
 
@@ -850,6 +840,7 @@ def main():
         f"{NUM_ENVS} Instanzen auf Device: "
         f"{device.upper()}"
     )
+    print(f"⚙️ Trainingssettings: {TRAINING_SETTINGS_FILE}")
 
     print(
         "🧭 Curriculum: 65% der Episoden starten von vorne; "
@@ -917,6 +908,7 @@ def main():
                 shared_transitions,
                 shared_progress,
                 shared_lock,
+                NUM_ENVS,
             )
             for i in range(NUM_ENVS)
         ]

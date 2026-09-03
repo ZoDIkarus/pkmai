@@ -30,6 +30,24 @@ os.makedirs(SHARED_CURRICULUM_DIR, exist_ok=True)
 os.makedirs(STATS_DIR, exist_ok=True)
 
 
+def scaled_agent_slot(rank, agent_count):
+    """Map a local worker index onto the fixed 120-slot V10.25 curriculum."""
+    return min(119, max(0, int(rank)) * 120 // max(1, int(agent_count)))
+
+
+def short_cycle_repeats(path):
+    """Count repeated two-position movement pairs without punishing one backtrack."""
+    repeats = 0
+    seen_pairs = set()
+    for index in range(0, len(path) - 1, 2):
+        pair = (path[index], path[index + 1])
+        if pair in seen_pairs:
+            repeats += 1
+        else:
+            seen_pairs.add(pair)
+    return repeats
+
+
 class PokemonFireRedEnv(gym.Env):
     BUILD_TAG = "V10.25_SKILL_VAULT_FULL_CHAIN"
     metadata = {"render_modes": []}
@@ -146,10 +164,12 @@ class PokemonFireRedEnv(gym.Env):
         shared_transitions=None,
         shared_progress=None,
         shared_lock=None,
+        agent_count=120,
     ):
         super().__init__()
 
         self.rank = rank
+        self.agent_count = max(1, int(agent_count))
         self.shared_edges = shared_edges
         self.shared_maps = shared_maps
         self.shared_transitions = shared_transitions
@@ -1576,7 +1596,7 @@ class PokemonFireRedEnv(gym.Env):
         # 2) Starter-State vorhanden, aber kein Full-Starter-Champion:
         #    Treppe/Ausgang/Starter zu einer Kette konsolidieren.
         # 3) Full-Starter-Champion vorhanden: Richtung Wald expandieren.
-        slot = self.rank % 120
+        slot = scaled_agent_slot(self.rank, self.agent_count)
         saved = set(getattr(self, "saved_milestones", ()) or ())
         starter_ready = "starter" in saved
 
@@ -1639,7 +1659,7 @@ class PokemonFireRedEnv(gym.Env):
 
         # In der Chain-Repair-Phase laufen 28, danach 24 Full-Agenten komplett
         # vom Anfang. Acht weitere ueben ueberlappende Story-Bruecken.
-        slot = self.rank % 120
+        slot = scaled_agent_slot(self.rank, self.agent_count)
         starter_ready = "starter" in saved
 
         if not starter_ready:
@@ -1675,7 +1695,7 @@ class PokemonFireRedEnv(gym.Env):
         return "beginning"
 
     def _is_long_full_probe(self):
-        slot = self.rank % 120
+        slot = scaled_agent_slot(self.rank, self.agent_count)
         saved = set(getattr(self, "saved_milestones", ()) or ())
         if "starter" not in saved:
             lo, count = 96, 8

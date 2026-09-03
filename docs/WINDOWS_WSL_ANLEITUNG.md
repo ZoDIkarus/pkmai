@@ -112,15 +112,28 @@ Wichtig:
 
 ## 7. Aktuelle lokale Performance-Anpassungen
 
-Diese Installation nutzt bewusst folgende lokale Einstellungen:
+Trainer-Einstellungen liegen nicht mehr im Quellcode. Die versionierte Vorlage
+ist `config/training_settings.example.json`; die aktive, Git-ignorierte lokale
+Datei ist `local/training_settings.json`.
 
-- **10 Trainingsinstanzen** (`NUM_ENVS = 10` in `src/train.py`)
+Diese WSL-Installation nutzt bewusst folgende lokale Einstellungen:
+
+- **10 Trainingsinstanzen** (`"num_envs": 10` in `local/training_settings.json`)
+- CPU-Training (`"device": "cpu"`)
 - Watcher mit direktem JPEG-Stream (`PKMAI_WATCHER_STREAM=1`)
 - Watcher-Zielrate: `200 FPS`
 - Browser-Ansicht: maximal ca. 10–15 visuelle Updates/s, um CPU und I/O zu sparen
 - Party-Auswertung im Watcher weniger häufig; bei verfügbarem Umgebungscache wird dieser genutzt
 
-Diese Änderungen sind lokale Arbeitsanpassungen und müssen bei einem zukünftigen `git pull` geprüft bzw. erneut übernommen werden.
+Für ein anderes Gerät die Vorlage kopieren und nur die gewünschten Werte
+überschreiben:
+
+```bash
+cp config/training_settings.example.json local/training_settings.json
+```
+
+Auf einem Apple-Silicon-Mac kann `"device": "auto"` gesetzt bleiben; der
+Trainer verwendet dann MPS. Diese Datei bleibt bei einem `git pull` erhalten.
 
 ### Neues Brain ohne Curriculum-Reset
 
@@ -133,10 +146,11 @@ cd /mnt/c/zod/pkmai
 ./scripts/reset_brain_wsl.sh
 ```
 
-Das Script verschiebt das aktuelle PPO-Modell, Bestmodell und die zugehörigen
-Versionsmetadaten nach `runtime/brain_backups/`. Beim nächsten Trainerstart
-wird dadurch ein neues PPO-Modell initialisiert. Curriculum-States und
-Exploration-Memory bleiben bewusst erhalten.
+Das Script verschiebt das aktuelle PPO-Modell, Champion, Kandidat, Resume-Modell,
+die Skill-Vault-Modelle und die zugehörigen Metadaten nach
+`runtime/brain_backups/`. Beim nächsten Trainerstart wird dadurch ein neues
+PPO-Modell initialisiert. Curriculum-States und Exploration-Memory bleiben
+bewusst erhalten.
 
 ## 8. Headless im Hintergrund trainieren (empfohlen)
 
@@ -151,12 +165,9 @@ Das Script startet **nur** `src/train.py`; es startet weder den sichtbaren
 Watcher noch Dashboard, Uvicorn oder ngrok. Es speichert die PID in
 `runtime/train.pid` und schreibt die Ausgabe nach `runtime/train.log`.
 
-Zu Beginn und bei jedem Checkpoint zeigt der Trainer einen lesbaren
-Curriculum-Block. `8/10 = 80%` bedeutet: Acht der letzten zehn Versuche einer
-Stage waren erfolgreich. `Median 320 Schritte ab Stage-Start` ist die typische
-Länge erfolgreicher Versuche ab ihrem jeweiligen gespeicherten Startzustand —
-nicht die gesamte Spielzeit. Eine Stage ist ab mindestens zehn jüngsten
-Versuchen und mindestens 60 % Erfolgsquote `bestätigt`.
+Die V10.25-Rollenverteilung ist auf die lokalen zehn CPU-Instanzen skaliert:
+die zehn Worker belegen repräsentative Slots der ursprünglichen 120-Agenten-
+Verteilung, statt nur die ersten Intro-/Treppenrollen zu trainieren.
 
 ```bash
 # Live-Log anzeigen
@@ -216,10 +227,15 @@ Danach Watcher und Uvicorn ebenfalls mit `Ctrl+C` stoppen. Erst dann aktualisier
 ```bash
 cd /mnt/c/zod/pkmai
 git status --short
-git pull --ff-only
+git stash push --include-untracked -m "pre-update local WSL setup"
+git pull --no-rebase
+git stash apply
 ```
 
-Vor einem Pull lokale Änderungen sichern, beispielsweise über einen Git-Stash oder einen eigenen lokalen Patch. Nicht sichern/committen:
+Der Stash bewahrt auch die lokalen WSL-Start-/Stop-Skripte. Falls beim
+`git stash apply` Konflikte entstehen, zuerst die WSL-spezifischen Einstellungen
+behalten: `/opt/pkmai-venv/bin/python`, `NUM_ENVS = 10`, die Headless-Skripte
+und diese Anleitung. Nicht sichern/committen:
 
 - `local/custom_integrations/.../rom.gba`
 - `runtime/checkpoints/`
@@ -252,7 +268,7 @@ Veraltete Telemetrie liegt unter:
 runtime/instances_data/inst_*.json
 ```
 
-Nach einem Wechsel der Instanzzahl die nicht mehr aktiven `inst_XX.json`-Dateien entfernen. Die Watcher-Datei `inst_99.json` dabei behalten.
+Nach einem Wechsel der Instanzzahl die nicht mehr aktiven `inst_XX.json`-Dateien entfernen. Die Watcher-Datei `inst_120.json` dabei behalten.
 
 ---
 

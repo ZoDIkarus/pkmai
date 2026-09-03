@@ -553,14 +553,14 @@ def get_state():
                 if data.get("badges", 0) > max_badges:
                     max_badges = data.get("badges", 0)
                 total_steps += data.get("steps", 0)
-                if data.get("id") == 99:
+                if data.get("id") == 120:
                     trainer_name = data.get("name", "Alex").replace(" (Watcher)", "")
                     party = data.get("party", [])
         except Exception:
             pass
 
-    # Sortieren: Watcher (ID 99) immer an 1. Stelle, danach Agent 00 bis 39
-    instances.sort(key=lambda x: (0 if x.get("id") == 99 else 1, x.get("id", 0)))
+    # Nach ID sortieren (Watcher id 120 landet damit natuerlich unten).
+    instances.sort(key=lambda x: x.get("id", 0))
 
     version_meta = {"version": 0, "timesteps": 0}
     if os.path.exists(VERSION_FILE):
@@ -601,6 +601,35 @@ def get_state():
     battle_started = int(training_stats["run_totals"].get("battles_started",0))
     battle_completed = int(training_stats["run_totals"].get("battles_completed",0))
 
+    # V13.3: Flotten-Status live aus den Instanz-JSONs.
+    _role_counts = {}
+    _loc = {"outdoor": 0, "indoor": 0, "battle": 0, "unknown": 0}
+    _depth_events = []
+    _depth_breakthroughs = 0
+    for _inst in instances:
+        if _inst.get("id") == 120:
+            continue
+        _r = str(_inst.get("training_role") or _inst.get("agent_role")
+                 or _inst.get("training_objective") or "?")
+        _role_counts[_r] = _role_counts.get(_r, 0) + 1
+        _b = int(_inst.get("bank", 0) or 0)
+        if int(_inst.get("in_battle", 0) or 0):
+            _loc["battle"] += 1
+        elif _b == 3:
+            _loc["outdoor"] += 1
+        elif _b == 0:
+            _loc["unknown"] += 1
+        else:
+            _loc["indoor"] += 1
+        _depth_breakthroughs += int(
+            ((_inst.get("reward_stats") or {}).get("event_counts") or {}).get("world_depth", 0) or 0
+        )
+        for _ev in (_inst.get("reward_events") or []):
+            if isinstance(_ev, str) and _ev.startswith("world_depth"):
+                _depth_events.append({"id": _inst.get("id"), "ev": _ev})
+    _enemy_ko = int(training_stats["run_totals"].get("enemy_faints", 0))
+    _enemy_dmg = int(training_stats["run_totals"].get("enemy_damage_hp", 0))
+
     # V11.3: echte Welt-Tiefe (nur Aussen-Maps) + tiefster outdoor-Checkpoint.
     world_depth = 0
     deepest_outdoor = 0
@@ -628,6 +657,15 @@ def get_state():
         "max_badges": max(max_badges, training_stats["max_badges"]),
         "world_depth": world_depth,
         "deepest_outdoor_checkpoint": deepest_outdoor,
+        "fleet": {
+            "count": len([i for i in instances if i.get("id") != 120]),
+            "roles": _role_counts,
+            "location": _loc,
+            "enemy_ko": _enemy_ko,
+            "enemy_damage_hp": _enemy_dmg,
+            "depth_breakthroughs": _depth_breakthroughs,
+            "depth_events": _depth_events[-8:],
+        },
         "total_steps": total_steps,
         "training_stats": training_stats,
         "global_exploration": global_exploration,
@@ -1408,6 +1446,32 @@ def index():
         #map-view, #rooms-view, #graphs-view, #watcher-view { width: 100%; height: 100%; position: absolute; top:0; left:0; }
         #rooms-view { display: none; overflow-y: auto; padding: 24px; }
         #graphs-view { display:none; overflow-y:auto; padding:18px 22px 30px; background:#0c0e14; }
+        #watcher-view { display: none; overflow-y: auto; }
+        .fleet-panel { background:linear-gradient(180deg,#12161f,#0d1017); border:1px solid #2b3346; border-radius:12px; padding:14px 16px; margin-bottom:14px; }
+        .fleet-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+        .fleet-head b { font-size:14px; color:#00e676; letter-spacing:.5px; }
+        .fleet-head span { font-size:9px; color:#7f879b; text-transform:uppercase; letter-spacing:.6px; }
+        .fleet-depth { display:flex; align-items:center; gap:14px; background:#0b0e14; border:1px solid #232738; border-radius:10px; padding:12px 14px; margin-bottom:12px; flex-wrap:wrap; }
+        .fleet-depth-num { font-size:38px; font-weight:900; color:#ffd54f; line-height:1; min-width:44px; text-align:center; }
+        .fleet-depth-lbl { flex:1; min-width:150px; }
+        .fleet-depth-lbl > div:first-child { font-size:16px; font-weight:800; color:#fff; }
+        .fleet-depth-hint { font-size:10px; color:#7f879b; margin-top:3px; }
+        .fleet-depth-hint b { color:#9fb0d0; }
+        .fleet-depth-track { display:flex; gap:4px; width:100%; margin-top:4px; }
+        .fleet-depth-track i { flex:1; height:8px; border-radius:3px; background:#232738; font-style:normal; position:relative; }
+        .fleet-depth-track i.on { background:#00e676; }
+        .fleet-depth-track i.cur { background:#ffd54f; box-shadow:0 0 6px #ffd54f88; }
+        .fleet-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:8px; margin-bottom:12px; }
+        .fleet-cell { background:#151821; border:1px solid #232738; border-radius:9px; padding:9px 6px; text-align:center; }
+        .fleet-cell .fc-v { font-size:19px; font-weight:800; color:#00e676; }
+        .fleet-cell .fc-k { font-size:9px; color:#8b93a7; margin-top:2px; }
+        .fleet-roles { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+        .fleet-roles span { font-size:10px; background:#1b2030; border:1px solid #2b3346; border-radius:20px; padding:3px 9px; color:#b9c2d8; }
+        .fleet-roles span b { color:#fff; }
+        .fleet-events { display:flex; flex-direction:column; gap:3px; }
+        .fleet-events div { font-size:10px; color:#ffd54f; font-family:ui-monospace,monospace; }
+        .fleet-events div.none { color:#5b6478; }
+        @media(max-width:820px){ .fleet-grid{grid-template-columns:repeat(3,1fr)!important} }
         .graphs-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; margin-bottom:12px; }
         .graphs-kpi { background:#151821; border:1px solid #232738; border-radius:9px; padding:10px 12px; }
         .graphs-kpi .v { font-size:20px; font-weight:800; color:#00e676; }
@@ -1687,7 +1751,7 @@ def index():
             <!-- AGENTEN FILTER INPUT -->
             <div class="filter-control">
                 <span>Zeige Agenten:</span>
-                <input type="number" id="agent-limit" class="filter-input" value="120" min="0" max="120" onchange="updateFilter(this.value)">
+                <input type="number" id="agent-limit" class="filter-input" value="130" min="0" max="130" onchange="updateFilter(this.value)">
                 <button class="filter-btn" onclick="setFilter(5)">5</button>
                 <button class="filter-btn" onclick="setFilter(10)">10</button>
                 <button class="filter-btn" onclick="setFilter(20)">20</button>
@@ -1721,8 +1785,33 @@ def index():
         </div>
         <div id="rooms-view"><div class="room-grid" id="room-grid"></div></div>
         <div id="watcher-view"><section class="watcher-page"><div class="watcher-page-head"><div><b>● LIVE WATCHER</b><span>Aktueller Screenshot aus dem unabhängigen End-to-End-Run</span></div><a href="/watcher.jpg" target="_blank" rel="noopener">JPEG in neuem Tab öffnen ↗</a></div><img id="watcher-stream" src="/watcher.jpg" alt="Live-Bild des Watchers"></section></div>
-        <div id="graphs-view"><div class="v84-skill-panel" id="v84-skill-panel">
-            <div class="v84-head"><b>V8.4 – Trainings-Skills · 120 Agents</b><span>direkt aus agent_00…119 Training-Stats</span></div>
+        <div id="graphs-view"><div class="fleet-panel" id="fleet-panel">
+            <div class="fleet-head">
+                <b>🧭 FLOTTEN-STATUS</b>
+                <span id="fleet-sub">Live aus den Agenten · V13.3</span>
+            </div>
+            <div class="fleet-depth">
+                <div class="fleet-depth-num" id="fleet-depth-num">0</div>
+                <div class="fleet-depth-lbl">
+                    <div id="fleet-depth-name">–</div>
+                    <div class="fleet-depth-hint">Welt-Tiefe · tiefster Checkpoint <b id="fleet-cp">outdoor_0</b></div>
+                </div>
+                <div class="fleet-depth-track" id="fleet-depth-track"></div>
+            </div>
+            <div class="fleet-grid">
+                <div class="fleet-cell"><div class="fc-v" id="fleet-outdoor">0</div><div class="fc-k">🌳 draußen</div></div>
+                <div class="fleet-cell"><div class="fc-v" id="fleet-indoor">0</div><div class="fc-k">🏠 drinnen</div></div>
+                <div class="fleet-cell"><div class="fc-v" id="fleet-battle">0</div><div class="fc-k">⚔️ im Kampf</div></div>
+                <div class="fleet-cell"><div class="fc-v" id="fleet-brk">0</div><div class="fc-k">🚩 Tiefen-Durchbrüche</div></div>
+                <div class="fleet-cell"><div class="fc-v" id="fleet-ko">0</div><div class="fc-k">💥 Gegner-K.O.</div></div>
+                <div class="fleet-cell"><div class="fc-v" id="fleet-dmg">0</div><div class="fc-k">🩸 Schaden-HP</div></div>
+                <div class="fleet-cell"><div class="fc-v" id="fleet-bstarted">0</div><div class="fc-k">🥊 Kämpfe ges.</div></div>
+            </div>
+            <div class="fleet-roles" id="fleet-roles"></div>
+            <div class="fleet-events" id="fleet-events"></div>
+        </div>
+        <div class="v84-skill-panel" id="v84-skill-panel">
+            <div class="v84-head"><b>V8.4 – Trainings-Skills</b><span>direkt aus den Training-Stats</span></div>
             <div class="v84-grid" id="v84-skill-grid"></div>
             <div class="v84-meta" id="v84-meta"></div>
             <div class="v84-canvas-wrap"><canvas id="v84-skill-canvas" width="1500" height="300"></canvas></div>
@@ -2039,7 +2128,7 @@ def index():
         let globalMappingSignature = "";
 
         function agentColor(id) {
-            if (Number(id) === 99) return '#00e676';
+            if (Number(id) === 120) return '#00e676';
             const hue = (Number(id) * 137.508) % 360;
             return `hsl(${hue.toFixed(1)}, 78%, 58%)`;
         }
@@ -2150,8 +2239,12 @@ def index():
                             fillColor: '#ffd54f',
                             fillOpacity: 0.035,
                             dashArray: '6,5',
-                            interactive: true
+                            // V11.5: NICHT klickbar -> Klicks gehen zu den
+                            // Agenten-Markern durch, die Umrandungen liegen
+                            // optisch hinter den Agenten.
+                            interactive: false
                         }).bindTooltip(label).addTo(map);
+                        skeletonRects[key].bringToBack();
                     } else {
                         skeletonRects[key].setBounds(bounds);
                         skeletonRects[key].setTooltipContent(label);
@@ -2197,7 +2290,7 @@ def index():
                     || null;
             }
             // Ohne Kartenfokus zeigt das Detailpanel weiterhin den Watcher.
-            return latestInstances.find(i => Number(i.id) === 99)
+            return latestInstances.find(i => Number(i.id) === 120)
                 || latestInstances[0]
                 || null;
         }
@@ -2359,17 +2452,15 @@ def index():
             const inst = getSelectedInstance();
             if (!inst) return;
 
-            const isW = Number(inst.id) === 99;
+            const isW = Number(inst.id) === 120;
 
             // Kopfzeile (Team-Leiste + Orden + Label) zeigt IMMER den Watcher,
             // egal welcher Agent gerade auf der Karte fokussiert ist. Nur das
             // Detail-Panel unten wechselt mit der Auswahl. So "verschwinden"
             // beim Anklicken keine Stats mehr.
-            const headInst = latestInstances.find(i => Number(i.id) === 99) || inst;
+            const headInst = latestInstances.find(i => Number(i.id) === 120) || inst;
             document.getElementById('hud-trainer').innerText =
-                (Number(headInst.id) === 99)
-                    ? `🎮 ${(window.__trainerName || 'Alex')} · Live-Run`
-                    : (headInst.name || 'Unknown').replace(' (Watcher)', '');
+                (headInst.name || 'Alex').replace(' (Watcher)', '') + ' (Live)';
 
             updateParty(headInst.party || []);
 
@@ -2381,7 +2472,7 @@ def index():
             }
 
             document.getElementById('detail-name').innerText =
-                isW ? `🎮 Live-Run · ${inst.name || ''}` : (inst.name || `Agent ${inst.id}`);
+                inst.name || `Agent ${inst.id}`;
             document.getElementById('detail-room').innerText = inst.room || `Bank ${inst.bank} / Map ${inst.map}`;
             document.getElementById('detail-steps').innerText = Number(inst.steps || 0).toLocaleString();
             document.getElementById('detail-reward').innerText = Number(inst.reward || 0).toFixed(2);
@@ -2477,6 +2568,63 @@ def index():
             if(fill) fill.style.width=`${Math.max(0,Math.min(100,pct))}%`;
             if(card){card.classList.toggle('done',!!done);if(done)card.classList.remove('locked');}
         }
+        const FLEET_DEPTH_NAMES = {
+            0:'Spielanfang / Alabastia-Innen', 1:'Alabastia (außen)', 2:'Route 1',
+            3:'Vertania City', 4:'Route 2', 5:'Vertania-Wald', 6:'Route 2 Nord / Marmoria-Umgebung',
+            7:'Marmoria City'
+        };
+        const FLEET_ROLE_LABELS = {
+            intro:'Intro', stairs:'Treppe', exit:'Haus-Exit', starter:'Starter',
+            starter_rush:'Starter', battle:'Kampf', level:'Level', progress:'Progress',
+            full:'Full Journey', badge:'Orden'
+        };
+        function updateFleetPanel(state){
+            const f = state.fleet || {};
+            const loc = f.location || {};
+            const wd = Number(state.world_depth || 0);
+            const cp = Number(state.deepest_outdoor_checkpoint || 0);
+            const setTxt = (id,v)=>{ const e=document.getElementById(id); if(e) e.innerText=v; };
+            setTxt('fleet-depth-num', wd);
+            setTxt('fleet-depth-name', FLEET_DEPTH_NAMES[wd] || ('Tiefe '+wd));
+            setTxt('fleet-cp', 'outdoor_'+cp);
+            setTxt('fleet-outdoor', loc.outdoor||0);
+            setTxt('fleet-indoor', loc.indoor||0);
+            setTxt('fleet-battle', loc.battle||0);
+            setTxt('fleet-brk', f.depth_breakthroughs||0);
+            setTxt('fleet-ko', f.enemy_ko||0);
+            setTxt('fleet-dmg', f.enemy_damage_hp||0);
+            setTxt('fleet-bstarted', (state.battle_stats||{}).started||0);
+            const on=document.getElementById('fleet-outdoor');
+            if(on) on.style.color = (loc.outdoor||0) >= (loc.indoor||0) ? '#00e676' : '#ff8a65';
+            const track = document.getElementById('fleet-depth-track');
+            if(track){
+                let h='';
+                for(let i=1;i<=7;i++){
+                    const cls = i<wd ? 'on' : (i===wd ? 'cur' : '');
+                    h += `<i class="${cls}" title="${FLEET_DEPTH_NAMES[i]||''}"></i>`;
+                }
+                track.innerHTML = h;
+            }
+            const rolesEl = document.getElementById('fleet-roles');
+            if(rolesEl){
+                const roles = f.roles || {};
+                const order = ['progress','battle','level','full','starter','exit','stairs','intro'];
+                const keys = Object.keys(roles).sort((a,b)=>{
+                    const ia=order.indexOf(a), ib=order.indexOf(b);
+                    return (ia<0?99:ia)-(ib<0?99:ib);
+                });
+                rolesEl.innerHTML = keys.map(k=>
+                    `<span>${FLEET_ROLE_LABELS[k]||k} <b>${roles[k]}</b></span>`
+                ).join('') || '<span>–</span>';
+            }
+            const evEl = document.getElementById('fleet-events');
+            if(evEl){
+                const evs = f.depth_events || [];
+                evEl.innerHTML = evs.length
+                    ? evs.slice().reverse().map(e=>`<div>Agent ${e.id}: ${e.ev}</div>`).join('')
+                    : '<div class="none">noch kein world_depth-Event in diesem Zyklus</div>';
+            }
+        }
         function updateJourneySkills(state){
             const st=state.training_stats||{}, rt=st.run_totals||{}, gx=state.global_exploration||{}, bs=state.battle_stats||{}, jr=state.journey_stats||{};
             const fullRuns=Number(rt.v2_full_episodes||0), fullStarter=Number(rt.v2_full_starter||0);
@@ -2515,6 +2663,7 @@ def index():
                 if(gwd){gwd.innerText=wd; gwd.style.color = wd>=3 ? '#00e676' : (wd>=2 ? '#ffea00' : '#ff8a65');}
                 const goc=document.getElementById('g-outdoor-cp');
                 if(goc) goc.innerText='outdoor_'+Number(state.deepest_outdoor_checkpoint||0);
+                try { updateFleetPanel(state); } catch(e) {}
                 const rt=st.run_totals||{};
                 const skillRuns =
                     Number(rt.v2_intro_episodes||0) +
@@ -3047,18 +3196,18 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                 instances.forEach(pushHistory);
                 syncAgentFilterOptions(instances);
 
-                // Arbeitskopie: Watcher (id 99) IMMER als erste Zeile,
-                // danach optional nach Fortschritt / Maps / Level sortiert.
+                // Watcher wird NICHT mehr forciert - sortiert normal mit den
+                // anderen (nach ID, oder nach aktivem Sortier-Filter).
                 let workInstances = instances.slice();
-                workInstances.sort((a, b) => {
-                    if (Number(a.id) === 99) return -1;
-                    if (Number(b.id) === 99) return 1;
-                    return agentFilter.sort ? agentSortKey(b) - agentSortKey(a) : 0;
-                });
+                if (agentFilter.sort) {
+                    workInstances.sort((a, b) => agentSortKey(b) - agentSortKey(a));
+                } else {
+                    workInstances.sort((a, b) => Number(a.id) - Number(b.id));
+                }
 
                 // Falls Watcher noch kein party-Feld in seiner Instanz hat,
                 // die alte API-Fallback-Party nur dem Watcher zuordnen.
-                const watcher = instances.find(i => i.id === 99);
+                const watcher = instances.find(i => i.id === 120);
                 if (watcher && (!watcher.party || watcher.party.length === 0) && state.party) {
                     watcher.party = state.party;
                 }
@@ -3073,7 +3222,7 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                 const _anyFilter = !!(agentFilter.role || agentFilter.map
                     || agentFilter.starter || agentFilter.stage);
                 const _shown = _anyFilter
-                    ? workInstances.filter(i => Number(i.id) === 99 || agentPassesFilter(i)).length
+                    ? workInstances.filter(i => Number(i.id) === 120 || agentPassesFilter(i)).length
                     : instances.length;
                 let hudHtml = `
                     <div class="hud-title">
@@ -3086,9 +3235,9 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                 let listedCount = 0;
 
                 workInstances.forEach(inst => {
-                    const isWatcher = Number(inst.id) === 99;
+                    const isWatcher = Number(inst.id) === 120;
                     const isSelected = Number(inst.id) === Number(selectedAgentId);
-                    const keep = isWatcher || isSelected || agentPassesFilter(inst);
+                    const keep = isSelected || agentPassesFilter(inst);
 
                     const shouldRender = keep && isAgentVisible(
                         inst.id, isWatcher, renderedTrainCount
@@ -3100,7 +3249,7 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
 
                     const markerColor = agentColor(inst.id);
                     const selectedClass = isSelected ? 'selected' : '';
-                    const nameClass = isWatcher ? 'agent-watcher' : '';
+                    const nameClass = '';
 
                     // HUD-Liste bleibt immer klickbar, auch wenn ein anderer Agent
                     // im Fokus ist. So kann man direkt umschalten.
@@ -3112,7 +3261,7 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                         <div class="agent-row ${nameClass} ${selectedClass}" onclick="selectAgent(${inst.id})">
                             <span class="agent-name-wrap">
                                 <span class="agent-color-dot" style="background:${markerColor}"></span>
-                                <span>${isWatcher ? '🎮 Live-Run · ' + (inst.name || '') : inst.name}</span>
+                                <span>${inst.name || ('Agent ' + inst.id)}</span>
                             </span>
                             <span>${starterTag} ${inst.room} · ${inst.story_stage || ''} (${inst.steps} ep)</span>
                         </div>

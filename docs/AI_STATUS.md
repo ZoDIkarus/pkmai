@@ -8,25 +8,158 @@ Laufende Runtime-Werte immer aus `tools/pkmai_status.py` lesen, nicht hier absch
 
 ---
 
-## Wo wir gerade stehen (2026-09-03)
+## Wo wir gerade stehen (2026-09-03, V13.2)
 
-**Das Ziel:** Full-Champion soll zuverlässig von Spielanfang → Starter → Alabastia
-raus → Route 1 → **Vertania City** kommen. Danach Kämpfe / Level / Orden 1.
+**Das Ziel:** von Spielanfang → Starter → Alabastia raus → Route 1 →
+**Vertania City** → Vertania-Wald → Orden 1 (Rocko).
 
-**Der Engpass, Stand jetzt:** Nach 22 Mio Steps hängt `max_episode_maps` global bei
-**5** (= alle Alabastia-lokalen Maps: Schlafzimmer 2F, Haus 1F, Eichs Labor,
-Rivalenhaus, Alabastia außen). Route 1 (`bank 3, map 19`) wurde in 22 Mio Steps
-**1×** berührt, Vertania (`3,1`) **nie**. Laut `pkmai_status.py` sitzen ~60–89 von
-120 Agenten dauerhaft **in Eichs Labor** — die eigentliche Wand ist
-**„raus aus Eichs Labor nach dem Starter"**, nicht die Route-1-Durchquerung.
+**Neue Diagnose (V13.2):** Skills intro/treppe/exit/starter alle bei **1000**.
+Die Flotte war schon **auf Route 1** — aber laut `journey_routes` klebte sie am
+**Südrand (y≈37–39, direkt an der Alabastia-Grenze)**. ALLE Resume-States
+(`outdoor_1/2`, `maps_3–6`, `progress_1–14`) sind dort gespeichert → Agent
+resumt am Rand → läuft zurück nach Alabastia → Schleife.
+Dazu: `global_progress.json` stand auf `6` (alte Zählweise inkl. Innenräume) →
+der V13-Eskalations-Bonus hätte erst ab der 7. Map gefeuert.
 
-**Champion:** v158 @ ~21,7 Mio Steps. Advanct nur noch über Frontier-Publishes
-(echte neue Tiefe). Seit V10.28.1 **nicht mehr durch eine schwächere Policy
-ersetzbar** — Skill-Vault + Champion liegen getrennt vom Learner.
+**Fix beim Neustart:** grenz-nahe/veraltete Resume-States gelöscht,
+`global_progress` auf `1` re-baselined (neue Zählweise: alles außer Bank 4).
+Damit resumt jeder Progress-Agent von `starter_outdoor`/`outdoor_1` (sauber,
+Alabastia) und schiebt Route 1 neu — mit +600 für den ersten der 60 Schritte
+tief auf Route 1 steht, +900 Vertania, +1200 Route 2, +1500 Wald.
+
+**Champion:** frozen bei v27 (`champion_score.json`, `max_maps:5` = 5 Rohmaps
+= bis Route-1-Rand). Wird erst wieder publiziert, wenn ein Full-Agent echt
+weiter kommt (Vertania = 6 Rohmaps).
 
 ---
 
 ## Änderungs-Log (neueste zuerst)
+
+### V13.4 — NORD-KORRIDOR-RAMPE (pokemon_env.py)
+- **Warum:** in 30 Mio Steps hat KEIN Agent Route 1 durchquert. Kein „langsam",
+  sondern strukturell: (1) 1 Standbild = keine Bewegungsinfo (Route-1-Absätze!),
+  (2) ~60 richtige Schritte fast ohne Zwischenreward, (3) 30M Steps Gewohnheit.
+- **Fix:** `NORTH_CORRIDOR_MAPS = {(3,0) Alabastia, (3,19) Route 1}` — auf genau
+  diesen geraden Vor-Wald-Strecken gibt es `+1.2` pro neuer nördlichster Y-Reihe
+  (nicht farmbar, nur echte neue Reihe). Aus den 60 blinden Schritten wird eine
+  Belohnungsrampe Richtung Vertania. **Der Wald ist BEWUSST NICHT dabei**
+  (Labyrinth → reine Exploration). Gilt nur für progress/battle/level/full.
+- `outdoor_N`-Checkpoint-Gate: 60→30 Schritte, ABER auf einer Korridor-Map nur
+  wenn `y <= 20` (echt weit im Norden) → kein „outdoor_2 am Südrand" mehr.
+
+### V13.3 — outdoor_1 war GARBAGE + Indoor-Farm-Nerf + 128 Envs + Web-Panel
+- **Fund nach V13.2-Start:** 82/96 Agenten standen DRINNEN. Ein frisch von
+  `outdoor_1` gestarteter Agent landet bei Bank 4, Map 0, kein Starter →
+  `outdoor_1.state.gz` ist ein Alabastia-Innenraum, kein Aussen-State
+  (Glitch-RAM-Read beim Warp).
+- **Indoor-Farm:** `progress` bekam `+2.0`/Kachel auch drinnen → Labor abgrasen
+  = +100. Jetzt draußen `+2.0`, drinnen `+0.35`; dazu `-0.05/Schritt` für
+  Progress/Battle/Level mit Starter die >150 Schritte drinnen hängen.
+- `_best_progress_milestone`/`_choose_episode_start`: `outdoor_N` nur als Resume
+  wenn **N ≥ 2**. Fallback ~80% `starter_outdoor` (Bank-3-geprüft beim Save →
+  verlässlich), ~20% `starter`. `outdoor_1`-Dateien beim Neustart gelöscht.
+- `NUM_ENVS 96 → 128`, `PPO_N_STEPS 40 → 32` (Rollout 4096).
+- **Web:** neues `🧭 FLOTTEN-STATUS`-Panel im Graphen-Tab (Welt-Tiefe + Balken +
+  Map-Name, draußen/drinnen/Kampf, Tiefen-Durchbrüche, K.O./Schaden, Rollen,
+  Live world_depth-Events). `/api/state` → `fleet`-Block.
+- Watcher: `btf/c1/c2/c3`-Debug-Leiste raus.
+
+### V13.2 — Flotte auf 96 Envs, Rollen skalieren automatisch (train.py, pokemon_env.py)
+- **Grund:** 120 Envs auf M4 Max (12 P-Kerne) = ~8× überbucht, Load 60, jeder
+  Emulator lief mit ~60–70 % Speed. `NUM_ENVS 120 → 96`, `PPO_N_STEPS 32 → 40`
+  (Rollout-Buffer bleibt 3840).
+- **`_agent_role` / `_choose_episode_start` / `_is_long_full_probe`** rechnen
+  jetzt **relativ zur Flottengröße** (`self.n_envs`, via Konstruktor) statt fester
+  Slot-Zahlen für genau 120. NUM_ENVS ändern reicht künftig.
+- Phase 5 @ 96: intro 2 / stairs 3 / exit 3 / starter 4 / battle 11 / level 7 /
+  **progress 61** / **full 5**.
+- **`full` NICHT entfernt** (User-Frage): nur Full-from-Beginning-Runs können den
+  Champion befördern (Frontier / Milestone / Recent-Eval) **und** den Rollback-
+  Punkt frisch halten. Ohne `full` friert der Champion für immer ein. Deshalb 5
+  behalten statt 0. `min_full_episodes 12 → 8`, `min_eval_episodes 24 → 16`.
+- **GPU:** kann keine Emulatoren rechnen (mGBA = sequenzieller CPU-Code). Die
+  M4-Max-GPU macht bereits die NN-Forward/Backward-Pässe (MPS). Mehr Clients als
+  ~1–2× Kernzahl bringt nichts — reine Context-Switch-Kosten.
+
+### V13.1 — Watcher: nie wieder Treppe nach dem ersten Draußen (watch.py)
+- **Bug (User beobachtet):** Watcher lief versehentlich ins Rivalen-/Schwesterhaus
+  (das Gebäude über dem Labor). Routing wählte „stairs" (weil `initial_indoor_room`
+  nicht gelockt + `house_rooms` leer) → Treppen-Skill lief nach Norden gegen die
+  Wand → kam nicht mehr raus.
+- **Fix:** neues stickiges Flag `watcher_ever_outdoors`. Sobald der Watcher EINMAL
+  auf Bank 3 war, ist „stairs" komplett vom Tisch — jedes Gebäude ohne Starter →
+  Exit-Skill. Nur der Anti-Loop-Reset (Spielanfang) löscht das Flag.
+- Info-Zeile im Watcher zeigt jetzt `Aussenwelt` / `Innen (Bank N)` / `IM KAMPF`
+  statt immer nur „Overworld".
+
+### V13 — Welt-Tiefe zählt jetzt auch den Wald + Route-1-Fokus (pokemon_env.py, watch.py)
+- **Welt-Tiefe** = jetzt „alle Maps außer Bank 4" (Bank 4 = alle Alabastia-
+  Innenräume inkl. Eichs Labor). Vorher „nur Bank 3" — das hätte den Vertania-
+  **Wald** (eigene Map-Bank!) und Arenen nie als Tiefe gezählt. Checkpoints
+  (`outdoor_N`) bleiben bewusst nur auf Bank 3 (sicherer Resume-Boden).
+
+### V13 — Route-1-Fokus + eskalierende Tiefen-Belohnung (pokemon_env.py, watch.py)
+- **Eskalierender Tiefen-Reward:** `world_depth` gibt jetzt `300 * outdoor_count`
+  statt flat 300 → Route 1 +600, Vertania +900, Route 2 +1200, Wald +1500.
+  Der erste Agent der durchbricht bekommt eine massive Prägung; Checkpoint +
+  journey_route ziehen die anderen 68 nach.
+- **~85% der Progress-Agenten** starten direkt am tiefsten `outdoor_N` (statt
+  50/50 mit `starter_outdoor`).
+- **battle/level-Rollen** starten auf Route 1 (Gras = wilde Kämpfe, Erkennung
+  bestätigt) statt im Labor (Rivalenkampf-Signal unzuverlässig).
+- Watcher V12.6: merkt sich das erste Nicht-Haus-Gebäude als Eichs Labor →
+  Rivalenhaus & Co. werden mit Exit-Skill wieder verlassen.
+- `pkmai_status.py` zeigt jetzt `KAEMPFE`-Zeile.
+
+### ML-Hebel für „schneller lernen" (Kontext, noch nicht umgesetzt)
+- **Frame-Stacking (4 Frames)** = größter Hebel. Gibt der Policy Bewegung/Kontext
+  → viel weniger verwirrte/unnötige Schritte. Braucht Obs-Änderung + Netz-Reset.
+- Rendern von Clients bringt NICHTS fürs Lernen (nur Emulator-Overhead). Weniger
+  Envs = weniger Erfahrung/s = langsamer. 120 parallel ist richtig.
+- `target_closer/farther ±2.5` feuert sehr oft → könnte „am Ziel oszillieren"
+  begünstigen; Kandidat zum Reduzieren.
+
+### V12.4 — mehr Exploration, sauberere Checkpoints (pokemon_env.py, watch.py)
+- **Bug:** alle 50 progress-Agenten resumten von `outdoor_2` — der State saß am
+  Route-1-Südrand → Agenten liefen sofort zurück nach Alabastia, manche fielen
+  bis ins Schlafzimmer. Deshalb „keiner erkundet oben".
+- Fix: `outdoor_N`-Checkpoint wird erst gespeichert wenn der Agent **≥ 60
+  Schritte am Stück tief auf der neuen Außen-Map** steht (nicht am Rand, nicht
+  bei Glitch-Map-Read). `_best_progress_milestone`: Hälfte der Agenten startet
+  von `starter_outdoor` (sauber), Hälfte vom tiefsten `outdoor_N`.
+- Phase 5: progress **50 → 68**, full **32 → 16**, battle 12, level 10.
+- Battle-Adresse **gefunden** (Probe): `in_battle` = 146376 (0x02023BC8, Wert 1).
+- Watcher V12.3: Haus-Räume werden gemerkt → eigenes Haus wird nicht mehr mit
+  Eichs Labor verwechselt.
+- **AKTION nötig:** alte `outdoor_1/2.state.gz` löschen (sitzen schlecht).
+  `full_stairs/full_exit_permille` (0.1 %) sind kaputte End-Positions-Metriken,
+  harmloses Rauschen - die `full`-ROLLE bleibt (nötig für Champion-Frontier).
+
+### V12 — Kampf + Level Rollen, Watcher-Startraum-Fix (pokemon_env.py, watch.py)
+- Phase-5-Verteilung: **battle (10) + level (8) Rollen wieder aktiv** (für
+  Vertania-Wald wilde Pokémon + Brock). 2/6/6/6 Erhaltung, 50 progress, 32 full.
+- Watcher-Bug: transienter RAM-Read während Intro-Cutscene konnte den
+  „Startraum" auf eine falsche Map locken → Routing schickte den Watcher in die
+  Exit-Skill statt Treppe → hing ewig im Schlafzimmer. Fix: Startraum erst nach
+  bestätigtem Intro-Ende + 3 stabilen Frames festnageln; bis dahin default `stairs`.
+- Champion `max_maps` 6→1 (Skalen-Mismatch nach V11.3 Außen-Zählung, hatte
+  Champion eingefroren).
+- Watcher in der Agentenliste: **nicht mehr forciert/gehighlighted** — sortiert
+  normal nach ID.
+- `#watcher-view` fehlte `display:none` → Live-JPEG lag über der Overworld-Karte.
+
+### CODE-REVIEW Findings (2026-09-03)
+1. **Battle-Erkennung (`in_battle` RAM 147074 = immer 0)** — der eigentliche
+   Blocker. `fled_battle`-Malus feuert nie, `battle_stats` bleibt 0. ABER:
+   `enemy_damage`/`enemy_faint`-Rewards laufen über einen HP-Fallback
+   (`read_enemy_party` + Gegner-HP sinkt) — die funktionieren auch ohne
+   `in_battle`. → `enemy_faints: 0` heißt: Agenten **gewinnen keine Kämpfe**
+   (fliehen / Kampfmenü-Navigation scheitert). battle-Rolle (V12) trainiert genau das.
+2. **Keine Item-/Geld-/HM-Logik** — für „Spiel komplett durchspielen" nötig
+   (Route-1-Potion, Wald-Items, VM Zerschneider für Vertania-Wald-Ausgang…),
+   aber RAM-Adressen (Bag, Money) fehlen in `data.json`. Muss geprobt werden.
+3. `isW` in web_stream.py nach De-Highlighting ungenutzt (harmlos).
+4. `_agent_role` nutzt hartkodiert `rank % 120` — bricht bei NUM_ENVS ≠ 120.
 
 ### V11.3 — Welt-Tiefe = nur Außen-Maps (pokemon_env.py)  ← AKTUELL
 - **Bug gefunden:** `max_episode_maps` zählte ALLE besuchten Maps inkl.

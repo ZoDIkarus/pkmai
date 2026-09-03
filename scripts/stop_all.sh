@@ -17,5 +17,11 @@ done
 pkill -f "$PROJECT/src/train.py" || true
 pkill -f "$PROJECT/src/watch.py" || true
 pkill -f "$PROJECT/src/web_stream.py" || true
+pkill -f "tools/pkmai_status.py" || true
+pkill -f "cloudflared tunnel" || true
+pkill -f "ngrok http 8000" || true
+# verwaiste SubprocVecEnv-Worker vom Trainer
+pkill -f "multiprocessing-fork" || true
+pkill -f "multiprocessing.resource_tracker" || true
 
 echo "PKMAI stopped."

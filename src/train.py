@@ -18,9 +18,13 @@ from pokemon_env import PokemonFireRedEnv
 # ================================================================
 # Die wichtigsten Werte stehen absichtlich hier oben.
 
-# 120 parallele Envs (Mac). Fuer kleinere Rechner runtersetzen - dann aber
-# auch die "% 120" Slot-Logik in pokemon_env._agent_role anpassen.
-NUM_ENVS = 120
+# V13.3: 128 parallele Envs. Test zeigte: 96 vs 120 = gleiche aggregierte FPS
+# (GBA-Emulation hat genug Nicht-CPU-Wartezeit: RAM-Extraktion, Frame-Prep,
+# IPC). Ueberbuchung kostet hier also kaum Durchsatz -> mehr Envs = mehr
+# dekorrelierte Samples pro Rollout = besseres/stabileres PPO. 128 ist ein
+# glatter Wert (Rollout 128*32 = 4096, teilt sauber durch batch_size 256).
+# Die Rollen-Logik in pokemon_env._agent_role skaliert automatisch mit NUM_ENVS.
+NUM_ENVS = 128
 
 # Endlos-Training: laeuft in Bloecken weiter, bis du Ctrl+C drueckst.
 # TRAIN_CHUNK_TIMESTEPS ist nur die Groesse eines learn()-Blocks.
@@ -34,6 +38,8 @@ SAVE_EVERY_TIMESTEPS = 25_000
 
 # PPO
 LEARNING_RATE = 7.5e-05
+# 32 x 128 Envs = 4096 Rollout-Buffer, teilt sauber durch batch_size 256
+# (16 Minibatches).
 PPO_N_STEPS = 32
 PPO_BATCH_SIZE = 256
 PPO_N_EPOCHS = 4
@@ -172,6 +178,7 @@ def make_env(
     shared_transitions,
     shared_progress,
     shared_lock,
+    n_envs=NUM_ENVS,
 ):
     def _init():
         return PokemonFireRedEnv(
@@ -181,6 +188,7 @@ def make_env(
             shared_transitions=shared_transitions,
             shared_progress=shared_progress,
             shared_lock=shared_lock,
+            n_envs=n_envs,
         )
     return _init
 
@@ -198,10 +206,13 @@ class MilestoneCheckpointCallback(BaseCallback):
         self.recent = deque(maxlen=600)
         self.recent_full = deque(maxlen=256)
         self.full_live = {}
-        self.min_eval_episodes = 24
-        # 12 abgeschlossene Beginning-Full-Runs pro Eval: genug Signal fuer die
-        # Regressions-Pruefung, ohne die Eval-Kadenz unnoetig zu verlangsamen.
-        self.min_full_episodes = 12
+        self.min_eval_episodes = 16
+        # V13.2: 8 abgeschlossene Beginning-Full-Runs pro Eval. Deckt sich mit
+        # _protected_regression (das unter 8 ohnehin nicht befoerdert), und mit
+        # nur ~5 full-Agenten in Phase 5 wuerde 12 die Eval fast nie ausloesen.
+        # Frontier-/Milestone-Champion-Publishes brauchen diese Schwelle nicht -
+        # sie feuern bei jedem einzelnen full-Agenten mit neuer Tiefe.
+        self.min_full_episodes = 8
         self.champion_score = None
         self.champion_metrics = {}
         self.rollback_count = 0
@@ -290,6 +301,7 @@ class MilestoneCheckpointCallback(BaseCallback):
             "badge_episodes": int(totals.get("v7_full_badge1", 0)),
             "max_badges": 1 if int(totals.get("v7_full_badge1", 0)) > 0 else 0,
             "max_maps": 0,
+            "max_stage": 0,
         }
         self.champion_score = self._score(self.champion_metrics)
         self._write_champion_score(self.champion_score, self.champion_metrics)
@@ -438,19 +450,28 @@ class MilestoneCheckpointCallback(BaseCallback):
             "intro": int(stage != "INTRO"),
             "stairs": int(stage in ("F1_TO_EXIT", "OUTDOOR")),
             "exit": int(stage == "OUTDOOR"),
+            # V14: Starter zaehlt NUR wenn der Agent damit auch DRAUSSEN war
+            # (story_stage OUTDOOR) - nicht schon im Labor. Das ist die echte
+            # "raus aus Eichs Labor"-Wand.
             "starter": int(
-                level >= 5 or bool(info.get("has_starter", False))
+                (level >= 5 or bool(info.get("has_starter", False)))
+                and stage == "OUTDOOR"
             ),
             "badge": int(badges >= 1),
             "badges": badges,
             "maps": int(info.get("visited_maps", 0)),
+            "stage": int(info.get("world_stage", 0)),
             "level": level,
         }
 
     @staticmethod
     def _score(m):
+        # V14: world_stage ist die primaere Fortschritts-Achse (nach Orden).
+        # max_maps (Raumanzahl) ist NUR noch letzter Tie-Breaker - eine
+        # Haus-Tour kann den Score nicht mehr heben.
         return (
             int(m.get("max_badges", 0)),
+            int(m.get("max_stage", 0)),
             int(m.get("badge_episodes", 0)),
             int(m.get("full_starter_permille", 0)),
             int(m.get("full_exit_permille", 0)),
@@ -491,6 +512,7 @@ class MilestoneCheckpointCallback(BaseCallback):
             "badge_episodes": sum(r["badge"] for r in rows),
             "max_badges": max((r["badges"] for r in rows), default=0),
             "max_maps": max((r["maps"] for r in rows), default=0),
+            "max_stage": max((r.get("stage", 0) for r in rows), default=0),
         }
 
     def _metrics_floor(self, metrics):
@@ -500,9 +522,12 @@ class MilestoneCheckpointCallback(BaseCallback):
         ueberschreiben und den Regressions-Schutz aushebeln. Deshalb die
         alten Champion-Werte als Untergrenze behalten, solange noch keine
         echten Beginning-Full-Runs abgeschlossen sind."""
+        old = self.champion_metrics or {}
+        # world_stage / Tiefe immer als Untergrenze halten (auch mit Full-Runs).
+        for k in ("max_stage", "max_level", "max_badges"):
+            metrics[k] = max(int(metrics.get(k, 0)), int(old.get(k, 0)))
         if int(metrics.get("full_episodes", 0)) > 0:
             return metrics
-        old = self.champion_metrics or {}
         for k in ("full_intro_permille", "full_stairs_permille",
                   "full_exit_permille", "full_starter_permille"):
             metrics[k] = max(int(metrics.get(k, 0)), int(old.get(k, 0)))
@@ -592,11 +617,12 @@ class MilestoneCheckpointCallback(BaseCallback):
     def _protected_regression(self, candidate):
         old = self.champion_metrics or {}
 
-        # Echte neue Tiefe (mehr Orden / Maps / Level in einem Beginning-Full-Run)
-        # ist immer ein Fortschritt und hebt jeden Schutz auf.
+        # V14: echte neue Tiefe (world_stage / Orden / Level) hebt jeden Schutz
+        # auf. max_maps (Raumanzahl) NICHT mehr - eine Haus-Tour ist kein
+        # Fortschritt.
         if int(candidate.get("max_badges", 0)) > int(old.get("max_badges", 0)):
             return False
-        if int(candidate.get("max_maps", 0)) > int(old.get("max_maps", 0)):
+        if int(candidate.get("max_stage", 0)) > int(old.get("max_stage", 0)):
             return False
         if int(candidate.get("max_level", 0)) > int(old.get("max_level", 0)):
             return False
@@ -686,10 +712,10 @@ class MilestoneCheckpointCallback(BaseCallback):
         champion = self.champion_metrics or {}
         champion_key = (
             int(champion.get("max_badges", 0)),
+            int(champion.get("max_stage", 0)),
             1 if int(champion.get("full_starter_permille", 0)) > 0 else 0,
             1 if int(champion.get("full_exit_permille", 0)) > 0 else 0,
             1 if int(champion.get("full_stairs_permille", 0)) > 0 else 0,
-            int(champion.get("max_maps", 0)),
             int(champion.get("max_level", 0)),
         )
 
@@ -705,18 +731,21 @@ class MilestoneCheckpointCallback(BaseCallback):
             stage = str(info.get("story_stage", "INTRO"))
             badges = int(info.get("badges_count", 0) or 0)
             level = int(info.get("level", info.get("p1_level", 0)) or 0)
-            maps = int(info.get("frontier_maps", info.get("visited_maps", 0)) or 0)
-            starter = int(bool(info.get("has_starter", False)) or level >= 5)
+            wstage = int(info.get("world_stage", 0) or 0)
+            starter = int(
+                (bool(info.get("has_starter", False)) or level >= 5)
+                and stage == "OUTDOOR"
+            )
             stairs = int(stage in ("F1_TO_EXIT", "OUTDOOR"))
             exit_done = int(stage == "OUTDOOR")
 
-            key = (badges, starter, exit_done, stairs, maps, level)
+            key = (badges, wstage, starter, exit_done, stairs, level)
             if key <= champion_key:
                 continue
 
             metrics = self._metrics_floor(self._metrics())
             metrics["max_badges"] = max(int(metrics.get("max_badges", 0)), badges)
-            metrics["max_maps"] = max(int(metrics.get("max_maps", 0)), maps)
+            metrics["max_stage"] = max(int(metrics.get("max_stage", 0)), wstage)
             metrics["max_level"] = max(int(metrics.get("max_level", 0)), level)
             if stairs:
                 metrics["full_stairs_permille"] = max(int(metrics.get("full_stairs_permille", 0)), 1)
@@ -812,10 +841,9 @@ class MilestoneCheckpointCallback(BaseCallback):
 
                 if isinstance(terminal_info, dict):
 
-                    # TEMP V10.9 DEBUG:
-                    # Zeige bei den Slots 96-119 exakt, was SB3
+                    # DEBUG: bei jedem Full-Slot exakt zeigen, was SB3
                     # beim Episode-Ende an den Callback liefert.
-                    if 82 <= i <= 119:
+                    if str(terminal_info.get("training_objective", "")) == "full":
                         print(
                             "🔬 FULL-SLOT DONE "
                             f"slot={i} | "
@@ -944,21 +972,22 @@ def main():
     shared_maps = manager.dict(seed_maps)
     shared_transitions = manager.dict(seed_transitions)
 
-    # V8: persistierter ECHTER Episoden-Depth-Rekord.
+    # V14: persistierter world_stage-Rekord (1=Alabastia .. 5=Wald, 6=Orden).
     progress_file = os.path.join(
         EXPLORATION_MEMORY_DIR, "global_progress.json"
     )
     persisted_depth = 0
     try:
         with open(progress_file, "r") as f:
+            _gp = json.load(f) or {}
             persisted_depth = int(
-                (json.load(f) or {}).get("max_episode_maps", 0)
+                _gp.get("max_world_stage", _gp.get("max_episode_maps", 0))
             )
     except Exception:
         persisted_depth = 0
 
     shared_progress = manager.dict({
-        "max_episode_maps": persisted_depth,
+        "max_world_stage": persisted_depth,
     })
     shared_lock = manager.RLock()
 
@@ -968,7 +997,7 @@ def main():
         f"{len(seed_maps)} Maps | "
         f"{len(seed_transitions)} Warps"
     )
-    print("🎯 V11 CLEAN EXPLORE: Reward = Exploration dominant (+2.0/Tile), keine Straf-Suppe, kein Nord-Prior. Bootcamp: intro>treppe>exit>starter>Welt (auto ab 88%)")
+    print(f"🎯 V13.3 ROUTE-1-FOKUS @ {NUM_ENVS} Envs: Grossteil Progress-Agenten -> Route 1 -> Vertania -> Wald. ESKALIERENDE Tiefen-Belohnung (300xN: Route1 +600, Vertania +900, Route2 +1200, Wald +1500). Welt-Tiefe = alle Maps ausser Alabastia-Innenraeume. ~85% resumen vom tiefsten outdoor_N. Rollen skalieren automatisch mit NUM_ENVS.")
 
     print("🎮 V7.7 Actions: A | B | START | UP | DOWN | LEFT | RIGHT")
     print("🧭 V7.7 Observation: UNVERAENDERT 64x64 Bild + 28 RAM/Nav Features")
@@ -983,6 +1012,7 @@ def main():
                 shared_transitions,
                 shared_progress,
                 shared_lock,
+                NUM_ENVS,
             )
             for i in range(NUM_ENVS)
         ]

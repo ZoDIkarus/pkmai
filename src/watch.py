@@ -50,6 +50,7 @@ WATCHER_FRAME_FILE = os.path.join(RUNTIME_DIR, "watcher.jpg")
 # Fenster
 GAME_PANEL_W = 720
 GAME_PANEL_H = 480
+TEAM_PANEL_W = 118   # V11.5: Team-Spalte zwischen Emu und Live-Map
 MAP_PANEL_W = 620
 TOP_H = 84
 BOTTOM_H = 74
@@ -655,51 +656,48 @@ def _hp_color(ratio, fainted):
 
 
 def draw_team_overlay(canvas, party, ui, x0, y0, w, h):
-    """Team-Leiste unten im Gameplay-Panel. Klick auf ein Pokemon -> Stats,
-    nochmal klicken -> weg. ui = dict mit 'expanded' + 'slots'."""
+    """Team-SPALTE zwischen Emu und Live-Map. 6 Pokemon untereinander.
+    Klick auf eines -> Stats/Moves-Popup, nochmal klicken -> weg."""
     party = [m for m in (party or []) if int(m.get("max_hp", 0)) > 0][:6]
     ui["slots"] = []
+    cv2.rectangle(canvas, (x0, y0), (x0 + w, y0 + h), (14, 18, 26), -1)
+    cv2.putText(canvas, "TEAM", (x0 + 10, y0 + 16),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (120, 130, 150), 1, cv2.LINE_AA)
     if not party:
         return
 
-    overlay = canvas.copy()
-    cv2.rectangle(overlay, (x0, y0), (x0 + w, y0 + h), (14, 18, 26), -1)
-    cv2.addWeighted(overlay, 0.82, canvas, 0.18, 0, canvas)
-    cv2.line(canvas, (x0, y0), (x0 + w, y0), (70, 78, 95), 1)
-
-    sw = w // 6
+    top = y0 + 24
+    sh = (h - 28) // 6
     for i, mon in enumerate(party):
-        sx = x0 + i * sw
+        sy = top + i * sh
         ratio = float(mon.get("hp_ratio", 0.0))
         fainted = bool(mon.get("fainted", False))
-        sel = ui.get("expanded") == i
-        if sel:
-            cv2.rectangle(canvas, (sx + 2, y0 + 2), (sx + sw - 2, y0 + h - 2),
+        if ui.get("expanded") == i:
+            cv2.rectangle(canvas, (x0 + 2, sy + 1), (x0 + w - 2, sy + sh - 2),
                           (0, 230, 118), 1)
-        name = str(mon.get("name", "?"))[:9]
-        cv2.putText(canvas, name, (sx + 8, y0 + 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (235, 240, 250), 1, cv2.LINE_AA)
-        cv2.putText(canvas, f"Lv{mon.get('level', 0)}", (sx + 8, y0 + 38),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.40, (150, 160, 180), 1, cv2.LINE_AA)
-        # HP-Balken
-        bx0, bx1 = sx + 8, sx + sw - 10
-        by = y0 + 48
-        cv2.rectangle(canvas, (bx0, by), (bx1, by + 8), (40, 44, 54), -1)
+        name = str(mon.get("name", "?"))[:11]
+        cv2.putText(canvas, name, (x0 + 8, sy + 16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (235, 240, 250), 1, cv2.LINE_AA)
+        cv2.putText(canvas, f"Lv{mon.get('level', 0)}", (x0 + 8, sy + 33),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (150, 160, 180), 1, cv2.LINE_AA)
+        bx0, bx1 = x0 + 8, x0 + w - 8
+        by = sy + 42
+        cv2.rectangle(canvas, (bx0, by), (bx1, by + 7), (40, 44, 54), -1)
         fillw = int((bx1 - bx0) * max(0.0, min(1.0, ratio)))
         if fillw > 0:
-            cv2.rectangle(canvas, (bx0, by), (bx0 + fillw, by + 8),
+            cv2.rectangle(canvas, (bx0, by), (bx0 + fillw, by + 7),
                           _hp_color(ratio, fainted), -1)
         cv2.putText(canvas, f"{mon.get('cur_hp',0)}/{mon.get('max_hp',0)}",
-                    (bx0, by + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.34,
+                    (bx0, by + 19), cv2.FONT_HERSHEY_SIMPLEX, 0.32,
                     (140, 150, 168), 1, cv2.LINE_AA)
-        ui["slots"].append((sx, y0, sx + sw, y0 + h, i))
+        ui["slots"].append((x0, sy, x0 + w, sy + sh, i))
 
     exp = ui.get("expanded")
     if exp is not None and exp < len(party):
         mon = party[exp]
-        pw, ph = 300, 176
-        px = x0 + w - pw - 8
-        py = y0 - ph - 6
+        pw, ph = 290, 176
+        px = x0 - pw - 6
+        py = y0 + 10
         ov = canvas.copy()
         cv2.rectangle(ov, (px, py), (px + pw, py + ph), (18, 22, 32), -1)
         cv2.addWeighted(ov, 0.92, canvas, 0.08, 0, canvas)
@@ -793,8 +791,9 @@ def main():
     # Links: FireRed standardmaessig 3x hochskaliert.
     CONTENT_H = GAME_PANEL_H
 
-    CANVAS_W = GAME_PANEL_W + MAP_PANEL_W
+    CANVAS_W = GAME_PANEL_W + TEAM_PANEL_W + MAP_PANEL_W
     CANVAS_H = TOP_H + CONTENT_H + BOTTOM_H
+    MAP_X0 = GAME_PANEL_W + TEAM_PANEL_W
 
     WINDOW = "Pokemon Firered AI by Alex - Watcher + Live Map"
 
@@ -919,12 +918,21 @@ def main():
     watcher_left_house_rewarded = False
     watcher_stairs_done = False
     watcher_initial_indoor_room = None
+    watcher_house_rooms = set()
+    watcher_lab_room = None
+    _pending_start_room = None
+    _start_room_stable = 0
     watcher_north_grass_rewarded = False
     watcher_next_outdoor_map_rewarded = False
     watcher_first_outdoor_map = None
     watcher_outdoor_entry_y = None
     watcher_previous_valid_bank = None
     watcher_previous_valid_map = None
+    # V13.1: sobald der Watcher EINMAL draussen war (Bank 3), darf nie wieder
+    # die Treppen-Skill gewaehlt werden. Ein versehentlicher Hausbesuch
+    # (Rivalen-/Schwesterhaus) fuehrte sonst zu "Treppe" -> lief nach Norden
+    # gegen die Wand -> kam nicht mehr raus. Nur der Anti-Loop-Reset loescht das.
+    watcher_ever_outdoors = False
 
     last_raw_screen = env.get_screen()
 
@@ -953,6 +961,8 @@ def main():
             # wenn es pingpongt, macht jede Policy ihren lokalen Job und der
             # Watcher kommt Stueck fuer Stueck raus.
             watcher_outdoors = (bank == 3)
+            if watcher_outdoors:
+                watcher_ever_outdoors = True
             if watcher_outdoors or party_has_starter:
                 # Fruehstufen dauerhaft erledigt - nur noch Vorwaerts.
                 watcher_gameplay_ready = True
@@ -972,12 +982,26 @@ def main():
             elif party_has_starter:
                 desired_skill = "progress"
             elif watcher_outdoors:
+                # Draussen, kein Starter -> zu Eichs Labor / Pokeball holen.
                 desired_skill = "starter"
+            elif watcher_lab_room is not None and (bank, map_id) == watcher_lab_room:
+                # V12.6: genau DAS Gebaeude, das wir als Labor gemerkt haben.
+                desired_skill = "starter"
+            elif watcher_ever_outdoors:
+                # V13.1: War schon draussen, jetzt wieder in IRGENDEINEM
+                # Gebaeude ohne Starter (Rivalen-/Schwesterhaus, Pokemart...).
+                # Nie wieder Treppe - einfach mit der Exit-Skill raus.
+                desired_skill = "exit"
+            elif (bank, map_id) not in watcher_house_rooms and watcher_house_rooms:
+                # V12.6: irgendein anderes Gebaeude (Rivalenhaus etc.) - da
+                # wollen wir nicht rein. Raus damit (Exit-Skill) -> dann
+                # draussen wieder Richtung Labor.
+                desired_skill = "exit"
             elif _in_start_room or watcher_initial_indoor_room is None:
-                # Noch/wieder im Startraum (2F) -> Treppe runter.
+                # Ganz am Anfang, noch nie draussen -> Startraum (2F) -> Treppe.
                 desired_skill = "stairs"
             else:
-                # Anderer Innenraum (1F) -> raus aus dem Haus.
+                # Anderer Raum IM Spielerhaus (1F) -> raus.
                 desired_skill = "exit"
 
             watcher_skill = desired_skill
@@ -1410,8 +1434,36 @@ def main():
             if gameplay_ready and in_battle == 0:
                 if bank != 3:
                     current_indoor_room = (bank, map_id)
+                    # V12.3: Alle Innenraeume VOR dem ersten Hausausgang = das
+                    # Spielerhaus (2F + 1F). Spaeter drinnen + NICHT in diesem
+                    # Set = Eichs Labor. So wird das eigene Haus nicht mit dem
+                    # Labor verwechselt.
+                    if not watcher_left_house_rewarded:
+                        watcher_house_rooms.add(current_indoor_room)
+                    elif (
+                        watcher_lab_room is None
+                        and not party_has_starter
+                        and current_indoor_room not in watcher_house_rooms
+                    ):
+                        # V12.6: erstes Nicht-Haus-Gebaeude nach dem Hausausgang
+                        # = Eichs Labor. Merken, damit wir es von Rivalen-/
+                        # anderen Haeusern unterscheiden koennen.
+                        watcher_lab_room = current_indoor_room
+                    # V11.5: Startraum erst nach BESTAETIGTEM Intro-Ende + ein
+                    # paar stabilen Frames festnageln. Sonst kann ein kurzer
+                    # gueltiger RAM-Read waehrend der Intro-Cutscene den
+                    # "Startraum" auf eine falsche Map locken -> Routing schickt
+                    # den Watcher dann in die Exit-Skill statt Treppe -> haengt
+                    # ewig im Schlafzimmer.
                     if watcher_initial_indoor_room is None:
-                        watcher_initial_indoor_room = current_indoor_room
+                        if watcher_intro_complete_rewarded:
+                            if current_indoor_room == _pending_start_room:
+                                _start_room_stable += 1
+                            else:
+                                _pending_start_room = current_indoor_room
+                                _start_room_stable = 1
+                            if _start_room_stable >= 3:
+                                watcher_initial_indoor_room = current_indoor_room
                     elif current_indoor_room != watcher_initial_indoor_room:
                         watcher_stairs_done = True
 
@@ -1573,12 +1625,17 @@ def main():
                 watcher_stairs_done = False
                 watcher_gameplay_ready = False
                 watcher_initial_indoor_room = None
+                watcher_house_rooms = set()
+                watcher_lab_room = None
+                _pending_start_room = None
+                _start_room_stable = 0
                 watcher_north_grass_rewarded = False
                 watcher_next_outdoor_map_rewarded = False
                 watcher_first_outdoor_map = None
                 watcher_outdoor_entry_y = None
                 watcher_previous_valid_bank = None
                 watcher_previous_valid_map = None
+                watcher_ever_outdoors = False
 
                 mapping_unlocked = False
                 stable_loc_frames = 0
@@ -1708,10 +1765,10 @@ def main():
                 0:GAME_PANEL_W
             ] = game_view
 
-            # Team-Leiste unten im Gameplay-Panel (klickbar).
+            # V11.5: Team-SPALTE zwischen Emu und Live-Map (klickbar -> Stats).
             draw_team_overlay(
                 canvas, watcher_party, team_ui,
-                0, TOP_H + GAME_PANEL_H - 66, GAME_PANEL_W, 66
+                GAME_PANEL_W, TOP_H, TEAM_PANEL_W, CONTENT_H
             )
 
             # Persistentes Live Map Tiling: bekannte Tiles/Kanten nur einmal.
@@ -1725,17 +1782,14 @@ def main():
 
             canvas[
                 TOP_H:TOP_H + CONTENT_H,
-                GAME_PANEL_W:CANVAS_W
+                MAP_X0:CANVAS_W
             ] = map_view
 
-            # Trennlinie
-            cv2.line(
-                canvas,
-                (GAME_PANEL_W, TOP_H),
-                (GAME_PANEL_W, TOP_H + CONTENT_H),
-                (70, 78, 95),
-                2
-            )
+            # Trennlinien
+            cv2.line(canvas, (GAME_PANEL_W, TOP_H),
+                     (GAME_PANEL_W, TOP_H + CONTENT_H), (70, 78, 95), 2)
+            cv2.line(canvas, (MAP_X0, TOP_H),
+                     (MAP_X0, TOP_H + CONTENT_H), (70, 78, 95), 2)
 
             brain = (
                 f"{loaded_model_name} | PKMAI v{loaded_version:06d}"
@@ -1754,15 +1808,13 @@ def main():
                 cv2.LINE_AA
             )
 
-            _state_txt = "IM KAMPF" if in_battle else "Overworld"
+            if in_battle:
+                _state_txt = "IM KAMPF"
+            elif bank == 3:
+                _state_txt = "Aussenwelt"
+            else:
+                _state_txt = f"Innen (Bank {bank})"
             _kaempfe = int(watcher_battle_stats.get("completed", 0))
-            # V11.4 DEBUG: rohe Kampf-Kandidaten-Werte zum Adressen-Finden.
-            _bt_dbg = (
-                f"btf={int(info.get('battle_flags',0) or 0)} "
-                f"c1={int(info.get('bt_c1',0) or 0)} "
-                f"c2={int(info.get('bt_c2',0) or 0)} "
-                f"old={int(info.get('in_battle',0) or 0)}"
-            )
             cv2.putText(
                 canvas,
                 (
@@ -1770,7 +1822,6 @@ def main():
                     f"   -   {_state_txt}"
                     f"   -   Kaempfe {_kaempfe}"
                     f"   -   Skill: {str(watcher_skill).upper()}"
-                    f"   -   [{_bt_dbg}]"
                 ),
                 (16, 55),
                 cv2.FONT_HERSHEY_SIMPLEX,

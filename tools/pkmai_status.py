@@ -62,6 +62,22 @@ def render():
                f"full_eps={m.get('full_episodes', 0)}")
     out.append(f"  Skill-Vault   " + "  ".join(f"{k}:{v}" for k, v in sv.items()))
 
+    bt = {"battles_started": 0, "battles_completed": 0,
+          "enemy_faints": 0, "enemy_damage_hp": 0, "v8_battle_success": 0}
+    for _f in glob.glob(os.path.join(RT, "training_stats", "agent_*.json")):
+        try:
+            _d = json.load(open(_f))
+        except Exception:
+            continue
+        for _k in bt:
+            bt[_k] += int(_d.get(_k, 0) or 0)
+    out.append(
+        f"  KAEMPFE       gestartet {bt['battles_started']}   "
+        f"Gegner-K.O. {bt['enemy_faints']}   "
+        f"Schaden-HP {bt['enemy_damage_hp']}   "
+        f"gewonnen {bt['v8_battle_success']}"
+    )
+
     roles = Counter()
     maps_seen = Counter()
     for fp in glob.glob(os.path.join(RT, "instances_data", "*.json")):

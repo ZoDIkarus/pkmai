@@ -6,7 +6,89 @@ PKMAI is an experimental reinforcement-learning project that trains a PPO agent 
 
 ## Current release
 
-The current architecture is **V10.25 — Skill Vault + Full Chain**.
+**V14 — `world_stage` als einzige Fortschritts-Wahrheit** (2026-09-03).
+
+### Warum V14
+
+30 Mio Steps lang hat kein Agent Route 1 durchquert. Ursache war nicht „zu
+langsam", sondern eine kaputte Bewertungs- und Checkpoint-Logik:
+
+1. **Kein einheitliches Fortschrittsmaß.** `max_episode_maps`, `outdoor_count`,
+   Champion-`max_maps` maßen alle unterschiedliche Dinge und zählten Alabastia-
+   Innenräume mit. Eine Haus-Tour konnte den Progress-Skill verbessern, den
+   Champion schützen und den Score heben — ohne Vertania zu erreichen.
+2. **Der Checkpoint-Zähler stand im „neue Map"-Block.** `_deep_outdoor_steps`
+   lief auf Route 1 genau einmal und erreichte nie 30 → `outdoor_2` wurde nie
+   gespeichert. Jede Episode begann den Alabastia→Route-1-Weg von vorn.
+3. **`outdoor_1` war Müll.** Ein Glitch-RAM-Read beim Warp (Bank kurz 3) hatte
+   einen Innenraum-State als „outdoor_1" gespeichert. Agenten resumten drinnen.
+4. **Falscher Ziel-Reward.** Die generische Navigation konnte ein Haus als
+   nächstes Ziel wählen; die ±2.5-Ziel-Formung überstimmte dann jede
+   Nord-Belohnung. „Zum Gebäude laufen" war profitabler als „nach Vertania".
+5. **Kontaminiertes Wege-Gedächtnis.** Alte `journey_routes` belohnten
+   Alabastia→Route 1 **und** Route 1→Alabastia.
+
+### Was V14 ändert
+
+- **`_world_stage()`** — eine Funktion, ein Wert (0–6):
+  `0` Alabastia-Innen/Intro · `1` Alabastia außen `(3,0)` · `2` Route 1 `(3,19)`
+  · `3` Vertania · `4` Route 2 · `5` Wald/weiter · `6` ≥1 Orden.
+  Champion, Skill-Vault, Checkpoints und der Tiefen-Bonus bewerten **nur** noch
+  diesen Wert. `_score`/`_protected_regression`/Frontier-Key: `max_stage` ist
+  die primäre Achse (nach Orden), `max_maps` nur noch letzter Tie-Breaker.
+- **Stage-Checkpoint als eigener Block**, jeden Schritt, aus dem „neue Map"-
+  Zweig herausgezogen. Speichert `stage_N.state.gz` **plus Sidecar**
+  `stage_N.meta.json` (Stage, Position, `has_starter`) sobald der Agent ≥25
+  Schritte am Stück tief auf einer neuen Stage steht — auf Korridor-Maps nur
+  weit im Norden (`y ≤ 18`). Resume nimmt nur Checkpoints mit **validierter**
+  Meta (`_valid_stage_checkpoints()`).
+- **Nord-Rampe** auf `NORTH_CORRIDOR_MAPS = {(3,0), (3,19)}`: `+1.2` pro neuer
+  nördlichster Y-Reihe (nicht farmbar). Der **Wald ist bewusst ausgenommen**
+  (Labyrinth). Auf diesen zwei Maps liefert `_progress_targets_for_map` **kein**
+  generisches Ziel mehr — die Nord-Rampe ist der alleinige Gradient.
+- **Indoor stumm** für Welt-Roller mit `stage < 3`: Bank-4-Räume geben null
+  Map-/Replay-Reward. Dazu `−0.05`/Schritt fürs Drinnen-Rumhängen mit Starter,
+  Indoor-Kachel-Bonus `2.0 → 0.35`.
+- **Starter zählt erst bei `story_stage == OUTDOOR`** — nicht schon im Labor.
+- **Journey-Routen** nur noch bei echtem Stage-Anstieg gespeichert, Kantenliste
+  danach geleert (kein Rückweg mehr in der Spur).
+- **128 Envs** (Test: 96 vs 120 = gleiche FPS), `PPO_N_STEPS 32`, Rollen
+  skalieren automatisch mit `NUM_ENVS`.
+- **Web-Dashboard:** `🧭 FLOTTEN-STATUS`-Panel (Welt-Tiefe + Balken + Map-Name,
+  draußen/drinnen/Kampf-Zähler, Tiefen-Durchbrüche, K.O./Schaden, Rollen, Live
+  `world_depth`-Events). `/api/state` → `fleet`-Block + `world_stage`.
+- **Watcher V13.1:** stickiges `watcher_ever_outdoors` — nach dem ersten
+  Draußen nie wieder Treppen-Skill; `btf/c1/c2/c3`-Debug-Leiste entfernt.
+
+### Nötige Bereinigung vor dem ersten V14-Start
+
+```bash
+cd ~/pokemon_ai_project && ./stop_all.sh
+rm -f runtime/curriculum_shared/outdoor_*.state.gz runtime/curriculum_shared/maps_*.state.gz \
+      runtime/curriculum_shared/progress_*.state.gz
+rm -f runtime/curriculum_states/agent_*/outdoor_*.state.gz \
+      runtime/curriculum_states/agent_*/maps_*.state.gz \
+      runtime/curriculum_states/agent_*/progress_*.state.gz
+rm -rf runtime/curriculum_shared/journey_routes runtime/curriculum_states/agent_{96..127}
+echo '{"max_world_stage":1}' > runtime/exploration_memory/global_progress.json
+rm -f runtime/instances_data/*.json
+./start_all.sh
+```
+
+Erhalten bleiben: `intro_complete`, `stairs_down`, `left_house`, `starter`,
+`starter_outdoor` (alle Bank-3-geprüft), Learner + Champion-Modell.
+
+### Offen / ungetestet
+
+Reward-, Checkpoint-, Rollen- und Stage-Logik haben **keine Unit-Tests**. Die
+zwei vorhandenen Tests prüfen nur das Web-Dashboard. Erfolgskriterium: im
+`🧭 FLOTTEN-STATUS` muss „draußen" über „drinnen" steigen und die Welt-Tiefe
+innerhalb ~1 h von `1` auf `2` (Route 1) gehen. Passiert das nicht, ist der
+nächste Schritt Frame-Stacking (V15, frisches Netz).
+
+---
+
+Die vorherige Architektur war **V10.25 — Skill Vault + Full Chain**.
 
 The central design separates three responsibilities:
 

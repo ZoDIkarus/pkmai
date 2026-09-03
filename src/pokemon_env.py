@@ -31,7 +31,7 @@ os.makedirs(STATS_DIR, exist_ok=True)
 
 
 class PokemonFireRedEnv(gym.Env):
-    BUILD_TAG = "V11.4_BATTLE_DETECT"
+    BUILD_TAG = "V14_WORLD_STAGE_SINGLE_TRUTH"
     metadata = {"render_modes": []}
 
     # Training V2 nutzt feste Spezialisten statt einer 90/10-Zufallsquote.
@@ -126,6 +126,16 @@ class PokemonFireRedEnv(gym.Env):
     # gratis (0), nicht bestraft.
     V9_EXPLORER_NEW_TILE_BONUS = 2.0
     V9_EXPLORER_REPEAT_TILE_PENALTY = 0.0
+
+    # V13.4 NORD-KORRIDOR: NUR die geraden Nord-Strecken vor dem Wald. Auf
+    # diesen Maps ist "hoch = Weg". Pro neuer noerdlichster Y-Reihe gibt es
+    # dichten Reward -> aus den 60 blinden Schritten wird eine Belohnungsrampe.
+    # Der Wald (Labyrinth) ist BEWUSST NICHT dabei; dort loest reine
+    # Exploration + Warp-/Tile-Reward. (3,0)=Alabastia (3,19)=Route 1.
+    # Vertania/Route 2 kommen dazu, sobald die Flotte dort zuverlaessig steht.
+    NORTH_CORRIDOR_MAPS = {(3, 0), (3, 19)}
+    NORTH_CORRIDOR_ROW_REWARD = 1.2
+    NORTH_CORRIDOR_MAX_ROWS = 45
     EXIT_ROUTE_EDGE_REWARD = 1.0
     EXIT_ROUTE_REVERSE_PENALTY = 0.0
     EXIT_ROUTE_REPEAT2_PENALTY = 0.0
@@ -167,6 +177,18 @@ class PokemonFireRedEnv(gym.Env):
     # FireRed: Bank 3 = Towns/Routes (Aussenwelt).
     OVERWORLD_BANK = 3
 
+    # V14: EINE WAHRHEIT fuer "wie weit sind wir". Aus (bank,map) + Badges.
+    #   0 = Alabastia-Innen / Intro (noch nie Bank!=4)
+    #   1 = Alabastia aussen (3,0)
+    #   2 = Route 1 (3,19)
+    #   3 = jenseits Route 1 (Vertania City) - 1 neue Overworld-Map nach Route 1
+    #   4 = Route 2                           - 2 neue
+    #   5 = Vertania-Wald / weiter            - 3+ neue
+    #   6 = >= 1 Orden
+    # Champion, Skill-Vault, Checkpoints, Journey-Routen bewerten NUR world_stage.
+    STAGE_PALLET = (3, 0)
+    STAGE_ROUTE1 = (3, 19)
+
     def __init__(
         self,
         rank=0,
@@ -175,10 +197,15 @@ class PokemonFireRedEnv(gym.Env):
         shared_transitions=None,
         shared_progress=None,
         shared_lock=None,
+        n_envs=120,
     ):
         super().__init__()
 
         self.rank = rank
+        # V13.2: Flottengroesse. _agent_role / _choose_episode_start /
+        # _is_long_full_probe verteilen die Rollen relativ dazu, statt feste
+        # Slot-Zahlen fuer genau 120 Envs zu hardcoden.
+        self.n_envs = max(1, int(n_envs))
         self.shared_edges = shared_edges
         self.shared_maps = shared_maps
         self.shared_transitions = shared_transitions
@@ -205,6 +232,7 @@ class PokemonFireRedEnv(gym.Env):
         self.episode_battles_started = 0
         self.episode_battles_completed = 0
         self.enemy_party_cache = []
+        self._last_enemy_seen_step = -999
         self.player_party_cache = []
         self.last_party_total_hp = 0
         self.faints_in_current_battle = 0
@@ -740,6 +768,14 @@ class PokemonFireRedEnv(gym.Env):
         """
         map_key = (int(bank), int(map_id))
 
+        # V14: auf den Nord-Korridor-Maps (Alabastia, Route 1) KEIN generisches
+        # Ziel. Die Frontier-/Warp-Auswahl koennte ein Haus als "naechstes Ziel"
+        # nehmen; die +-2.5 Ziel-Formung wuerde dann die Nord-Rampe ueberstimmen
+        # ("zum Gebaeude" statt "nach Vertania"). Auf diesen Maps ist die
+        # Nord-Rampe der ALLEINIGE Gradient.
+        if map_key in self.NORTH_CORRIDOR_MAPS:
+            return []
+
         warp_targets = []
         for t in self._combined_transitions():
             if len(t) != 8:
@@ -1000,6 +1036,96 @@ class PokemonFireRedEnv(gym.Env):
 
         return sorted(states)
 
+    # ------------------------------------------------------------------
+    # V14: world_stage = einzige Fortschritts-Wahrheit
+    # ------------------------------------------------------------------
+    def _world_stage(self):
+        """0=Alabastia-Innen/Intro, 1=Alabastia aussen, 2=Route 1,
+        3=Vertania, 4=Route 2, 5=Wald/weiter, 6=>=1 Orden."""
+        if int(getattr(self, "last_badges", 0) or 0) >= 1:
+            return 6
+        ow = {m for m in self.visited_maps if int(m[0]) != 4}
+        if not ow:
+            return 0
+        beyond = [
+            m for m in ow
+            if m != self.STAGE_PALLET and m != self.STAGE_ROUTE1
+        ]
+        if beyond:
+            return min(5, 2 + len(beyond))
+        if self.STAGE_ROUTE1 in ow:
+            return 2
+        return 1
+
+    def _stage_meta_path(self, name, shared=True):
+        d = SHARED_CURRICULUM_DIR if shared else self.rank_state_dir
+        return os.path.join(d, name + ".meta.json")
+
+    def _read_stage_meta(self, name):
+        for shared in (True, False):
+            try:
+                with open(self._stage_meta_path(name, shared)) as f:
+                    return json.load(f) or {}
+            except Exception:
+                continue
+        return {}
+
+    def _write_stage_meta(self, name, meta):
+        for shared in (True, False):
+            try:
+                p = self._stage_meta_path(name, shared)
+                with open(p + ".tmp", "w") as f:
+                    json.dump(meta, f)
+                os.replace(p + ".tmp", p)
+            except Exception:
+                pass
+
+    def _valid_stage_checkpoints(self):
+        """{n: 'stage_n'} - nur Checkpoints mit gueltiger Sidecar-Meta
+        (Stage passt, Starter vorhanden, Overworld-Bank)."""
+        out = {}
+        for name in getattr(self, "saved_milestones", ()) or ():
+            if not name.startswith("stage_"):
+                continue
+            try:
+                n = int(name.split("_", 1)[1])
+            except Exception:
+                continue
+            meta = self._read_stage_meta(name)
+            if (int(meta.get("stage", -1)) == n
+                    and bool(meta.get("has_starter"))
+                    and int(meta.get("bank", -1)) == self.OVERWORLD_BANK):
+                out[n] = name
+        return out
+
+    def _save_stage_checkpoint(self, stage, bank, map_id, x, y):
+        name = f"stage_{int(stage)}"
+        meta = {
+            "stage": int(stage), "bank": int(bank), "map": int(map_id),
+            "x": int(x), "y": int(y), "has_starter": True,
+            "step": int(self.total_steps), "agent": int(self.rank),
+        }
+        existing = self._read_stage_meta(name)
+        ok_existing = (
+            int(existing.get("stage", -1)) == int(stage)
+            and bool(existing.get("has_starter"))
+            and int(existing.get("bank", -1)) == self.OVERWORLD_BANK
+            and os.path.exists(self._shared_state_path(name))
+        )
+        if ok_existing:
+            self._write_stage_meta(name, meta)
+            return True
+        for p in (self._state_path(name), self._shared_state_path(name)):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+        if self._save_curriculum_state(name):
+            self._write_stage_meta(name, meta)
+            return True
+        return False
+
     def _save_curriculum_state(self, milestone_name):
         local_path = self._state_path(milestone_name)
         shared_path = self._shared_state_path(milestone_name)
@@ -1091,16 +1217,12 @@ class PokemonFireRedEnv(gym.Env):
             # Fail-open: Training soll bei IPC-Problemen nicht stehenbleiben.
             return True
 
-    def _claim_global_depth(self, map_count):
+    def _claim_global_depth(self, stage):
+        """V14: True nur wenn dieser Agent erstmals den globalen world_stage-
+        Rekord aller laufenden Agents uebertrifft. Nicht farmbar (shared lock).
         """
-        True nur wenn dieser Agent erstmals den globalen Episoden-Map-Rekord
-        aller laufenden Agents uebertrifft.
-
-        Der Rekord wird vom Trainer mit der bereits bekannten globalen Map-Anzahl
-        initialisiert, damit ein Neustart keine alten Tiefen-Boni erneut farmt.
-        """
-        map_count = int(map_count)
-        if map_count <= 0 or self.shared_progress is None:
+        stage = int(stage)
+        if stage <= 0 or self.shared_progress is None:
             return False
 
         try:
@@ -1109,17 +1231,17 @@ class PokemonFireRedEnv(gym.Env):
 
             try:
                 current = int(
-                    self.shared_progress.get("max_episode_maps", 0)
+                    self.shared_progress.get("max_world_stage", 0)
                 )
-                if map_count <= current:
+                if stage <= current:
                     return False
 
-                self.shared_progress["max_episode_maps"] = map_count
+                self.shared_progress["max_world_stage"] = stage
                 try:
                     tmp = GLOBAL_PROGRESS_FILE + ".tmp"
                     with open(tmp, "w") as f:
                         json.dump(
-                            {"max_episode_maps": map_count},
+                            {"max_world_stage": stage},
                             f,
                             separators=(",", ":")
                         )
@@ -1520,14 +1642,16 @@ class PokemonFireRedEnv(gym.Env):
                 key=lambda m: self._milestone_number(m, "badge_")
             )
 
-        # V11.3: die tiefste AUSSEN-Position ("bis hierher war ich schon") hat
-        # Vorrang - genau der "schnell wieder an die weiteste Stelle"-Gedanke.
-        outdoor_states = [m for m in saved if m.startswith("outdoor_")]
-        if outdoor_states:
-            return max(
-                outdoor_states,
-                key=lambda m: self._milestone_number(m, "outdoor_")
-            )
+        # V14: tiefste VALIDIERTE Stage-Front (Sidecar-Meta: Stage/Starter/
+        # Overworld-Bank stimmen). Kein blindes outdoor_N mehr - ein Glitch-
+        # Save kann so keine Flotte mehr in einen Innenraum ziehen.
+        stage_cps = self._valid_stage_checkpoints()
+        if stage_cps:
+            deepest_n = max(stage_cps)
+            # ~85% an die tiefste Front, ~15% frisch von starter_outdoor.
+            if "starter_outdoor" in saved and (self.rank % 7 == 0):
+                return "starter_outdoor"
+            return stage_cps[deepest_n]
 
         progress_states = [
             m for m in saved if m.startswith("progress_")
@@ -1575,11 +1699,11 @@ class PokemonFireRedEnv(gym.Env):
                 return high_maps[0]
             if high_levels:
                 return high_levels[0]
-            # V10.31: "draussen mit Starter" ist der Frontier-Startpunkt.
-            # Trotzdem die Haelfte der Progress-Agenten weiter aus "starter"
-            # (im Labor) starten lassen, damit die Labor-Ausgang-Passage
-            # weiter trainiert wird.
-            if "starter_outdoor" in saved and (self.rank % 2 == 0):
+            # V13.3: "draussen mit Starter" ist der Frontier-Startpunkt. ~80%
+            # starten dort (raus auf die Route), nur ~20% aus "starter" (im
+            # Labor), damit die Labor-Ausgang-Passage weiter geuebt wird - aber
+            # nicht mehr die Haelfte der Flotte im Labor parken.
+            if "starter_outdoor" in saved and (self.rank % 5 != 0):
                 return "starter_outdoor"
             if "starter" in saved:
                 return "starter"
@@ -1655,44 +1779,72 @@ class PokemonFireRedEnv(gym.Env):
         # (skill_vault_scores.json, 0-1000 = Erfolgsquote x1000) die Schwelle
         # erreicht. Ab "starter >= 800" -> freie Welt-Exploration mit
         # gestaffelten Horizonten (8k/16k/28k).
-        slot = self.rank % 120
+        n = self.n_envs
+        slot = self.rank % n
         s = self._skill_vault_scores()
         DONE = 880  # ~88% Erfolgsquote = Stufe gilt als gelernt
 
+        def _pct(frac, lo):
+            # relatives Band: mind. `lo` Slots, sonst `frac` der Flotte
+            return max(int(lo), int(round(n * frac)))
+
         # --- Phase 1: INTRO ---
         if s["intro"] < DONE:
-            if slot <= 105: return "intro", f"Intro Bootcamp {slot + 1:03d}"       # 106
-            return "stairs", f"Stairs Probe {slot - 105:02d}"                       # 14
+            probe = _pct(0.10, 6)
+            if slot < n - probe: return "intro", f"Intro Bootcamp {slot + 1:03d}"
+            return "stairs", f"Stairs Probe {slot - (n - probe) + 1:02d}"
 
         # --- Phase 2: TREPPE ---
         if s["stairs"] < DONE:
-            if slot <= 7:   return "intro", f"Intro Retention {slot + 1:02d}"       # 8
-            if slot <= 101: return "stairs", f"Stairs Bootcamp {slot - 7:03d}"      # 94
-            return "exit", f"Exit Probe {slot - 101:02d}"                           # 18
+            ret = _pct(0.06, 4)
+            probe = _pct(0.13, 8)
+            if slot < ret: return "intro", f"Intro Retention {slot + 1:02d}"
+            if slot < n - probe: return "stairs", f"Stairs Bootcamp {slot - ret + 1:03d}"
+            return "exit", f"Exit Probe {slot - (n - probe) + 1:02d}"
 
         # --- Phase 3: HAUSAUSGANG ---
         if s["exit"] < DONE:
-            if slot <= 3:   return "intro", f"Intro Retention {slot + 1:02d}"       # 4
-            if slot <= 13:  return "stairs", f"Stairs Retention {slot - 3:02d}"     # 10
-            if slot <= 105: return "exit", f"Exit Bootcamp {slot - 13:03d}"         # 92
-            return "starter", f"Starter Probe {slot - 105:02d}"                     # 14
+            r1 = _pct(0.03, 3)
+            r2 = r1 + _pct(0.08, 6)
+            probe = _pct(0.11, 8)
+            if slot < r1: return "intro", f"Intro Retention {slot + 1:02d}"
+            if slot < r2: return "stairs", f"Stairs Retention {slot - r1 + 1:02d}"
+            if slot < n - probe: return "exit", f"Exit Bootcamp {slot - r2 + 1:03d}"
+            return "starter", f"Starter Probe {slot - (n - probe) + 1:02d}"
 
         # --- Phase 4: STARTER (inkl. raus aus Eichs Labor) ---
         if s["starter"] < DONE:
-            if slot <= 3:   return "intro", f"Intro Retention {slot + 1:02d}"       # 4
-            if slot <= 11:  return "stairs", f"Stairs Retention {slot - 3:02d}"     # 8
-            if slot <= 21:  return "exit", f"Exit Retention {slot - 11:02d}"        # 10
-            if slot <= 107: return "starter", f"Starter Bootcamp {slot - 21:03d}"   # 86
-            return "progress", f"World Probe {slot - 107:02d}"                      # 12
+            r1 = _pct(0.03, 3)
+            r2 = r1 + _pct(0.06, 6)
+            r3 = r2 + _pct(0.08, 8)
+            probe = _pct(0.10, 8)
+            if slot < r1: return "intro", f"Intro Retention {slot + 1:02d}"
+            if slot < r2: return "stairs", f"Stairs Retention {slot - r1 + 1:02d}"
+            if slot < r3: return "exit", f"Exit Retention {slot - r2 + 1:02d}"
+            if slot < n - probe: return "starter", f"Starter Bootcamp {slot - r3 + 1:03d}"
+            return "progress", f"World Probe {slot - (n - probe) + 1:02d}"
 
-        # --- Phase 5: FREIE WELT-EXPLORATION ---
-        # Frueh-Skills nur noch Erhaltungs-Sockel, Rest erkundet die Welt.
-        if slot <= 1:  return "intro", f"Intro Vault {slot + 1:02d}"                # 2
-        if slot <= 9:  return "stairs", f"Stairs Vault {slot - 1:02d}"             # 8
-        if slot <= 17: return "exit", f"Exit Vault {slot - 9:02d}"                 # 8
-        if slot <= 23: return "starter", f"Starter Vault {slot - 17:02d}"          # 6
-        if slot <= 81: return "progress", f"World Push {slot - 23:02d}"            # 58
-        return "full", f"Full Journey {slot - 81:02d}"                             # 38
+        # --- Phase 5: FREIE WELT-EXPLORATION + KAMPF ---
+        # Frueh-Skills minimaler Erhaltungs-Sockel. Loewenanteil in progress
+        # (Route/Wald erkunden). battle+level fuer wilde Pokemon + Brock.
+        # full klein, aber NICHT null: nur Full-from-Beginning-Runs koennen den
+        # Champion befoerdern (Frontier/Milestone/Recent-Eval) und den Rollback-
+        # Punkt frisch halten. Ohne full friert der Champion fuer immer ein.
+        b_intro   = 2
+        b_stairs  = b_intro + 3
+        b_exit    = b_stairs + 3
+        b_starter = b_exit + 4
+        b_battle  = b_starter + _pct(0.11, 8)
+        b_level   = b_battle + _pct(0.07, 6)
+        b_full    = n - _pct(0.05, 4)          # letzte ~5% = Full Journey
+        if slot < b_intro:   return "intro", f"Intro Vault {slot + 1:02d}"
+        if slot < b_stairs:  return "stairs", f"Stairs Vault {slot - b_intro + 1:02d}"
+        if slot < b_exit:    return "exit", f"Exit Vault {slot - b_stairs + 1:02d}"
+        if slot < b_starter: return "starter", f"Starter Vault {slot - b_exit + 1:02d}"
+        if slot < b_battle:  return "battle", f"Battle {slot - b_starter + 1:02d}"
+        if slot < b_level:   return "level", f"Level {slot - b_battle + 1:02d}"
+        if slot < b_full:    return "progress", f"World Push {slot - b_level + 1:03d}"
+        return "full", f"Full Journey {slot - b_full + 1:02d}"
 
     def _choose_episode_start(self):
         self.saved_milestones = self._discover_saved_milestones()
@@ -1713,6 +1865,14 @@ class PokemonFireRedEnv(gym.Env):
             if "intro_complete" in saved: return "intro_complete"
             return "beginning"
         if role in ("battle", "level"):
+            # V12.5: NICHT im Labor (Rivalenkampf) starten, sondern DRAUSSEN im
+            # Gras (Route 1) - dort sind wilde Kaempfe haeufig und die
+            # Battle-Erkennung (0x02023BC8) ist bestaetigt. Rivalenkampf-Signal
+            # war unzuverlaessig.
+            stage_cps = self._valid_stage_checkpoints()
+            if stage_cps:
+                return stage_cps[max(stage_cps)]
+            if "starter_outdoor" in saved: return "starter_outdoor"
             if "starter" in saved: return "starter"
             if "left_house" in saved: return "left_house"
             return self._best_progress_milestone()
@@ -1723,61 +1883,37 @@ class PokemonFireRedEnv(gym.Env):
             if "intro_complete" in saved: return "intro_complete"
             return "beginning"
 
-        # Recovery: alle 36 Full-Agenten beginnen vorne. Nach dem ersten
-        # Full-Starter bleiben 24 Beginning-Agenten plus acht Bruecken.
-        slot = self.rank % 120
-        starter_ready = "starter" in saved
-
-        if not starter_ready:
-            if slot <= 111:
-                return "beginning"
-            if slot <= 115:
-                return "intro_complete" if "intro_complete" in saved else "beginning"
-            if slot <= 117:
-                if "stairs_down" in saved: return "stairs_down"
-                if "intro_complete" in saved: return "intro_complete"
-                return "beginning"
-            if "left_house" in saved: return "left_house"
-            if "stairs_down" in saved: return "stairs_down"
-            if "intro_complete" in saved: return "intro_complete"
-            return "beginning"
+        # Recovery / full: der Champion wird NUR an Full-from-Beginning-Runs
+        # gemessen -> die grosse Mehrheit der (wenigen) full-Agenten startet
+        # vorne. Erst wenn die Full-Kette steht, darf ein einzelner als
+        # Bruecken-Start tiefer einsteigen (haelt spaete Stages warm).
+        n = self.n_envs
+        slot = self.rank % n
+        b_full = n - max(4, int(round(n * 0.05)))
+        full_idx = max(0, slot - b_full)   # 0 = erster full-Agent
 
         if not bool(getattr(self, "full_chain_ready", False)):
             return "beginning"
 
-        if slot <= 111:
-            return "beginning"
-        if slot <= 113:
-            return "intro_complete" if "intro_complete" in saved else "beginning"
-        if slot <= 115:
-            if "stairs_down" in saved: return "stairs_down"
-            if "intro_complete" in saved: return "intro_complete"
-            return "beginning"
-        if slot <= 117:
+        if full_idx == 0:
             if "left_house" in saved: return "left_house"
             if "stairs_down" in saved: return "stairs_down"
-            return "beginning"
-        if "starter" in saved: return "starter"
-        if "left_house" in saved: return "left_house"
-        if "stairs_down" in saved: return "stairs_down"
-        if "intro_complete" in saved: return "intro_complete"
+            if "intro_complete" in saved: return "intro_complete"
         return "beginning"
 
     def _is_long_full_probe(self):
-        slot = self.rank % 120
-        saved = set(getattr(self, "saved_milestones", ()) or ())
-        if "starter" not in saved:
-            lo, count = 96, 8
-        elif not bool(getattr(self, "full_chain_ready", False)):
-            lo, count = 84, 16
-        else:
-            # V10.30: full-Slots sind jetzt 82-119 (38). Die erste Haelfte
-            # davon (82-99, 18 Slots) sind lange, cap-freie 32k-Probes.
-            lo, count = 82, 18
+        # V13.2: relativ zur Flotte. Die HINTERE Haelfte des full-Bandes sind
+        # lange, cap-freie Probes (laufen bis zur natuerlichen Truncation) -
+        # die vordere Haelfte bleibt gecappt, damit ueberhaupt regelmaessig
+        # Full-Episoden abschliessen (Recent-Eval braucht min_full_episodes).
+        n = self.n_envs
+        slot = self.rank % n
+        b_full = n - max(4, int(round(n * 0.05)))
+        lo = b_full + max(1, (n - b_full) // 2)
         return (
             self.training_objective == "full"
             and self.episode_start == "beginning"
-            and lo <= slot < lo + count
+            and slot >= lo
         )
 
     def _read_info_with_idle_frame(self):
@@ -2198,6 +2334,7 @@ class PokemonFireRedEnv(gym.Env):
             self.v9_last_pos = None
             self.v9_same_pos_steps = 0
             self.v9_episode_tiles = set()
+            self._north_corridor_best = {}  # (bank,map) -> noerdlichste Y
 
         if (
             self.total_steps == 1
@@ -2266,11 +2403,24 @@ class PokemonFireRedEnv(gym.Env):
         map_id = int(loc["map_id"]) if loc["valid"] else 0
         x = int(loc["x_pos"]) if loc["valid"] else 0
         y = int(loc["y_pos"]) if loc["valid"] else 0
-        # V11.4: Battle-Erkennung robuster. Das alte |u1-Feld bei 147074 lieferte
-        # immer 0. gBattleTypeFlags (0x02022FEC -> Offset 143340) ist waehrend
-        # JEDES Kampfes != 0. Beide Signale werden ge-ODER-t.
-        _bt_flags = int(info.get("battle_flags", 0) or 0)
-        in_battle = 1 if (int(info.get("in_battle", 0) or 0) or _bt_flags) else 0
+        # V12: Battle-Erkennung robust ueber MEHRERE Signale.
+        # 1) RAM-Flag-Kandidaten (deutsche BPRD01, siehe data.json)
+        # 2) FALLBACK: gueltige Gegner-Party im RAM = wir sind im Kampf.
+        #    read_enemy_party liest an der (bestaetigten) US/DE-Adresse 0x2402C
+        #    -> zuverlaessig, unabhaengig von den Flag-Bytes.
+        _bt_any = (
+            int(info.get("battle_flags", 0) or 0)
+            or int(info.get("bt_c1", 0) or 0)
+            or int(info.get("bt_c2", 0) or 0)
+            or int(info.get("bt_c3", 0) or 0)
+            or int(info.get("in_battle", 0) or 0)
+        )
+        # Frische Gegner-Sichtung (Zaehler laeuft nach Kampfende aus).
+        _enemy_present = (
+            self.total_steps - int(getattr(self, "_last_enemy_seen_step", -999))
+            <= 3
+        )
+        in_battle = 1 if (_bt_any or _enemy_present) else 0
         previous_battle_state = int(self.last_in_battle)
         battle_ended_without_faint = False
         if previous_battle_state == 0 and in_battle == 1:
@@ -2433,6 +2583,12 @@ class PokemonFireRedEnv(gym.Env):
 
             if enemy_party:
                 self.enemy_party_cache = enemy_party
+                if any(
+                    int(m.get("species_id", 0)) > 0
+                    and int(m.get("max_hp", 0)) > 0
+                    for m in enemy_party
+                ):
+                    self._last_enemy_seen_step = self.total_steps
                 for mon in enemy_party:
                     slot = int(mon.get("slot", -1))
                     species = int(mon.get("species_id", 0))
@@ -2771,10 +2927,50 @@ class PokemonFireRedEnv(gym.Env):
             if self.training_objective == "progress":
                 if pos_key not in self.v9_episode_tiles:
                     self.v9_episode_tiles.add(pos_key)
-                    reward += self.V9_EXPLORER_NEW_TILE_BONUS
-                    reward_events.append("v9_explorer_new_tile:+0.5")
+                    # V13.3: neue Kachel DRAUSSEN voll (+2.0), DRINNEN nur ein
+                    # Bruchteil (+0.35). Sonst farmt der Progress-Agent Eichs
+                    # Labor / Haeuser mit +2.0/Kachel ab und geht nie auf die
+                    # Route. Ein Pflicht-Gebaeude (Mart/Arena) bleibt trotzdem
+                    # leicht positiv, wird aber nicht attraktiver als Route 1.
+                    if bank == self.OVERWORLD_BANK:
+                        _tile_bonus = self.V9_EXPLORER_NEW_TILE_BONUS
+                        reward_events.append("v9_explorer_new_tile:+2.0")
+                    else:
+                        _tile_bonus = min(0.35, self.V9_EXPLORER_NEW_TILE_BONUS)
+                        reward_events.append("v9_explorer_new_tile_indoor:+0.35")
+                    reward += _tile_bonus
                 else:
                     reward += self.V9_EXPLORER_REPEAT_TILE_PENALTY
+
+            # V13.3: Progress/Battle/Level mit Starter, die drinnen herumhaengen
+            # (kein Pflicht-Gebaeude direkt am Anfang), kriegen einen kleinen
+            # Sog nach draussen. Die Route ist damit immer die profitablere Wahl.
+            if (
+                self.training_objective in ("progress", "battle", "level")
+                and self.has_starter
+                and bank != self.OVERWORLD_BANK
+                and self.indoor_steps_without_transition > 150
+            ):
+                reward -= 0.05
+                reward_events.append("indoor_drift:-0.05")
+
+            # V13.4: NORD-KORRIDOR. Auf den geraden Vor-Wald-Strecken
+            # (Alabastia, Route 1) dichter Reward pro neuer noerdlichster
+            # Reihe -> die 60 blinden Schritte werden zur Belohnungsrampe.
+            # NUR fuer die Welt-Roller, NIE im Wald. Nicht farmbar: es zahlt
+            # ausschliesslich fuer eine ECHTE neue noerdlichste Y-Reihe.
+            if (
+                self.training_objective in ("progress", "battle", "level", "full")
+                and (int(bank), int(map_id)) in self.NORTH_CORRIDOR_MAPS
+            ):
+                _mk = (int(bank), int(map_id))
+                _prev_best = self._north_corridor_best.get(_mk, int(y) + 1)
+                if int(y) < _prev_best:
+                    _rows = min(_prev_best - int(y), self.NORTH_CORRIDOR_MAX_ROWS)
+                    _r = _rows * self.NORTH_CORRIDOR_ROW_REWARD
+                    reward += _r
+                    reward_events.append(f"north_corridor:{map_id}:+{_r:.1f}")
+                    self._north_corridor_best[_mk] = int(y)
 
         # ---------------------------------------------------------
         # STORY SHAPING
@@ -3097,84 +3293,105 @@ class PokemonFireRedEnv(gym.Env):
             map_key = (bank, map_id)
             coord_key = (bank, map_id, x, y)
 
+            # V14: Welt-Roller, die Route 1 noch nicht ueberwunden haben
+            # (stage < 3), bekommen fuer Alabastia-INNENRAEUME (Bank 4)
+            # NULL Map-Reward. Eine Haus-Tour darf weder Score noch Progress
+            # erzeugen. Story-Rollen (intro/stairs/exit/starter) sind davon
+            # ausgenommen - die brauchen die Innenraeume.
+            _route_roller = self.training_objective in (
+                "progress", "battle", "level", "full"
+            )
+            _indoor_muted = (
+                _route_roller
+                and int(bank) == 4
+                and self._world_stage() < 3
+            )
+
             if map_key not in self.visited_maps:
                 self.visited_maps.add(map_key)
 
                 if map_key not in self.learning_seen_maps:
                     self.learning_seen_maps.add(map_key)
-                    if map_key in self.persistent_known_maps:
+                    if map_key in self.persistent_known_maps and not _indoor_muted:
                         reward += self.REPLAY_MAP_REWARD
                         reward_events.append(f"replay_map:+{self.REPLAY_MAP_REWARD:.2f}")
 
-                # V7.7: bekannte Maps sind neutral.
-                # Kein Reward und kein Progress-Timer-Reset.
-
-                # Persistenter Map-Reward: nur die allererste Entdeckung dieses
-                # Agents, und erst nachdem das Start-Haus verlassen wurde.
                 if map_key not in self.persistent_known_maps:
                     self.persistent_known_maps.add(map_key)
                     self.exploration_memory_dirty = True
                     self._nav_target_cache = None
 
-                    if self._claim_shared(
-                        self.shared_maps, map_key
-                    ):
+                    if _indoor_muted:
+                        reward_events.append("new_map_indoor_muted:+0")
+                    elif self._claim_shared(self.shared_maps, map_key):
                         self.last_progress_advance_step = self.total_steps
                         reward += self.NEW_MAP_REWARD
                         reward_events.append(
-                            "new_map_global:"
-                            f"+{self.NEW_MAP_REWARD:.2f}"
+                            f"new_map_global:+{self.NEW_MAP_REWARD:.2f}"
                         )
                     else:
-                        # V10.2:
-                        # Global bekannte Map, aber fuer DIESEN Agent neu.
-                        # PPO muss richtiges Nachmachen ebenfalls lernen.
                         local_map_reward = self.NEW_MAP_REWARD * 0.25
                         reward += local_map_reward
                         self.last_progress_advance_step = self.total_steps
                         reward_events.append(
-                            "new_map_local:"
-                            f"+{local_map_reward:.2f}"
+                            f"new_map_local:+{local_map_reward:.2f}"
                         )
 
-                map_count = len(self.visited_maps)
-
-                # V11.3 WELT-TIEFE = nur AUSSEN-Maps (Bank 3). Innenraeume wie
-                # das Rivalenhaus zaehlen NICHT als Fortschritt - sonst wird
-                # "6 Maps" durch einen optionalen Haus-Besuch in Alabastia
-                # vorgetaeuscht, obwohl die AI Route 1 nie durchquert hat.
-                outdoor_count = len({
-                    m for m in self.visited_maps
-                    if int(m[0]) == self.OVERWORLD_BANK
-                })
-
-                if self._claim_global_depth(outdoor_count):
-                    reward += self.NEW_GLOBAL_DEPTH_REWARD
+                # V14: TIEFEN-BONUS an world_stage gekoppelt (nicht an
+                # Raumanzahl). Nur ein echter Stage-Anstieg zahlt.
+                _stage = self._world_stage()
+                if _stage >= 2 and self._claim_global_depth(_stage):
+                    depth_bonus = self.NEW_GLOBAL_DEPTH_REWARD * _stage
+                    reward += depth_bonus
                     reward_events.append(
-                        f"world_depth:{outdoor_count}:"
-                        f"+{self.NEW_GLOBAL_DEPTH_REWARD:.2f}"
+                        f"world_depth:{_stage}:+{depth_bonus:.0f}"
                     )
-                    self._commit_journey_route()
+                    self.reward_event_counts["world_depth"] = (
+                        self.reward_event_counts.get("world_depth", 0) + 1
+                    )
                     self.run_stats["global_depth_records"] += 1
                     self._save_run_stats()
                     self.last_progress_advance_step = self.total_steps
-                    bridge = self._maybe_save_progress_bridge(
-                        f"world_depth_{outdoor_count}"
-                    )
-                    if bridge:
-                        milestone_saved = bridge
 
-                # Checkpoint bei jeder neuen AUSSEN-Map. bank==3 hier -> der
-                # Savestate liegt garantiert draussen (nicht im Rivalenhaus).
+            # V14: STAGE-CHECKPOINT - EIGENER Block, jeden Schritt, NICHT im
+            # "neue Map"-Zweig (dort lief der Zaehler nur 1x und erreichte nie
+            # 30). Speichert einen validierten Resume-Punkt (Sidecar-Meta:
+            # Stage/Position/Starter) sobald der Agent >= 25 Schritte am Stueck
+            # tief auf einer neuen Stage steht - auf Korridor-Maps nur weit im
+            # Norden (y <= 18).
+            if (
+                _route_roller
+                and self.has_starter
+                and in_battle == 0
+                and loc["valid"]
+                and int(bank) == self.OVERWORLD_BANK
+            ):
+                _stage_now = self._world_stage()
+                _mk = (int(bank), int(map_id))
+                if _mk == getattr(self, "_stage_hold_map", None):
+                    self._stage_hold_steps = getattr(self, "_stage_hold_steps", 0) + 1
+                else:
+                    self._stage_hold_map = _mk
+                    self._stage_hold_steps = 1
+                _north_ok = (
+                    _mk not in self.NORTH_CORRIDOR_MAPS or int(y) <= 18
+                )
                 if (
-                    bank == self.OVERWORLD_BANK
-                    and outdoor_count > int(getattr(self, "_saved_outdoor_depth", 0))
-                    and in_battle == 0
+                    _stage_now >= 2
+                    and _stage_now > int(getattr(self, "_saved_stage", 0))
+                    and self._stage_hold_steps >= 25
+                    and _north_ok
                 ):
-                    name = f"outdoor_{outdoor_count}"
-                    if self._save_curriculum_state(name):
-                        milestone_saved = name
-                    self._saved_outdoor_depth = outdoor_count
+                    if self._save_stage_checkpoint(_stage_now, bank, map_id, x, y):
+                        milestone_saved = f"stage_{_stage_now}"
+                        self._saved_stage = _stage_now
+                        self._commit_journey_route()
+                        self.episode_journey_edges = []
+                        bridge = self._maybe_save_progress_bridge(
+                            f"stage_{_stage_now}"
+                        )
+                        if bridge:
+                            milestone_saved = bridge
 
             if coord_key not in self.seen_coords:
                 self.seen_coords.add(coord_key)
@@ -3569,7 +3786,7 @@ class PokemonFireRedEnv(gym.Env):
         # fuer "Nordausgang finden + Route 1 anfangen"; lange Laeufe halten
         # die Route-1->Vertania->Route-2-Ketten. PROGRESS_STALL bleibt aktiv.
         if self.training_objective == "progress" and not truncated:
-            _tier = (self.rank % 120) % 3
+            _tier = (self.rank % self.n_envs) % 3
             _prog_cap = (12000, 22000, 40000)[_tier]
             # V11.4: Wer von der TIEFSTEN Aussen-Position resumt, steht an der
             # echten Grenze (z.B. Route 1 -> Vertania) und braucht Zeit zum
@@ -3612,6 +3829,7 @@ class PokemonFireRedEnv(gym.Env):
         info["has_starter"] = bool(self.has_starter)
         info["level"] = int(self.last_level)
         info["badges_count"] = int(self.last_badges)
+        info["world_stage"] = int(self._world_stage())
         info["frontier_maps"] = int(len(self.visited_maps))
         info["has_starter"] = bool(self.has_starter)
         info["level"] = int(self.last_level)
@@ -3671,12 +3889,12 @@ class PokemonFireRedEnv(gym.Env):
                         "enemy_faints": int(self.episode_enemy_faints),
                     },
                     "enemy_party": self.enemy_party_cache,
+                    "world_stage": int(self._world_stage()),
                     "global_depth": {
                         "episode_maps": int(len(self.visited_maps)),
-                        "record_maps": int(
-                            self.shared_progress.get(
-                                "max_episode_maps", 0
-                            )
+                        "episode_stage": int(self._world_stage()),
+                        "record_stage": int(
+                            self.shared_progress.get("max_world_stage", 0)
                         ) if self.shared_progress is not None else 0,
                     },
                     "journey_stats": {

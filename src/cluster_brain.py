@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Central RLlib PPO learner. Remote Ray nodes provide rollout environments."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import time
+from pathlib import Path
+
+import ray
+from ray.rllib.algorithms.ppo import PPOConfig
+from ray.tune.registry import register_env
+
+from cluster_config import build_environment_signature
+from pokemon_env import PokemonFireRedEnv
+from gymnasium import spaces
+import gymnasium as gym
+
+class ClusteredPokemonEnv(PokemonFireRedEnv):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.observation_space = spaces.Dict({
+            "image": spaces.Box(low=0, high=255, shape=(64, 64, 1), dtype=np.uint8),
+            "nav": spaces.Box(low=-1.0, high=1.0, shape=(28,), dtype=np.float32),
+        })
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CLUSTER_DIR = PROJECT_ROOT / "runtime" / "cluster"
+CHECKPOINTS_DIR = CLUSTER_DIR / "brain_checkpoints"
+POLICY_FILE = CLUSTER_DIR / "policy.json"
+
+
+def make_cluster_env(config: dict):
+    return ClusteredPokemonEnv(
+        rank=int(config.get("rank", 0)),
+        agent_count=int(config.get("agent_count", 1)),
+    )
+
+
+def publish_policy(version: int, checkpoint: str | None = None) -> None:
+    CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": version,
+        "checkpoint": checkpoint,
+        "signature": build_environment_signature(
+            observation_shape=(64, 64, 1), nav_features=28, action_count=7
+        ),
+        "updated_at": time.time(),
+    }
+    temporary = POLICY_FILE.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    os.replace(temporary, POLICY_FILE)
+
+
+def main() -> None:
+    CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
+    CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
+    env_runners = max(0, int(os.getenv("PKMAI_CLUSTER_ENV_RUNNERS", "1")))
+    checkpoint_every = max(1, int(os.getenv("PKMAI_CLUSTER_CHECKPOINT_EVERY", "10")))
+    register_env("pkmai_cluster_env", make_cluster_env)
+    ray.init(address=os.getenv("RAY_ADDRESS", "auto"), ignore_reinit_error=True)
+
+    config = (
+        PPOConfig()
+        .environment("pkmai_cluster_env", env_config={"agent_count": 1})
+        .framework("torch")
+        .training(model={"custom_model_config": {}})
+        .api_stack(
+            enable_rl_module_and_learner=False,
+            enable_env_runner_and_connector_v2=False,
+        )
+        .env_runners(num_env_runners=env_runners, num_envs_per_env_runner=1)
+    )
+    config.train_batch_size = 64
+    config.minibatch_size = 32
+    config.train_batch_size = 128
+    config.minibatch_size = 64
+    config.num_epochs = 1
+    algorithm = config.build()
+    version = 0
+    publish_policy(version)
+    try:
+        while True:
+            result = algorithm.train()
+            version += 1
+            checkpoint = None
+            if version % checkpoint_every == 0:
+                target = CHECKPOINTS_DIR / f"policy-v{version:08d}"
+                temporary = CHECKPOINTS_DIR / f".policy-v{version:08d}.tmp"
+                if temporary.exists():
+                    shutil.rmtree(temporary)
+                saved = Path(algorithm.save_to_path(str(temporary)))
+                os.replace(saved, target)
+                checkpoint = str(target)
+            publish_policy(version, checkpoint)
+            print(json.dumps({"policy_version": version, "timesteps": result.get("num_env_steps_sampled_lifetime", 0)}), flush=True)
+    finally:
+        algorithm.stop()
+        ray.shutdown()
+
+
+if __name__ == "__main__":
+    main()

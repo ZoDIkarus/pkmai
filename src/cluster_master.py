@@ -1,154 +1,134 @@
 #!/usr/bin/env python3
+"""Authenticated PKMAI cluster control plane; the brain remains the only writer."""
+
+from __future__ import annotations
+
 import json
 import os
 import secrets
-import socket
 import threading
 import time
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import JSONResponse
 import uvicorn
+
+from cluster_config import (
+    ClusterCompatibilityError,
+    ClusterSettings,
+    build_environment_signature,
+    validate_worker_registration,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = PROJECT_ROOT / "runtime"
 CLUSTER_DIR = RUNTIME_DIR / "cluster"
 CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
-
-KEY_FILE = CLUSTER_DIR / "cluster_key.txt"
+KEY_FILE = Path(os.getenv("PKMAI_CLUSTER_KEY_FILE", CLUSTER_DIR / "cluster_key.txt"))
 STATE_FILE = CLUSTER_DIR / "workers.json"
-
-HOST = "0.0.0.0"
+POLICY_FILE = CLUSTER_DIR / "policy.json"
 PORT = int(os.getenv("PKMAI_CLUSTER_PORT", "8765"))
 
-if not KEY_FILE.exists():
-    KEY_FILE.write_text(secrets.token_urlsafe(32) + "\n")
-    try:
+
+def _load_or_create_key() -> str:
+    if not KEY_FILE.exists():
+        KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        KEY_FILE.write_text(secrets.token_urlsafe(32) + "\n", encoding="utf-8")
         os.chmod(KEY_FILE, 0o600)
-    except Exception:
-        pass
+    return KEY_FILE.read_text(encoding="utf-8").strip()
 
-CLUSTER_KEY = KEY_FILE.read_text().strip()
 
-app = FastAPI(title="PKMAI LAN Cluster", version="1.0")
+CLUSTER_KEY = _load_or_create_key()
+SETTINGS = ClusterSettings(
+    environment_signature=build_environment_signature(
+        observation_shape=(64, 64, 1), nav_features=28, action_count=7
+    )
+)
+app = FastAPI(title="PKMAI Cluster Control", version="2")
 LOCK = threading.Lock()
-WORKERS = {}
+WORKERS: dict[str, dict] = {}
 
-def _load_state():
-    global WORKERS
-    if not STATE_FILE.exists():
-        return
+
+def _policy_version() -> int:
     try:
-        data = json.loads(STATE_FILE.read_text())
-        if isinstance(data, dict):
-            WORKERS = data
+        return int(json.loads(POLICY_FILE.read_text(encoding="utf-8")).get("version", 0))
     except Exception:
-        WORKERS = {}
+        return 0
 
-def _save_state():
-    tmp = STATE_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(WORKERS, indent=2))
-    os.replace(tmp, STATE_FILE)
 
-def _check_key(x_pkmai_key):
-    if not x_pkmai_key or not secrets.compare_digest(x_pkmai_key, CLUSTER_KEY):
+def _save_state() -> None:
+    temp = STATE_FILE.with_suffix(".json.tmp")
+    temp.write_text(json.dumps(WORKERS, sort_keys=True), encoding="utf-8")
+    os.replace(temp, STATE_FILE)
+
+
+def _check_key(value: str | None) -> None:
+    if not value or not secrets.compare_digest(value, CLUSTER_KEY):
         raise HTTPException(status_code=401, detail="invalid cluster key")
 
-def _local_ip():
-    # No external traffic required; UDP connect only selects interface.
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("10.255.255.255", 1))
-        return s.getsockname()[0]
-    except Exception:
-        return "127.0.0.1"
-    finally:
-        s.close()
+
+def _record(payload: dict, decision_reason: str) -> dict:
+    worker_id = str(payload.get("worker_id", "")).strip()
+    if not worker_id:
+        raise HTTPException(status_code=400, detail="worker_id required")
+    record = {
+        "worker_id": worker_id,
+        "hostname": str(payload.get("hostname", "")),
+        "build": str(payload.get("build", "")),
+        "signature": str(payload.get("signature", "")),
+        "active_agents": max(0, int(payload.get("active_agents", 0))),
+        "fps": max(0.0, float(payload.get("fps", 0.0))),
+        "policy_version": max(0, int(payload.get("policy_version", 0))),
+        "status": decision_reason,
+        "last_seen": time.time(),
+    }
+    with LOCK:
+        WORKERS[worker_id] = record
+        _save_state()
+    return record
+
 
 @app.get("/health")
 def health():
     now = time.time()
     with LOCK:
-        online = sum(
-            1 for w in WORKERS.values()
-            if now - float(w.get("last_seen", 0)) < 15
+        online = sum(now - float(row.get("last_seen", 0)) < 15 for row in WORKERS.values())
+    return {"ok": True, "role": "control-plane", "workers_online": online, "policy_version": _policy_version()}
+
+
+@app.post("/api/worker/register")
+def register(payload: dict, x_pkmai_key: str | None = Header(default=None)):
+    _check_key(x_pkmai_key)
+    try:
+        decision = validate_worker_registration(
+            SETTINGS,
+            worker_signature=str(payload.get("signature", "")),
+            worker_policy_version=int(payload.get("policy_version", 0)),
+            master_policy_version=_policy_version(),
         )
-    return {
-        "ok": True,
-        "role": "master",
-        "host": _local_ip(),
-        "port": PORT,
-        "workers_online": online,
-    }
+    except ClusterCompatibilityError as exc:
+        _record(payload, "rejected")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _record(payload, decision.reason)
+    return {"accepted": decision.accepted, "reason": decision.reason, "policy_version": decision.policy_version}
+
 
 @app.post("/api/worker/heartbeat")
-def worker_heartbeat(payload: dict, x_pkmai_key: str | None = Header(default=None)):
+def heartbeat(payload: dict, x_pkmai_key: str | None = Header(default=None)):
     _check_key(x_pkmai_key)
+    _record(payload, "online")
+    return {"ok": True, "policy_version": _policy_version()}
 
-    worker_id = str(payload.get("worker_id", "")).strip()
-    if not worker_id:
-        raise HTTPException(status_code=400, detail="worker_id required")
-
-    now = time.time()
-    record = {
-        "worker_id": worker_id,
-        "hostname": str(payload.get("hostname", "")),
-        "os": str(payload.get("os", "")),
-        "python": str(payload.get("python", "")),
-        "status": str(payload.get("status", "online")),
-        "requested_agents": int(payload.get("requested_agents", 0)),
-        "active_agents": int(payload.get("active_agents", 0)),
-        "fps": float(payload.get("fps", 0.0)),
-        "build": str(payload.get("build", "")),
-        "brain_version": str(payload.get("brain_version", "")),
-        "last_seen": now,
-    }
-
-    with LOCK:
-        WORKERS[worker_id] = record
-        _save_state()
-
-    return {
-        "ok": True,
-        "server_time": now,
-        "worker_id": worker_id,
-    }
-
-@app.get("/api/workers")
-def workers(x_pkmai_key: str | None = Header(default=None)):
-    _check_key(x_pkmai_key)
-    now = time.time()
-    with LOCK:
-        rows = []
-        for w in WORKERS.values():
-            item = dict(w)
-            age = max(0.0, now - float(item.get("last_seen", 0)))
-            item["age_seconds"] = round(age, 1)
-            item["online"] = age < 15
-            rows.append(item)
-    rows.sort(key=lambda x: x["worker_id"])
-    return {"workers": rows}
 
 @app.get("/api/cluster")
 def cluster(x_pkmai_key: str | None = Header(default=None)):
     _check_key(x_pkmai_key)
     now = time.time()
     with LOCK:
-        online = [
-            w for w in WORKERS.values()
-            if now - float(w.get("last_seen", 0)) < 15
-        ]
-    return {
-        "worker_count": len(online),
-        "remote_agents": sum(int(w.get("active_agents", 0)) for w in online),
-        "remote_fps": round(sum(float(w.get("fps", 0.0)) for w in online), 2),
-    }
+        workers = [dict(row, online=now - float(row.get("last_seen", 0)) < 15) for row in WORKERS.values()]
+    return {"policy_version": _policy_version(), "workers": sorted(workers, key=lambda item: item["worker_id"])}
+
 
 if __name__ == "__main__":
-    _load_state()
-    print("🌐 PKMAI LAN Cluster Master V1")
-    print(f"🔑 Key: {CLUSTER_KEY}")
-    print(f"🖥️  LAN: http://{_local_ip()}:{PORT}")
-    print("🧠 Brain/Training werden von V1 NICHT verändert.")
-    uvicorn.run(app, host=HOST, port=PORT, log_level="info")
+    app_port = PORT
+    uvicorn.run(app, host="0.0.0.0", port=app_port, log_level="info")

@@ -28,5 +28,6 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install -r /tmp/requirements-without-torch.txt
 
 COPY src ./src
+COPY scripts ./scripts
 
 ENTRYPOINT ["python", "-u", "src/train.py"]

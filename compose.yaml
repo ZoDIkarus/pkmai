@@ -36,6 +36,64 @@ services:
     memswap_limit: 512m
     restart: unless-stopped
 
+  cluster-master:
+    image: pkmai-trainer:local
+    container_name: pkmai-cluster-master
+    profiles: ["cluster"]
+    entrypoint: ["python", "-u", "src/cluster_master.py"]
+    volumes:
+      - ./runtime:/app/runtime
+    networks:
+      wireguard_net:
+        ipv4_address: 10.10.15.112
+    cpus: 0.25
+    mem_limit: 256m
+    memswap_limit: 512m
+    restart: unless-stopped
+
+  cluster-brain:
+    image: pkmai-trainer:local
+    container_name: pkmai-cluster-brain
+    profiles: ["cluster"]
+    entrypoint: ["bash", "scripts/start_cluster_brain.sh"]
+    environment:
+      RAY_NODE_IP: 10.10.15.113
+      PKMAI_CLUSTER_ENV_RUNNERS: "1"
+      PKMAI_CLUSTER_CHECKPOINT_EVERY: "10"
+    volumes:
+      - ./runtime:/app/runtime
+      - ./local:/app/local:ro
+    networks:
+      wireguard_net:
+        ipv4_address: 10.10.15.113
+    cpus: 1.25
+    mem_limit: 2g
+    memswap_limit: 3g
+    restart: "no"
+
+  cluster-worker:
+    image: pkmai-trainer:local
+    container_name: pkmai-cluster-worker
+    profiles: ["cluster-local-worker"]
+    entrypoint: ["bash", "scripts/start_cluster_worker.sh"]
+    environment:
+      RAY_ADDRESS: 10.10.15.113:6379
+      RAY_NODE_IP: 10.10.15.114
+      PKMAI_CLUSTER_MASTER_URL: http://10.10.15.112:8765
+      PKMAI_CLUSTER_KEY_FILE: /app/runtime/cluster/cluster_key.txt
+      PKMAI_WORKER_ID: ai-server-local-worker
+      PKMAI_WORKER_AGENTS: "1"
+    volumes:
+      - ./runtime:/app/runtime:ro
+      - ./local:/app/local:ro
+    networks:
+      wireguard_net:
+        ipv4_address: 10.10.15.114
+    cpus: 0.75
+    mem_limit: 1g
+    memswap_limit: 2g
+    restart: "no"
+
 networks:
   wireguard_net:
     external: true

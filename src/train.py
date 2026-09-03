@@ -18,8 +18,9 @@ from pokemon_env import PokemonFireRedEnv
 # ================================================================
 # Die wichtigsten Werte stehen absichtlich hier oben.
 
-# Local WSL target: 10 parallel trainers plus one independent watcher.
-NUM_ENVS = 10
+# 120 parallele Envs (Mac). Fuer kleinere Rechner runtersetzen - dann aber
+# auch die "% 120" Slot-Logik in pokemon_env._agent_role anpassen.
+NUM_ENVS = 120
 
 # Endlos-Training: laeuft in Bloecken weiter, bis du Ctrl+C drueckst.
 # TRAIN_CHUNK_TIMESTEPS ist nur die Groesse eines learn()-Blocks.

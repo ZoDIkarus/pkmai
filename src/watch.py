@@ -9,6 +9,10 @@ import glob
 from stable_baselines3 import PPO
 from firered_ram import read_player_location, read_player_party
 
+# Hinweis: Der Watcher startet BEWUSST immer vom Spielanfang - er ist die
+# End-to-End-Demo des aktuellen Hirns. Curriculum-Savestates sind nur fuer
+# die Trainings-Clients (schnelleres Lernen einzelner Abschnitte).
+
 
 # ================================================================
 # USER CONFIG / WATCHER TUNING
@@ -64,11 +68,22 @@ SKILL_MODELS = {
     "progress": os.path.join(MODEL_DIR, "pokemon_skill_progress_best.zip"),
 }
 
-# V10.25: stage-specific protected policies; Champion/latest are fallbacks.
+# V10.28: Stage-Routing wiederhergestellt. Fuer intro/stairs/exit/starter
+# gibt es eigene Skill-Vault-Snapshots, die auf ihrer Stage deutlich
+# staerker sind als die geteilte Full-Policy (siehe AI_HANDOFF.md Tabelle).
+# "progress" (alles nach dem Starter) bleibt bewusst beim Champion, weil
+# der progress-Skill-Vault-Score aktuell noch deutlich schwaecher ist und
+# die Objective im Training ohnehin auf "full" aufloest.
+STAGE_SKILLS_USING_VAULT = {"intro", "stairs", "exit", "starter"}
+
 def get_watcher_model_path(skill=None):
-    skill_path = SKILL_MODELS.get(str(skill or ""))
-    if skill_path and os.path.exists(skill_path):
-        return skill_path
+    if skill in STAGE_SKILLS_USING_VAULT:
+        vault_path = SKILL_MODELS.get(skill)
+        if vault_path and os.path.exists(vault_path):
+            return vault_path
+        # Kein Vault-File fuer diese Stage vorhanden -> sicher auf
+        # Champion zurueckfallen statt zu crashen.
+
     if os.path.exists(BEST_MODEL):
         return BEST_MODEL
     return LATEST_MODEL
@@ -610,6 +625,99 @@ def build_mapping_preview(
         "height_tiles": max(1, max(ys) - min(ys) + 1),
     }
 
+def _hp_color(ratio, fainted):
+    if fainted:
+        return (90, 90, 90)
+    if ratio <= 0.25:
+        return (60, 60, 240)   # rot (BGR)
+    if ratio <= 0.55:
+        return (60, 210, 240)  # gelb
+    return (120, 230, 90)      # gruen
+
+
+def draw_team_overlay(canvas, party, ui, x0, y0, w, h):
+    """Team-Leiste unten im Gameplay-Panel. Klick auf ein Pokemon -> Stats,
+    nochmal klicken -> weg. ui = dict mit 'expanded' + 'slots'."""
+    party = [m for m in (party or []) if int(m.get("max_hp", 0)) > 0][:6]
+    ui["slots"] = []
+    if not party:
+        return
+
+    overlay = canvas.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + w, y0 + h), (14, 18, 26), -1)
+    cv2.addWeighted(overlay, 0.82, canvas, 0.18, 0, canvas)
+    cv2.line(canvas, (x0, y0), (x0 + w, y0), (70, 78, 95), 1)
+
+    sw = w // 6
+    for i, mon in enumerate(party):
+        sx = x0 + i * sw
+        ratio = float(mon.get("hp_ratio", 0.0))
+        fainted = bool(mon.get("fainted", False))
+        sel = ui.get("expanded") == i
+        if sel:
+            cv2.rectangle(canvas, (sx + 2, y0 + 2), (sx + sw - 2, y0 + h - 2),
+                          (0, 230, 118), 1)
+        name = str(mon.get("name", "?"))[:9]
+        cv2.putText(canvas, name, (sx + 8, y0 + 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (235, 240, 250), 1, cv2.LINE_AA)
+        cv2.putText(canvas, f"Lv{mon.get('level', 0)}", (sx + 8, y0 + 38),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.40, (150, 160, 180), 1, cv2.LINE_AA)
+        # HP-Balken
+        bx0, bx1 = sx + 8, sx + sw - 10
+        by = y0 + 48
+        cv2.rectangle(canvas, (bx0, by), (bx1, by + 8), (40, 44, 54), -1)
+        fillw = int((bx1 - bx0) * max(0.0, min(1.0, ratio)))
+        if fillw > 0:
+            cv2.rectangle(canvas, (bx0, by), (bx0 + fillw, by + 8),
+                          _hp_color(ratio, fainted), -1)
+        cv2.putText(canvas, f"{mon.get('cur_hp',0)}/{mon.get('max_hp',0)}",
+                    (bx0, by + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.34,
+                    (140, 150, 168), 1, cv2.LINE_AA)
+        ui["slots"].append((sx, y0, sx + sw, y0 + h, i))
+
+    exp = ui.get("expanded")
+    if exp is not None and exp < len(party):
+        mon = party[exp]
+        pw, ph = 300, 176
+        px = x0 + w - pw - 8
+        py = y0 - ph - 6
+        ov = canvas.copy()
+        cv2.rectangle(ov, (px, py), (px + pw, py + ph), (18, 22, 32), -1)
+        cv2.addWeighted(ov, 0.92, canvas, 0.08, 0, canvas)
+        cv2.rectangle(canvas, (px, py), (px + pw, py + ph), (0, 230, 118), 1)
+        cv2.putText(canvas, f"{mon.get('name','?')}  Lv{mon.get('level',0)}",
+                    (px + 12, py + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.52,
+                    (0, 230, 118), 1, cv2.LINE_AA)
+        st = mon.get("stats", {})
+        lines = [
+            f"HP  {mon.get('cur_hp',0)}/{mon.get('max_hp',0)}",
+            f"ATK {st.get('attack',0)}   DEF {st.get('defense',0)}",
+            f"SPA {st.get('sp_attack',0)}   SPD {st.get('sp_defense',0)}   SPE {st.get('speed',0)}",
+        ]
+        for j, ln in enumerate(lines):
+            cv2.putText(canvas, ln, (px + 12, py + 48 + j * 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (215, 222, 234), 1, cv2.LINE_AA)
+        moves = mon.get("moves", []) or []
+        cv2.putText(canvas, "Moves:", (px + 12, py + 116),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.40, (150, 160, 180), 1, cv2.LINE_AA)
+        for j, mv in enumerate(moves[:4]):
+            cv2.putText(canvas, f"- {mv.get('name', mv.get('id','?'))}",
+                        (px + 20, py + 136 + j * 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.36, (200, 208, 220), 1, cv2.LINE_AA)
+
+
+def make_team_click_handler(ui):
+    def _on(event, mx, my, flags, param):
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+        for (sx0, sy0, sx1, sy1, idx) in ui.get("slots", []):
+            if sx0 <= mx <= sx1 and sy0 <= my <= sy1:
+                ui["expanded"] = None if ui.get("expanded") == idx else idx
+                return
+        ui["expanded"] = None
+    return _on
+
+
 def main():
     retro.data.Integrations.add_custom_path(CUSTOM_DIR)
 
@@ -670,6 +778,13 @@ def main():
     # Auf macOS sicher sichtbar platzieren.
     try:
         cv2.moveWindow(WINDOW, 40, 40)
+    except Exception:
+        pass
+
+    # Team-Overlay: Klick auf Pokemon -> Stats, nochmal -> weg.
+    team_ui = {"expanded": None, "slots": []}
+    try:
+        cv2.setMouseCallback(WINDOW, make_team_click_handler(team_ui))
     except Exception:
         pass
 
@@ -802,18 +917,45 @@ def main():
                 and int(mon.get("max_hp", 0) or 0) > 0
                 for mon in (watcher_party or [])
             )
-            if not bool(watcher_loc.get("trusted", False)):
-                watcher_skill = "intro"
-            elif int(watcher_info.get("in_battle", 0)) == 1:
-                watcher_skill = "progress"
-            elif not watcher_stairs_done:
-                watcher_skill = "stairs"
-            elif not watcher_left_house_rewarded:
-                watcher_skill = "exit"
-            elif not party_has_starter and p1_level < 5:
-                watcher_skill = "starter"
+
+            # V10.32: RAUM-basiertes Routing statt monotoner Flags.
+            # Problem vorher: Treppen-Skill bringt den Watcher 2F->1F, dann exit;
+            # wenn die Exit-Skill ins Straucheln kommt und wieder HOCH nach 2F
+            # laeuft, blieb das Routing (monotone Flags) auf "exit" -> die
+            # Exit-Skill war auf 2F verloren -> Treppen-Dauerloop.
+            # Jetzt: aktueller Raum bestimmt die Skill. Auf 2F immer Treppe
+            # (die kann "runter"), auf 1F immer Exit (die kann "raus"). Selbst
+            # wenn es pingpongt, macht jede Policy ihren lokalen Job und der
+            # Watcher kommt Stueck fuer Stueck raus.
+            watcher_outdoors = (bank == 3)
+            if watcher_outdoors or party_has_starter:
+                # Fruehstufen dauerhaft erledigt - nur noch Vorwaerts.
+                watcher_gameplay_ready = True
+                watcher_stairs_done = True
+                watcher_left_house_rewarded = True
+
+            _in_start_room = (
+                watcher_initial_indoor_room is not None
+                and (bank, map_id) == watcher_initial_indoor_room
+            )
+
+            if not watcher_gameplay_ready:
+                desired_skill = "intro"
+            elif party_has_starter and not watcher_outdoors:
+                # Starter da, noch in einem Gebaeude (Eichs Labor) -> raus.
+                desired_skill = "exit"
+            elif party_has_starter:
+                desired_skill = "progress"
+            elif watcher_outdoors:
+                desired_skill = "starter"
+            elif _in_start_room or watcher_initial_indoor_room is None:
+                # Noch/wieder im Startraum (2F) -> Treppe runter.
+                desired_skill = "stairs"
             else:
-                watcher_skill = "progress"
+                # Anderer Innenraum (1F) -> raus aus dem Haus.
+                desired_skill = "exit"
+
+            watcher_skill = desired_skill
 
             if (
                 watcher_skill != loaded_skill
@@ -985,7 +1127,9 @@ def main():
                 y = 0
 
         previous_battle_state = int(in_battle)
-        in_battle = int(info.get("in_battle", in_battle))
+        # V11.4: gBattleTypeFlags (Offset 143340) ODER altes Feld.
+        _btf = int(info.get("battle_flags", 0) or 0)
+        in_battle = 1 if (int(info.get("in_battle", 0) or 0) or _btf) else 0
         if previous_battle_state == 0 and in_battle == 1:
             watcher_battle_stats["started"] += 1
             save_watcher_battle_stats(watcher_battle_stats)
@@ -1178,7 +1322,11 @@ def main():
             gameplay_ready = bool(
                 trusted_loc and coord != (0, 0, 0, 0)
             )
-            watcher_gameplay_ready = gameplay_ready
+            # V10.32: STICKY. Ein einzelner untrusted RAM-Read (Dialog, Warp,
+            # Menue) darf den Watcher nicht zurueck in die Intro-Skill werfen.
+            # Nur der Anti-Loop-Reset setzt das wieder auf False.
+            if gameplay_ready:
+                watcher_gameplay_ready = True
             watcher_in_battle = in_battle
             watcher_step_reward = 0.01 if gameplay_ready else 0.0
 
@@ -1356,21 +1504,27 @@ def main():
             # Watcher-Anti-Loop-Reset:
             # Neue Modellversionen uebernehmen sonst denselben festgefahrenen
             # Emulatorzustand (z.B. PC -> Itemfach -> raus -> rein).
+            # V10.31: Wenn der Watcher schon einen Starter hat, ist ein
+            # Ruecksetzer auf den Spielanfang teuer (10 min Intro nochmal) und
+            # bringt ihn nur wieder an dieselbe schwere Stelle. In dieser Phase
+            # deutlich geduldiger sein - er soll den Weg aus Alabastia lernen,
+            # nicht alle 1800 Schritte neu anfangen.
+            _stuck_cap = 2500 if party_has_starter else 900
+            _room_cap = 6000 if party_has_starter else 1800
             if (
                 gameplay_ready
                 and in_battle == 0
                 and (
-                    watcher_stuck_counter >= 900
-                    or watcher_room_steps >= 1800
+                    watcher_stuck_counter >= _stuck_cap
+                    or watcher_room_steps >= _room_cap
                 )
             ):
-                print(
-                    f"🔄 Watcher Anti-Loop Reset: "
-                    f"still={watcher_stuck_counter}, room={watcher_room_steps} "
-                    f"(Episode {watcher_episode_reward:.2f})"
-                )
-
                 env.reset()
+                print(
+                    f"🔄 Watcher Anti-Loop Reset -> Spielanfang "
+                    f"(still={watcher_stuck_counter}, room={watcher_room_steps}, "
+                    f"Episode {watcher_episode_reward:.2f})"
+                )
 
                 watcher_step_reward = 0.0
                 watcher_episode_reward = 0.0
@@ -1392,6 +1546,7 @@ def main():
 
                 watcher_left_house_rewarded = False
                 watcher_stairs_done = False
+                watcher_gameplay_ready = False
                 watcher_initial_indoor_room = None
                 watcher_north_grass_rewarded = False
                 watcher_next_outdoor_map_rewarded = False
@@ -1528,6 +1683,12 @@ def main():
                 0:GAME_PANEL_W
             ] = game_view
 
+            # Team-Leiste unten im Gameplay-Panel (klickbar).
+            draw_team_overlay(
+                canvas, watcher_party, team_ui,
+                0, TOP_H + GAME_PANEL_H - 66, GAME_PANEL_W, 66
+            )
+
             # Persistentes Live Map Tiling: bekannte Tiles/Kanten nur einmal.
             map_view, map_meta = build_mapping_preview(
                 watcher_known_tiles,
@@ -1568,9 +1729,24 @@ def main():
                 cv2.LINE_AA
             )
 
+            _state_txt = "IM KAMPF" if in_battle else "Overworld"
+            _kaempfe = int(watcher_battle_stats.get("completed", 0))
+            # V11.4 DEBUG: rohe Kampf-Kandidaten-Werte zum Adressen-Finden.
+            _bt_dbg = (
+                f"btf={int(info.get('battle_flags',0) or 0)} "
+                f"c1={int(info.get('bt_c1',0) or 0)} "
+                f"c2={int(info.get('bt_c2',0) or 0)} "
+                f"old={int(info.get('in_battle',0) or 0)}"
+            )
             cv2.putText(
                 canvas,
-                f"RAM Bank {bank} Map {map_id} | X {x} Y {y} | Battle {in_battle} | Reward {watcher_step_reward:+.2f} | START spam x{watcher_start_spam_count}",
+                (
+                    f"Bank {bank} / Map {map_id}  ({x}, {y})"
+                    f"   -   {_state_txt}"
+                    f"   -   Kaempfe {_kaempfe}"
+                    f"   -   Skill: {str(watcher_skill).upper()}"
+                    f"   -   [{_bt_dbg}]"
+                ),
                 (16, 55),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.50,

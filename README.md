@@ -146,7 +146,12 @@ cat runtime/skill_vault_scores.json
 - Long Full probes must remain exempt from early house/stage caps; otherwise they terminate near 1,800 steps instead of their 32,768-step horizon.
 - Avoid hard-coded map coordinates. Navigation should use RAM positions, discovered edges and confirmed transitions.
 
-See [docs/AI_HANDOFF.md](docs/AI_HANDOFF.md) for the technical state, invariants, tests and recommended next work.
+**Current work log: [docs/AI_STATUS.md](docs/AI_STATUS.md)** — read this first. It tracks
+what changed, why, what is running, and what the next step is. Update it every session.
+
+See [docs/AI_HANDOFF.md](docs/AI_HANDOFF.md) for the deeper technical background, invariants and tests.
+
+Live runtime numbers: `python tools/pkmai_status.py`.
 
 ## Legal
 

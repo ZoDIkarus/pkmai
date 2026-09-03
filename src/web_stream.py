@@ -583,12 +583,33 @@ def get_state():
     battle_started = int(training_stats["run_totals"].get("battles_started",0))
     battle_completed = int(training_stats["run_totals"].get("battles_completed",0))
 
+    # V11.3: echte Welt-Tiefe (nur Aussen-Maps) + tiefster outdoor-Checkpoint.
+    world_depth = 0
+    deepest_outdoor = 0
+    try:
+        with open(os.path.join(RUNTIME_DIR, "exploration_memory", "global_progress.json")) as _f:
+            world_depth = int((json.load(_f) or {}).get("max_episode_maps", 0))
+    except Exception:
+        pass
+    try:
+        import glob as _glob
+        for _p in _glob.glob(os.path.join(RUNTIME_DIR, "curriculum_shared", "outdoor_*.state.gz")):
+            try:
+                deepest_outdoor = max(deepest_outdoor,
+                                      int(os.path.basename(_p).split("_")[1].split(".")[0]))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     return {
         "trainer_name": trainer_name,
         "version": int(version_meta.get("version", 0)),
         "training_timesteps": _live_learner_steps(int(version_meta.get("timesteps", 0))),
         "max_level": max(max_level, training_stats["max_level"]),
         "max_badges": max(max_badges, training_stats["max_badges"]),
+        "world_depth": world_depth,
+        "deepest_outdoor_checkpoint": deepest_outdoor,
         "total_steps": total_steps,
         "training_stats": training_stats,
         "global_exploration": global_exploration,
@@ -954,6 +975,7 @@ def index():
 <html>
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
     <title>Pokemon FireRed AI Live Dashboard</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
@@ -1368,7 +1390,7 @@ def index():
         #map-view, #rooms-view, #graphs-view { width: 100%; height: 100%; position: absolute; top:0; left:0; }
         #rooms-view { display: none; overflow-y: auto; padding: 24px; }
         #graphs-view { display:none; overflow-y:auto; padding:18px 22px 30px; background:#0c0e14; }
-        .graphs-kpis { display:grid; grid-template-columns:repeat(6,minmax(120px,1fr)); gap:10px; margin-bottom:12px; }
+        .graphs-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; margin-bottom:12px; }
         .graphs-kpi { background:#151821; border:1px solid #232738; border-radius:9px; padding:10px 12px; }
         .graphs-kpi .v { font-size:20px; font-weight:800; color:#00e676; }
         .graphs-kpi .k { font-size:9px; color:#7f879b; text-transform:uppercase; letter-spacing:.6px; margin-top:3px; }
@@ -1484,6 +1506,26 @@ def index():
         .chart-wrap { background:#0e1017; border:1px solid #232738; border-radius:6px; padding:5px; margin-top:6px; }
         .chart-label { font-size:9px; color:#888; margin:0 0 3px 4px; }
         .mini-chart { width:100%; height:72px; display:block; }
+
+        .agent-filter-bar {
+            position:absolute; left:50%; top:10px; transform:translateX(-50%);
+            z-index:1001;
+            display:flex; flex-wrap:wrap; gap:6px; align-items:center;
+            justify-content:center;
+            background:rgba(21,24,33,0.94); border:1px solid #232738;
+            border-radius:10px; padding:8px;
+            box-shadow:0 8px 24px rgba(0,0,0,0.5); backdrop-filter:blur(8px);
+            max-width:min(760px, calc(100vw - 40px));
+        }
+        .agent-filter-bar select {
+            background:#0e1017; color:#cdd6e5; border:1px solid #2f344a;
+            border-radius:6px; font-size:11px; padding:5px 6px; max-width:160px;
+        }
+        .agent-filter-bar .af-reset {
+            background:#2f344a; color:#fff; border:0; border-radius:6px;
+            font-size:13px; line-height:1; padding:5px 9px; cursor:pointer;
+        }
+        .agent-filter-bar.filtered { border-color:#00e676; }
     </style>
 <style id="champion-night-style">
 #champion-night-card{position:fixed;right:390px;top:72px;z-index:4800;width:285px;padding:10px 12px;border-radius:14px;background:linear-gradient(145deg,rgba(8,17,28,.96),rgba(15,27,41,.93));border:1px solid rgba(68,214,255,.28);box-shadow:0 14px 42px rgba(0,0,0,.34);backdrop-filter:blur(12px);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -1495,7 +1537,7 @@ def index():
 .cn-grid div{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.065);border-radius:9px;padding:7px 3px;text-align:center}
 .cn-grid b{display:block;font-size:13px;color:#f4f8ff}.cn-grid small{font-size:7px;color:#8191a7;text-transform:uppercase}
 .cn-foot{margin-top:7px;font-size:7px;color:#74879d}
-@media(max-width:1200px){#champion-night-card{right:18px;top:145px}}
+@media(max-width:1200px) and (min-width:821px){#champion-night-card{right:18px;top:145px}}
 </style>
 <style id="pkmai-window-tools-style">
 .pkmai-float-tools{position:absolute;right:8px;top:7px;display:flex;gap:4px;z-index:30}
@@ -1506,24 +1548,83 @@ def index():
 .pkmai-hidden{display:none!important}
 #pkmai-hidden-tray{position:fixed;left:10px;bottom:10px;z-index:6000;display:flex;gap:6px;flex-wrap:wrap;max-width:calc(100vw - 20px)}
 #pkmai-hidden-tray button{border:1px solid rgba(77,208,225,.25);background:rgba(10,18,28,.94);color:#aee8dd;border-radius:9px;padding:7px 10px;font-size:10px;cursor:pointer}
+.leaflet-container{touch-action:none}
+
+/* =====================  HANDY / MOBILE  =====================
+   Grundsatz: alles ist ein normaler vertikaler Scroll aus festen
+   Bloecken. NUR die Leaflet-Karte behaelt eine feste Hoehe (Pinch-Zoom).
+   Nichts schwebt, nichts ueberlappt, nichts ist verschiebbar oder
+   minimierbar. */
 @media(max-width:820px){
-  body{overflow:auto!important}
-  #map-view,#rooms-view,#graphs-view{position:relative!important;min-height:calc(100vh - 54px)!important;height:auto!important}
-  .pkmai-movable{position:relative!important;left:auto!important;right:auto!important;top:auto!important;bottom:auto!important;width:calc(100% - 16px)!important;max-width:none!important;margin:8px!important;transform:none!important}
-  #champion-night-card{position:relative!important;right:auto!important;top:auto!important;width:calc(100% - 16px)!important;margin:8px!important}
+  html{-webkit-text-size-adjust:100%}
+  body{height:auto!important;min-height:100vh!important;overflow-x:hidden!important;overflow-y:auto!important;-webkit-overflow-scrolling:touch;display:flex!important;flex-direction:column!important}
+
+  /* Reihenfolge: Header zuerst, dann die Info-Kacheln, dann der Inhalt */
+  header{order:1!important}
+  #learner-truth-hud{order:2!important}
+  #champion-night-card{order:3!important}
+  #main-container{order:4!important}
+
+  /* HEADER: klebt oben, Tabs zuerst und immer sichtbar */
+  header{position:sticky!important;top:0!important;z-index:300!important;flex-direction:column!important;align-items:stretch!important;gap:6px!important;padding:6px 8px!important}
+  .header-left{order:2!important;flex-wrap:wrap!important;gap:6px 10px!important;align-items:center!important}
+  .header-right{order:1!important;width:100%!important}
+  .tabs{display:flex!important;width:100%!important;gap:4px!important;flex-wrap:nowrap!important}
+  .tabs .tab-btn{flex:1 1 0!important;min-width:0!important;font-size:10px!important;padding:8px 4px!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important}
+  .logo-title{font-size:13px!important}
+  .team-label{font-size:9px!important}
+  .team-bar{gap:3px!important}
+  .team-slot{width:24px!important;height:24px!important}
+  .badge-bar{padding:3px 5px!important;gap:2px!important}
+  .badge-slot{width:19px!important;height:19px!important;font-size:10px!important}
+  .filter-control{width:100%!important;flex-wrap:wrap!important}
+
+  /* MAIN: kein 100vh-Kaefig mehr, alles im Fluss */
+  #main-container{position:static!important;overflow:visible!important;flex:none!important;height:auto!important}
+  #rooms-view,#graphs-view{position:relative!important;display:none;height:auto!important;min-height:auto!important;overflow:visible!important;padding:10px 10px calc(72px + env(safe-area-inset-bottom))!important}
+  /* Leaflet braucht feste Hoehe, sonst kollabiert die Karte / kein Zoom */
+  #map-view{position:relative!important;height:72vh!important;min-height:360px!important;overflow:hidden!important}
+
+  /* ALLE Panels: feste Kacheln - nicht schwebend, nicht verschiebbar,
+     nicht minimierbar */
+  #learner-truth-hud,#champion-night-card,.pkmai-movable,.hud-overlay,.detail-panel,
+  .agent-filter-bar,.pkmai-mobile-tile,.live-global,.v81skills{
+    position:static!important;inset:auto!important;left:auto!important;right:auto!important;top:auto!important;bottom:auto!important;
+    transform:none!important;width:auto!important;max-width:none!important;max-height:none!important;
+    margin:8px!important;z-index:auto!important;box-shadow:none!important;backdrop-filter:none!important;
+  }
+  .pkmai-mobile-tile{display:block!important}
+  .agent-filter-bar select{flex:1 1 42%!important;max-width:none!important;font-size:12px!important;padding:8px 6px!important}
+  /* Verschiebe- / Minimier- / Ausblende-Knoepfe komplett weg */
+  .pkmai-float-tools,#pkmai-hidden-tray,
+  #learner-truth-hud .lth-head button,#champion-night-card .cn-toggle{display:none!important}
+  /* falls vorher minimiert/ausgeblendet: erzwungen wieder voll anzeigen */
+  .pkmai-minimized{height:auto!important;min-height:0!important;overflow:visible!important}
+  .pkmai-hidden{display:block!important}
+  #learner-truth-hud.minimized .lth-body{display:grid!important}
+  #champion-night-card.minimized .cn-grid{display:grid!important}
+  #champion-night-card.minimized .cn-foot{display:block!important}
+  #champion-night-card.minimized{width:auto!important}
+
   .graphs-grid{grid-template-columns:1fr!important}
+  .graphs-kpis{grid-template-columns:repeat(2,1fr)!important}
   .journey-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .room-grid{grid-template-columns:1fr!important}
+  .agent-row,.agent-watcher{padding:11px 8px!important;font-size:12px!important}
+  .step-list{max-height:220px!important}
 }
 @media(max-width:480px){
   .journey-grid{grid-template-columns:1fr!important}
   .graph-card{min-height:320px!important}
+  .tabs .tab-btn{font-size:9px!important;padding:8px 3px!important}
+  .team-slot{width:21px!important;height:21px!important}
 }
 </style>
 <style id="learner-truth-style">
 #learner-truth-hud{position:fixed;left:16px;bottom:16px;z-index:4900;width:300px;padding:10px 12px;border-radius:13px;background:rgba(7,14,23,.96);border:1px solid rgba(82,222,172,.30);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 #learner-truth-hud.minimized .lth-body{display:none}.lth-head{display:flex;justify-content:space-between;align-items:center;color:#58e3a5;font-size:10px;font-weight:900}.lth-head button{border:0;background:rgba(255,255,255,.08);color:#b7c7d8;border-radius:7px;padding:2px 7px}
 .lth-body{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}.lth-cell{background:rgba(255,255,255,.045);border-radius:8px;padding:7px 5px;text-align:center}.lth-cell b{display:block;font-size:13px;color:#f5f8fc}.lth-cell small{font-size:7px;color:#8393a8;text-transform:uppercase}
-@media(max-width:820px){#learner-truth-hud{position:relative!important;left:auto!important;bottom:auto!important;width:calc(100% - 16px)!important;margin:8px!important}}
+@media(max-width:820px){#learner-truth-hud{position:static!important;left:auto!important;right:auto!important;top:auto!important;bottom:auto!important;transform:none!important;width:auto!important;margin:8px 8px 0!important;z-index:auto!important;order:2!important}}
 </style>
 </head>
 <body>
@@ -1628,8 +1729,11 @@ def index():
                 <div class="graphs-kpi"><div class="v" id="g-version">v0</div><div class="k">Modell</div></div>
                 <div class="graphs-kpi"><div class="v" id="g-episodes">0 / 0</div><div class="k">Beginning / Alle Episoden</div></div>
                 <div class="graphs-kpi"><div class="v" id="g-avgreward">0</div><div class="k">Ø Reward</div></div>
-                <div class="graphs-kpi"><div class="v" id="g-house">0%</div><div class="k">Intro Skill</div></div>
-                <div class="graphs-kpi"><div class="v" id="g-starter">0%</div><div class="k">Treppen Skill</div></div>
+                <div class="graphs-kpi"><div class="v" id="g-world-depth">0</div><div class="k">Welt-Tiefe (Außen-Maps)</div></div>
+                <div class="graphs-kpi"><div class="v" id="g-outdoor-cp">0</div><div class="k">Tiefster Checkpoint</div></div>
+                <div class="graphs-kpi"><div class="v" id="g-champ-steps">0</div><div class="k">Champion Steps</div></div>
+                <div class="graphs-kpi"><div class="v" id="g-champ-delta">0</div><div class="k">Learner − Champion</div></div>
+                <div class="graphs-kpi"><div class="v" id="g-champ-starter">0%</div><div class="k">Full Starter</div></div>
             </div>
             <div class="graphs-grid">
                 <div class="graph-card"><div class="graph-title">Lernkurve</div><div class="graph-sub">Ø Episode-Reward über echte PPO-Trainingsschritte.</div><div class="graph-canvas-wrap"><canvas id="graph-reward"></canvas></div></div>
@@ -1637,6 +1741,36 @@ def index():
                 <div class="graph-card"><div class="graph-title">Spiel-Fortschritt</div><div class="graph-sub">Bestes Level, Orden und Maps je Modellstand.</div><div class="graph-canvas-wrap"><canvas id="graph-progress"></canvas></div></div>
                 <div class="graph-card"><div class="graph-title">Festfahren / Anti-Loop</div><div class="graph-sub">Loops pro 100 echte Beginning-Runs; Curriculum wird separat gezählt.</div><div class="graph-canvas-wrap"><canvas id="graph-loops"></canvas></div></div>
             </div>
+        </div>
+        <div class="agent-filter-bar" id="agent-filter-bar">
+            <select id="af-role" onchange="setAgentFilter('role',this.value)">
+                <option value="">Alle Rollen</option>
+                <option value="intro">Intro</option>
+                <option value="stairs">Treppe</option>
+                <option value="exit">Haus-Exit</option>
+                <option value="starter">Starter</option>
+                <option value="progress">Progress</option>
+                <option value="full">Full Journey</option>
+            </select>
+            <select id="af-map" onchange="setAgentFilter('map',this.value)">
+                <option value="">Alle Maps</option>
+            </select>
+            <select id="af-starter" onchange="setAgentFilter('starter',this.value)">
+                <option value="">Starter egal</option>
+                <option value="1">hat Starter</option>
+                <option value="0">kein Starter</option>
+            </select>
+            <select id="af-stage" onchange="setAgentFilter('stage',this.value)">
+                <option value="">Alle Stages</option>
+            </select>
+            <select id="af-sort" onchange="setAgentFilter('sort',this.value)">
+                <option value="">Sortierung: Standard</option>
+                <option value="progress">Weitester Fortschritt</option>
+                <option value="maps">Meiste Maps</option>
+                <option value="level">Höchstes Level</option>
+                <option value="reward">Höchster Reward</option>
+            </select>
+            <button class="af-reset" onclick="resetAgentFilter()">×</button>
         </div>
         <div class="hud-overlay" id="hud">Lade 35 Agenten...</div>
 
@@ -1736,6 +1870,79 @@ def index():
             maxVisibleAgents = parseInt(val) || 0;
         }
 
+        // ---------- Agenten-Filter ----------
+        const agentFilter = { role:'', map:'', starter:'', stage:'', sort:'' };
+
+        function setAgentFilter(key, val) {
+            agentFilter[key] = val;
+            const bar = document.getElementById('agent-filter-bar');
+            if (bar) bar.classList.toggle('filtered',
+                !!(agentFilter.role || agentFilter.map || agentFilter.starter
+                   || agentFilter.stage || agentFilter.sort));
+            if (typeof updateDashboard === 'function') updateDashboard();
+        }
+
+        function resetAgentFilter() {
+            Object.keys(agentFilter).forEach(k => agentFilter[k] = '');
+            ['af-role','af-map','af-starter','af-stage','af-sort'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+            const bar = document.getElementById('agent-filter-bar');
+            if (bar) bar.classList.remove('filtered');
+            if (typeof updateDashboard === 'function') updateDashboard();
+        }
+
+        function agentPassesFilter(i) {
+            const f = agentFilter;
+            if (f.role && String(i.training_objective || i.agent_role || '') !== f.role) return false;
+            if (f.map && String(i.room || '') !== f.map) return false;
+            if (f.starter === '1' && !i.has_starter) return false;
+            if (f.starter === '0' && i.has_starter) return false;
+            if (f.stage && String(i.story_stage || '') !== f.stage) return false;
+            return true;
+        }
+
+        const STAGE_ORDER = {
+            INTRO:0, F2_TO_STAIRS:1, F1_TO_EXIT:2, OUTDOOR:3,
+            STARTER:4, PROGRESS:5, BATTLE:6, BADGE1:7
+        };
+        function agentProgressRank(i) {
+            let r = (STAGE_ORDER[i.story_stage] || 0) * 1000;
+            r += Number(i.visited_maps || 0) * 40;
+            r += Number(i.level || 0) * 5;
+            r += Number(i.badges || 0) * 500;
+            if (i.has_starter) r += 300;
+            return r;
+        }
+
+        function agentSortKey(i) {
+            switch (agentFilter.sort) {
+                case 'progress': return agentProgressRank(i);
+                case 'maps':     return Number(i.visited_maps || 0);
+                case 'level':    return Number(i.level || 0);
+                case 'reward':   return Number(i.reward || 0);
+                default:         return 0;
+            }
+        }
+
+        function syncAgentFilterOptions(instances) {
+            const fill = (id, values) => {
+                const sel = document.getElementById(id);
+                if (!sel) return;
+                const have = new Set([...sel.options].map(o => o.value));
+                [...values].sort().forEach(v => {
+                    if (v && !have.has(v)) {
+                        const o = document.createElement('option');
+                        o.value = v; o.textContent = v;
+                        sel.appendChild(o);
+                    }
+                });
+            };
+            fill('af-map', new Set(instances.map(i => String(i.room || '')).filter(Boolean)));
+            fill('af-stage', new Set(instances.map(i => String(i.story_stage || '')).filter(Boolean)));
+        }
+
         const map = L.map('map-view', {
             crs: L.CRS.Simple,
             minZoom: -3,
@@ -1747,12 +1954,42 @@ def index():
         map.setMaxBounds([[-500,-500],[3500,3500]]);
         map.fitBounds([[900, 1100], [2600, 2050]]);
 
-        // Overworld uses the normal Kanto image only.
-        const overworldBackground = L.imageOverlay(
-            '/map.png',
-            [[0, 0], [3000, 3000]],
-            { opacity: 0.62, interactive: false }
-        ).addTo(map);
+        // Beim ersten Laden ist der Container u.U. noch 0px hoch (CSS/Layout
+        // noch nicht fertig) -> Leaflet rendert dann eine 0x0-Karte. Nach dem
+        // Layout neu vermessen und einpassen. Wichtig fuer Handy.
+        function _initMapSize() {
+            map.invalidateSize();
+            map.fitBounds([[900, 1100], [2600, 2050]]);
+        }
+        window.addEventListener('load', () => {
+            _initMapSize();
+            setTimeout(_initMapSize, 250);
+            setTimeout(_initMapSize, 800);
+        });
+        if (document.readyState === 'complete') setTimeout(_initMapSize, 100);
+
+        // Optionales Kanto-Hintergrundbild. Fehlt es (kein legaler Map-Asset
+        // vorhanden -> assets/maps/kanto_map.png), bleibt die Karte trotzdem
+        // nutzbar: die abgelaufenen Tiles / Kanten werden ohnehin live
+        // darueber gezeichnet ("Fog of War" aus echten Agenten-Daten).
+        let overworldBackground = null;
+        (function tryLoadBackground(){
+            const probe = new Image();
+            probe.onload = () => {
+                overworldBackground = L.imageOverlay(
+                    '/map.png', [[0, 0], [3000, 3000]],
+                    { opacity: 0.55, interactive: false }
+                ).addTo(map);
+            };
+            probe.onerror = () => {
+                // Kein Bild -> dezentes Raster als Orientierung.
+                const c = document.querySelector('#map-view');
+                if (c) c.style.background =
+                    'repeating-linear-gradient(0deg,#0c0e14,#0c0e14 39px,#12151f 40px),'
+                  + 'repeating-linear-gradient(90deg,#0c0e14,#0c0e14 39px,#12151f 40px)';
+            };
+            probe.src = '/map.png?probe=' + Date.now();
+        })();
 
         const MAP_OFFSETS = {
             '3,0': [1410, 2320],
@@ -1816,6 +2053,14 @@ def index():
             const showOverlays = t === 'map';
             document.getElementById('hud').style.display = showOverlays ? 'block' : 'none';
             document.getElementById('detail-panel').style.display = showOverlays ? 'block' : 'none';
+            const afb = document.getElementById('agent-filter-bar');
+            if (afb) afb.style.display = showOverlays ? 'flex' : 'none';
+            // Live-Brain- und Champion-Karten gehoeren nur auf die Map. Auf der
+            // Graphs-Seite stehen dieselben Zahlen jetzt in der KPI-Zeile.
+            ['learner-truth-hud', 'champion-night-card'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = showOverlays ? '' : 'none';
+            });
 
             if (t === 'rooms') {
                 updateGlobalMapping(true);
@@ -1824,8 +2069,21 @@ def index():
             if (t === 'map') {
                 updateGlobalMapping(true);
                 setTimeout(() => map.invalidateSize(), 50);
+                setTimeout(() => map.invalidateSize(), 350);
             }
         }
+
+        // Handy: nach Dreh / Resize die Leaflet-Karte neu vermessen, sonst
+        // bleibt sie grau oder laesst sich nicht mehr zoomen.
+        let _mapResizeT;
+        function _remeasureMap() {
+            clearTimeout(_mapResizeT);
+            _mapResizeT = setTimeout(() => {
+                if (currentTab === 'map') map.invalidateSize();
+            }, 200);
+        }
+        window.addEventListener('resize', _remeasureMap);
+        window.addEventListener('orientationchange', _remeasureMap);
 
         async function updateSkeleton() {
             try {
@@ -1917,9 +2175,12 @@ def index():
         function selectAgent(id) {
             const n = Number(id);
             selectedAgentId = (selectedAgentId === n) ? null : n;
+            // Sofortiges, leichtes Feedback aus dem Cache. Die schweren
+            // Refreshs (Karten-Marker, HUD-Liste, Exploration-Layer) macht der
+            // 1s-Intervall gleich von selbst - kein synchroner
+            // updateDashboard() + force-Redraw mehr, der beim Klick die halbe
+            // Seite neu aufbaut und die Stats kurz leer blinken laesst.
             renderSelectedAgent();
-            updatePersistentExploration(true);
-            updateDashboard();
         }
 
         let latestParty = [];
@@ -2068,20 +2329,29 @@ def index():
             const inst = getSelectedInstance();
             if (!inst) return;
 
+            const isW = Number(inst.id) === 99;
+
+            // Kopfzeile (Team-Leiste + Orden + Label) zeigt IMMER den Watcher,
+            // egal welcher Agent gerade auf der Karte fokussiert ist. Nur das
+            // Detail-Panel unten wechselt mit der Auswahl. So "verschwinden"
+            // beim Anklicken keine Stats mehr.
+            const headInst = latestInstances.find(i => Number(i.id) === 99) || inst;
             document.getElementById('hud-trainer').innerText =
-                (inst.name || 'Unknown').replace(' (Watcher)', '');
+                (Number(headInst.id) === 99)
+                    ? `🎮 ${(window.__trainerName || 'Alex')} · Live-Run`
+                    : (headInst.name || 'Unknown').replace(' (Watcher)', '');
 
-            const party = inst.party || [];
-            updateParty(party);
+            updateParty(headInst.party || []);
 
-            const badges = Number(inst.badges || 0);
+            const badges = Number(headInst.badges || 0);
             for (let i = 1; i <= 8; i++) {
                 const el = document.getElementById(`badge-${i}`);
                 if (i <= badges) el.classList.add('active');
                 else el.classList.remove('active');
             }
 
-            document.getElementById('detail-name').innerText = inst.name || `Agent ${inst.id}`;
+            document.getElementById('detail-name').innerText =
+                isW ? `🎮 Live-Run · ${inst.name || ''}` : (inst.name || `Agent ${inst.id}`);
             document.getElementById('detail-room').innerText = inst.room || `Bank ${inst.bank} / Map ${inst.map}`;
             document.getElementById('detail-steps').innerText = Number(inst.steps || 0).toLocaleString();
             document.getElementById('detail-reward').innerText = Number(inst.reward || 0).toFixed(2);
@@ -2210,6 +2480,11 @@ def index():
 
                 document.getElementById('g-steps').innerText=Number(state.training_timesteps||0).toLocaleString();
                 document.getElementById('g-version').innerText=`v${String(state.version||0).padStart(6,'0')}`;
+                const wd=Number(state.world_depth||0);
+                const gwd=document.getElementById('g-world-depth');
+                if(gwd){gwd.innerText=wd; gwd.style.color = wd>=3 ? '#00e676' : (wd>=2 ? '#ffea00' : '#ff8a65');}
+                const goc=document.getElementById('g-outdoor-cp');
+                if(goc) goc.innerText='outdoor_'+Number(state.deepest_outdoor_checkpoint||0);
                 const rt=st.run_totals||{};
                 const skillRuns =
                     Number(rt.v2_intro_episodes||0) +
@@ -2218,8 +2493,22 @@ def index():
                 document.getElementById('g-episodes').innerText=
                     `${skillRuns.toLocaleString()} / ${Number(rt.all_episodes||0).toLocaleString()}`;
                 document.getElementById('g-avgreward').innerText=Number(st.avg_episode_reward||0).toFixed(1);
-                document.getElementById('g-house').innerText=`${Number(skillRates.intro||0).toFixed(1)}%`;
-                document.getElementById('g-starter').innerText=`${Number(skillRates.stairs||0).toFixed(1)}%`;
+                try {
+                    const [tsr, cr] = await Promise.all([
+                        fetch('/api/trainer-status?ts='+Date.now()),
+                        fetch('/api/champion?ts='+Date.now())
+                    ]);
+                    const tst = await tsr.json();
+                    const champ = await cr.json();
+                    const cm = champ.metrics || {};
+                    document.getElementById('g-champ-steps').innerText =
+                        Number(tst.champion_steps||champ.timesteps||0).toLocaleString('de-DE');
+                    const dv = Number(tst.delta_steps||0);
+                    document.getElementById('g-champ-delta').innerText =
+                        (dv>=0?'+':'') + dv.toLocaleString('de-DE');
+                    document.getElementById('g-champ-starter').innerText =
+                        `${(Number(cm.full_starter_permille||0)/10).toFixed(1)}%`;
+                } catch(e) {}
 
                 if (!hist.length) return;
                 const labels=hist.map(p=>Number(p.timesteps||0).toLocaleString());
@@ -2722,9 +3011,20 @@ def index():
 
 document.getElementById('model-ver').innerText = `v${String(state.version).padStart(6, '0')}`;
 
+                window.__trainerName = state.trainer_name || 'Alex';
                 const instances = state.instances || [];
                 latestInstances = instances;
                 instances.forEach(pushHistory);
+                syncAgentFilterOptions(instances);
+
+                // Arbeitskopie: Watcher (id 99) IMMER als erste Zeile,
+                // danach optional nach Fortschritt / Maps / Level sortiert.
+                let workInstances = instances.slice();
+                workInstances.sort((a, b) => {
+                    if (Number(a.id) === 99) return -1;
+                    if (Number(b.id) === 99) return 1;
+                    return agentFilter.sort ? agentSortKey(b) - agentSortKey(a) : 0;
+                });
 
                 // Falls Watcher noch kein party-Feld in seiner Instanz hat,
                 // die alte API-Fallback-Party nur dem Watcher zuordnen.
@@ -2740,18 +3040,27 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                 ) {
                     selectedAgentId = null;
                 }
+                const _anyFilter = !!(agentFilter.role || agentFilter.map
+                    || agentFilter.starter || agentFilter.stage);
+                const _shown = _anyFilter
+                    ? workInstances.filter(i => Number(i.id) === 99 || agentPassesFilter(i)).length
+                    : instances.length;
                 let hudHtml = `
                     <div class="hud-title">
-                        <span>Aktive Instanzen (${instances.length})</span>
+                        <span>Instanzen ${_shown}${_anyFilter ? ' / ' + instances.length : ''}${agentFilter.sort ? ' ↓' : ''}</span>
                         <span class="agent-badge">Max Speed</span>
                     </div>
                 `;
 
                 let renderedTrainCount = 0;
+                let listedCount = 0;
 
-                instances.forEach(inst => {
+                workInstances.forEach(inst => {
                     const isWatcher = Number(inst.id) === 99;
-                    const shouldRender = isAgentVisible(
+                    const isSelected = Number(inst.id) === Number(selectedAgentId);
+                    const keep = isWatcher || isSelected || agentPassesFilter(inst);
+
+                    const shouldRender = keep && isAgentVisible(
                         inst.id, isWatcher, renderedTrainCount
                     );
 
@@ -2760,21 +3069,25 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                     }
 
                     const markerColor = agentColor(inst.id);
-                    const selectedClass =
-                        Number(inst.id) === Number(selectedAgentId) ? 'selected' : '';
+                    const selectedClass = isSelected ? 'selected' : '';
                     const nameClass = isWatcher ? 'agent-watcher' : '';
 
                     // HUD-Liste bleibt immer klickbar, auch wenn ein anderer Agent
                     // im Fokus ist. So kann man direkt umschalten.
-                    hudHtml += `
+                    if (keep) {
+                        listedCount++;
+                        const starterTag = inst.has_starter
+                            ? '<span class="agent-badge" style="color:#7df9b7">🐣</span>' : '';
+                        hudHtml += `
                         <div class="agent-row ${nameClass} ${selectedClass}" onclick="selectAgent(${inst.id})">
                             <span class="agent-name-wrap">
                                 <span class="agent-color-dot" style="background:${markerColor}"></span>
-                                <span>${inst.name}</span>
+                                <span>${isWatcher ? '🎮 Live-Run · ' + (inst.name || '') : inst.name}</span>
                             </span>
-                            <span>${inst.room} (${inst.steps} ep)</span>
+                            <span>${starterTag} ${inst.room} · ${inst.story_stage || ''} (${inst.steps} ep)</span>
                         </div>
                     `;
+                    }
 
                     if (shouldRender) {
                         const curPos = getLeafletCoords(
@@ -2929,6 +3242,10 @@ setInterval(refreshChampionNight,2000);refreshChampionNight();
 <div id="pkmai-hidden-tray"></div>
 <script id="pkmai-window-tools-js">
 (function(){
+  // Auf dem Handy sind alle Panels feste Kacheln: kein Verschieben,
+  // kein Minimieren, kein Ausblenden. Window-Tools komplett aus.
+  const isMobile=()=>matchMedia('(max-width:820px)').matches;
+  if(isMobile())return;
   const tray=document.getElementById('pkmai-hidden-tray');
   const preferred=['#champion-night-card','.v81skills','.live-global','.instance-panel','.agents-panel','.agent-list','.global-ai','.watcher-panel'];
   function titleOf(el){const t=el.querySelector('.cn-title,.graph-title,.live-global-title,h1,h2,h3,b,strong');return (t&&t.textContent.trim())||el.id||'Fenster';}
@@ -2971,6 +3288,26 @@ setInterval(refreshChampionNight,2000);refreshChampionNight();
 })();
 </script>
 <script id="learner-truth-js">async function refreshLearnerTruth(){try{const r=await fetch('/api/trainer-status?ts='+Date.now());const d=await r.json();const f=n=>Number(n||0).toLocaleString('de-DE');document.getElementById('lth-learner').textContent=f(d.learner_steps);document.getElementById('lth-champion').textContent=f(d.champion_steps);document.getElementById('lth-delta').textContent=(Number(d.delta_steps||0)>=0?'+':'')+f(d.delta_steps);}catch(e){}}setInterval(refreshLearnerTruth,1000);refreshLearnerTruth();</script>
+
+<script id="pkmai-mobile-relayout">
+(function(){
+  // Auf dem Handy: die Overlay-Panels, die im Desktop ueber der Karte
+  // schweben (.live-global GLOBAL AI, .v81skills V8.4 SKILLS), aus der
+  // Karte herausholen und als feste Kacheln unter die Karte haengen.
+  if(!matchMedia('(max-width:820px)').matches) return;
+  const mc=document.getElementById('main-container');
+  const hud=document.getElementById('hud');
+  function relayout(){
+    document.querySelectorAll('#map-view > .live-global, #map-view > .v81skills').forEach(el=>{
+      el.classList.add('pkmai-mobile-tile');
+      mc.insertBefore(el, hud);
+    });
+  }
+  relayout();
+  // Panels werden teils spaeter per JS erzeugt -> ein paar Mal nachziehen.
+  let n=0; const iv=setInterval(()=>{ relayout(); if(++n>10) clearInterval(iv); }, 500);
+})();
+</script>
 
 
 </body>

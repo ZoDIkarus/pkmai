@@ -31,12 +31,24 @@ TOTAL_TIMESTEPS = 100_000_000
 SAVE_EVERY_TIMESTEPS = 25_000
 
 # PPO
-LEARNING_RATE = 2.5e-05
-PPO_N_STEPS = 64
+LEARNING_RATE = 7.5e-05
+PPO_N_STEPS = 32
 PPO_BATCH_SIZE = 256
 PPO_N_EPOCHS = 4
 PPO_GAMMA = 0.995
-PPO_ENT_COEF = 0.008
+# V10.28: Nach 19 Mio. Steps ist max_episode_maps global immer noch bei 5 -
+# die Policy ist zu deterministisch geworden, um zufaellig neues Terrain zu
+# entdecken, obwohl echte neue Tiefe stark belohnt wird (NEW_GLOBAL_DEPTH_
+# REWARD=300, einmalig, nicht farmbar). Entropie temporaer angehoben, um
+# wieder mehr Aktionsvariation/Exploration zuzulassen ("Entropy Re-Heat").
+# Sobald neue Depth-Records in exploration_memory/global_progress.json
+# auftauchen, kann der Wert wieder Richtung 0.008-0.012 zurückgefahren werden.
+# V11: kraeftiges Entropy-Re-Heat. Die alte Policy ist nach 25 Mio Steps
+# auf "am Alabastia-Rand kreisen" festgefahren. Zusammen mit der neuen
+# Reward-Logik (Exploration gratis + dominant, keine Straf-Suppe) soll die
+# hohe Entropie sie da rausschiessen, OHNE die fruehen Skills zu verlernen
+# (deren Navigations-Ziel bleibt ja gleich). Spaeter wieder Richtung 0.015.
+PPO_ENT_COEF = 0.05
 
 # "auto" = MPS auf Apple Silicon wenn verfuegbar, sonst CPU.
 # Alternativ: "cpu" oder "mps"
@@ -172,7 +184,7 @@ def make_env(
 
 
 class MilestoneCheckpointCallback(BaseCallback):
-    """V10.25: protected skill vault plus an independently learning Full brain."""
+    """V10.27: sequential protected-skill bootcamp."""
 
     def __init__(self, check_freq=15_000, verbose=1):
         super().__init__(verbose)
@@ -182,18 +194,23 @@ class MilestoneCheckpointCallback(BaseCallback):
         self.resume_save_freq = 50_000
         self.version = 1
         self.recent = deque(maxlen=600)
-        self.recent_full = deque(maxlen=128)
+        self.recent_full = deque(maxlen=256)
         self.full_live = {}
         self.min_eval_episodes = 24
-        # Acht abgeschlossene Beginning-Full-Runs verhindern, dass zufaellige
-        # Live-Snapshots mitten im Intro als 0%-Regression gewertet werden.
-        self.min_full_episodes = 8
+        # 12 abgeschlossene Beginning-Full-Runs pro Eval: genug Signal fuer die
+        # Regressions-Pruefung, ohne die Eval-Kadenz unnoetig zu verlangsamen.
+        self.min_full_episodes = 12
         self.champion_score = None
         self.champion_metrics = {}
         self.rollback_count = 0
         self.regression_strikes = 0
         self.last_eval_metrics = {}
         self.skill_scores = {}
+        # Nur Telemetrie. V10.28.1: der zeitbasierte Stale-Champion-Fallback
+        # wurde entfernt - er konnte einen funktionierenden Champion durch
+        # eine fruehgame-vergessliche Policy ersetzen, nur weil Zeit verging.
+        self.steps_since_champion_update = 0
+        self.champion_published_at_step = 0
 
         # V10.9:
         # Letzten bekannten Episode-Zustand jedes VecEnv-Slots
@@ -216,6 +233,9 @@ class MilestoneCheckpointCallback(BaseCallback):
                 if isinstance(raw, list):
                     self.champion_score = tuple(int(x) for x in raw)
                 self.champion_metrics = dict(data.get("metrics") or {})
+                self.champion_published_at_step = int(
+                    data.get("timesteps", 0) or 0
+                )
             except Exception:
                 pass
 
@@ -471,6 +491,21 @@ class MilestoneCheckpointCallback(BaseCallback):
             "max_maps": max((r["maps"] for r in rows), default=0),
         }
 
+    def _metrics_floor(self, metrics):
+        """Direkt nach Neustart ist recent_full leer -> alle full_*_permille
+        aus _metrics() sind 0. Ein Frontier-/Milestone-Publish in diesem
+        Moment wuerde sonst die bekannten guten Champion-Raten mit 0
+        ueberschreiben und den Regressions-Schutz aushebeln. Deshalb die
+        alten Champion-Werte als Untergrenze behalten, solange noch keine
+        echten Beginning-Full-Runs abgeschlossen sind."""
+        if int(metrics.get("full_episodes", 0)) > 0:
+            return metrics
+        old = self.champion_metrics or {}
+        for k in ("full_intro_permille", "full_stairs_permille",
+                  "full_exit_permille", "full_starter_permille"):
+            metrics[k] = max(int(metrics.get(k, 0)), int(old.get(k, 0)))
+        return metrics
+
     def _write_trainer_status(self):
         try:
             champion_steps = 0
@@ -489,17 +524,17 @@ class MilestoneCheckpointCallback(BaseCallback):
                 "champion_version": champion_version,
                 "delta_steps": int(self.num_timesteps) - champion_steps,
                 "recent_full_done": len(getattr(self, "recent_full", [])),
-                "mode": "v10.25_skill_vault_full_chain",
+                "mode": "v11_clean_explore",
                 "rollback_count": int(self.rollback_count),
                 "regression_strikes": int(self.regression_strikes),
                 "skill_scores": dict(self.skill_scores),
                 "last_eval_metrics": dict(self.last_eval_metrics),
                 "training_phase": (
-                    "forest_push"
-                    if int((self.champion_metrics or {}).get(
-                        "full_starter_permille", 0
-                    )) > 0
-                    else "chain_repair"
+                    "1_intro" if int(self.skill_scores.get("intro", 1000)) < 880
+                    else "2_stairs" if int(self.skill_scores.get("stairs", 1000)) < 880
+                    else "3_exit" if int(self.skill_scores.get("exit", 1000)) < 880
+                    else "4_starter" if int(self.skill_scores.get("starter", 1000)) < 880
+                    else "5_world_explore"
                 ),
             }
             tmp = TRAINER_STATUS_FILE + ".tmp"
@@ -526,6 +561,8 @@ class MilestoneCheckpointCallback(BaseCallback):
         self.champion_score = tuple(score)
         self.champion_metrics = dict(metrics)
         self._write_champion_score(score, metrics)
+        self.steps_since_champion_update = 0
+        self.champion_published_at_step = int(self.num_timesteps)
 
         tmp = VERSION_FILE + ".tmp"
         with open(tmp, "w") as f:
@@ -553,20 +590,45 @@ class MilestoneCheckpointCallback(BaseCallback):
     def _protected_regression(self, candidate):
         old = self.champion_metrics or {}
 
+        # Echte neue Tiefe (mehr Orden / Maps / Level in einem Beginning-Full-Run)
+        # ist immer ein Fortschritt und hebt jeden Schutz auf.
         if int(candidate.get("max_badges", 0)) > int(old.get("max_badges", 0)):
             return False
+        if int(candidate.get("max_maps", 0)) > int(old.get("max_maps", 0)):
+            return False
+        if int(candidate.get("max_level", 0)) > int(old.get("max_level", 0)):
+            return False
 
-        # Kleine Stichproben duerfen schwanken; echte Einbrueche abgeschlossener
-        # Beginning-Full-Runs werden weiterhin abgefangen.
-        for key in ("full_intro_permille", "full_stairs_permille", "full_exit_permille"):
-            old_v = int(old.get(key, 0))
-            new_v = int(candidate.get(key, 0))
-            if old_v >= 20 and new_v < old_v - 150:
-                print(
-                    f"🛡️ Champion bleibt geschuetzt: {key} "
-                    f"{old_v/10:.1f}% -> {new_v/10:.1f}%"
-                )
-                return True
+        n = int(candidate.get("full_episodes", 0))
+        if n < 8:
+            # Zu wenig abgeschlossene Full-Runs -> nicht befoerdern, aber auch
+            # nicht als harte Regression zaehlen.
+            return True
+
+        # WICHTIG: full_stairs_permille / full_exit_permille messen nur die
+        # Endposition der Episode (stage in F1_TO_EXIT/OUTDOOR) und sind
+        # strukturell nahe 0, sobald ein Run entweder frueher scheitert oder
+        # weiter kommt. Der einzige verlaessliche kumulative Full-Indikator ist
+        # der Starter (level>=5 oder has_starter) sowie die Tiefe oben.
+        old_starter = int(old.get("full_starter_permille", 0))
+        new_starter = int(candidate.get("full_starter_permille", 0))
+        if old_starter >= 50 and new_starter < max(old_starter * 0.5,
+                                                   old_starter - 200):
+            print(
+                f"🛡️ Champion geschuetzt: Full-Starter "
+                f"{old_starter/10:.1f}% -> {new_starter/10:.1f}%"
+            )
+            return True
+
+        old_intro = int(old.get("full_intro_permille", 0))
+        new_intro = int(candidate.get("full_intro_permille", 0))
+        if old_intro >= 300 and new_intro < old_intro - 250:
+            print(
+                f"🛡️ Champion geschuetzt: Full-Intro "
+                f"{old_intro/10:.1f}% -> {new_intro/10:.1f}%"
+            )
+            return True
+
         return False
 
     def _evaluate(self):
@@ -580,8 +642,9 @@ class MilestoneCheckpointCallback(BaseCallback):
 
         if self._protected_regression(metrics):
             self.regression_strikes += 1
+            self.steps_since_champion_update += int(metrics["full_episodes"])
             print(
-                f"⚠️ V10.25 Full-Regression erkannt "
+                f"⚠️ Full-Regression erkannt "
                 f"(Messung {self.regression_strikes}). "
                 "Champion und Skill Vault bleiben erhalten; "
                 "Learner lernt ohne Gewichtsverlust weiter."
@@ -591,6 +654,7 @@ class MilestoneCheckpointCallback(BaseCallback):
             self._publish_champion(score, metrics, "Recent-Eval")
         else:
             self.regression_strikes = 0
+            self.steps_since_champion_update += int(metrics["full_episodes"])
             print(
                 "🧪 Candidate noch nicht Champion, aber ohne harte Regression "
                 "-> Training innerhalb der Schutzgrenze geht weiter."
@@ -648,7 +712,7 @@ class MilestoneCheckpointCallback(BaseCallback):
             if key <= champion_key:
                 continue
 
-            metrics = self._metrics()
+            metrics = self._metrics_floor(self._metrics())
             metrics["max_badges"] = max(int(metrics.get("max_badges", 0)), badges)
             metrics["max_maps"] = max(int(metrics.get("max_maps", 0)), maps)
             metrics["max_level"] = max(int(metrics.get("max_level", 0)), level)
@@ -678,7 +742,7 @@ class MilestoneCheckpointCallback(BaseCallback):
                 continue
             rank = self._full_stage_rank(info)
             if rank > current_best_stage:
-                metrics = self._metrics()
+                metrics = self._metrics_floor(self._metrics())
                 if rank >= 1:
                     metrics["full_stairs_permille"] = max(int(metrics.get("full_stairs_permille", 0)), 1)
                 if rank >= 2:
@@ -749,7 +813,7 @@ class MilestoneCheckpointCallback(BaseCallback):
                     # TEMP V10.9 DEBUG:
                     # Zeige bei den Slots 96-119 exakt, was SB3
                     # beim Episode-Ende an den Callback liefert.
-                    if 96 <= i <= 119:
+                    if 82 <= i <= 119:
                         print(
                             "🔬 FULL-SLOT DONE "
                             f"slot={i} | "
@@ -902,11 +966,11 @@ def main():
         f"{len(seed_maps)} Maps | "
         f"{len(seed_transitions)} Warps"
     )
-    print("🎯 V10.25 PHASEN: Starter-Durchbruch -> Chain Repair 4/20/20/18/4/2/16/0/36 -> Forest Push 4/10/12/12/8/4/34/4/32")
+    print("🎯 V11 CLEAN EXPLORE: Reward = Exploration dominant (+2.0/Tile), keine Straf-Suppe, kein Nord-Prior. Bootcamp: intro>treppe>exit>starter>Welt (auto ab 88%)")
 
     print("🎮 V7.7 Actions: A | B | START | UP | DOWN | LEFT | RIGHT")
     print("🧭 V7.7 Observation: UNVERAENDERT 64x64 Bild + 28 RAM/Nav Features")
-    print("🌲 V10.25 Adaptive 120-Agenten-Verteilung aktiv\n⚡ V7.5 Speed Cache: adjacency/frontier/distance caching aktiv")
+    print("🌲 V10.27B Fokus: Vertania City erreichen, Markt/Paket erkunden und zu Professor Eich zurueckkehren.\n⚡ V7.5 Speed Cache: adjacency/frontier/distance caching aktiv")
 
     vec_env = SubprocVecEnv(
         [
@@ -951,6 +1015,18 @@ def main():
         if not os.path.exists(BEST_MODEL):
             shutil.copy2(load_model, BEST_MODEL)
 
+        # V11: nach einem Reset ist RESUME eine neu geseedete Skill-Policy.
+        # Ihr eingebauter Step-Zaehler (~11 Mio) ist irrefuehrend - es ist ein
+        # frischer V11-Lauf. Ohne echten Champion (keine champion_score.json)
+        # den Zaehler auf 0 setzen, damit das Dashboard „V11-Steps" zeigt.
+        if not os.path.exists(CHAMPION_FILE):
+            model.num_timesteps = 0
+            try:
+                model._num_timesteps_at_start = 0
+            except Exception:
+                pass
+            print("🔄 V11-Reset erkannt -> Step-Zaehler auf 0")
+
     else:
         print("🌱 Initialisiere neues PPO-Modell...")
 
@@ -990,21 +1066,25 @@ def main():
 
     print("🧬 V10.9.4 LIVE FULL + RESUME ACTIVE")
 
-    print("🧰 V10.25 SKILL VAULT: beste Intro/Treppe/Exit/Starter/Progress-Policies bleiben einzeln erhalten.")
-    print("🛡️ V10.25 DUAL TRACK: Champion bleibt geschuetzt; Learner wird nicht mehr automatisch zurueckgesetzt.")
+    print("🧰 V10.27 ECHTES BOOTCAMP: jede fehlende Stufe wird nacheinander gelernt und sofort im Vault eingefroren.")
+    print("🛡️ V10.27 Keine Auto-Rollbacks; Phasenwechsel nur durch geschuetzte Skill-Scores.")
 
     print("🧠 V10.13 FULL-POLICY UNIFIED ACTIVE: Story-Spezialisten trainieren jetzt dasselbe Full-Brain wie der Watcher.")
 
-    # V10.25: geladene PPO-Modelle behalten sonst ihre alte LR.
+    # V10.27: geladene PPO-Modelle behalten sonst ihre alte LR.
     # Daher LR auch effektiv im geladenen Optimizer erzwingen.
     model.learning_rate = LEARNING_RATE
     model.lr_schedule = lambda _progress_remaining: LEARNING_RATE
+    # V10.28: dasselbe gilt fuer ent_coef - ein geladenes Modell behaelt
+    # sonst den alten, zu niedrigen gespeicherten Wert (0.008) und das
+    # Entropy-Re-Heat greift nicht.
+    model.ent_coef = PPO_ENT_COEF
     try:
         for group in model.policy.optimizer.param_groups:
             group["lr"] = LEARNING_RATE
     except Exception:
         pass
-    print(f"🚀 V10.25 Effective LR: {LEARNING_RATE:.8f}")
+    print(f"🚀 V10.27 Effective LR: {LEARNING_RATE:.8f}")
 
     callback = MilestoneCheckpointCallback(
         check_freq=SAVE_EVERY_TIMESTEPS

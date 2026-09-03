@@ -41,6 +41,7 @@ MAPPING_EDGE_REWARD = 0.35
 MAPPING_MAP_REWARD = 20.0
 MAPPING_TRANSITION_REWARD = 30.0
 WATCHER_MAPPING_FILE = os.path.join(RUNTIME_DIR, "watcher_mapping.json")
+WATCHER_FRAME_FILE = os.path.join(RUNTIME_DIR, "watcher.jpg")
 
 # Fenster
 GAME_PANEL_W = 720
@@ -98,6 +99,24 @@ def save_watcher_battle_stats(d):
         tmp=WATCHER_BATTLE_FILE+".tmp"
         with open(tmp,"w") as f: json.dump(d,f,separators=(",",":"))
         os.replace(tmp,WATCHER_BATTLE_FILE)
+    except Exception:
+        pass
+
+
+def publish_watcher_frame(canvas):
+    """Atomically publish the visible watcher canvas as a JPEG snapshot."""
+    try:
+        ok, encoded = cv2.imencode(
+            ".jpg", canvas, [int(cv2.IMWRITE_JPEG_QUALITY), 88]
+        )
+        if not ok:
+            return
+        tmp = WATCHER_FRAME_FILE + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(encoded.tobytes())
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, WATCHER_FRAME_FILE)
     except Exception:
         pass
 
@@ -613,11 +632,17 @@ def build_mapping_preview(
 def main():
     retro.data.Integrations.add_custom_path(CUSTOM_DIR)
 
+    # Stable-Retro remains headless; the composited OpenCV watcher below is
+    # the only visible window. This prevents a second raw Retro game window.
     env = retro.make(
         game="PokemonFireRed-Gba",
         state=retro.State.NONE,
-        inttype=retro.data.Integrations.CUSTOM_ONLY
+        inttype=retro.data.Integrations.CUSTOM_ONLY,
+        render_mode=None,
     )
+    env.auto_render = False
+    if hasattr(env, "viewer"):
+        env.viewer = None
 
 
     btn_list = list(env.buttons)
@@ -1654,6 +1679,7 @@ def main():
             except Exception:
                 pass
 
+            publish_watcher_frame(canvas)
             cv2.imshow(WINDOW, canvas)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):

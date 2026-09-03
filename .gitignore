@@ -16,6 +16,7 @@ custom_integrations/
 *.nds
 *.rom
 *.sav
+
 # Runtime / training state
 runtime/
 checkpoints/
@@ -34,10 +35,20 @@ watcher_mapping.json
 model_version.json
 training_history*.json
 skeleton_map.json
-# Models / save states
+
+# Models / save states / release archives
 *.zip
 *.state
 *.state.gz
+
+# Local source backups and patch leftovers
+*.bak
+*.bak_*
+*.bak.*
+*.backup_*
+*.orig
+*~
+
 # Temporary / generated
 .tmp.*
 .tmp/
@@ -46,19 +57,29 @@ skeleton_map.json
 *.pid
 test_frame.png
 world_map_progress.png
+
 # Python
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.coverage
+htmlcov/
 .venv/
 venv/
+
 # macOS / editors
 .DS_Store
 .vscode/
 .idea/
+
 # Project-local migration markers
 .fresh_ai_reset_done_v3
 .v5_brain_mapping_reset_done
+
 # ---- PKMAI hard safety ----
 scripts/start_all_legacy.sh
 requirements-lock.txt
+.v8_night_reset_done
+.v8_3_night_reset_done
+.v9_clean_night_reset_done
+.v10_1_clean_brain_done

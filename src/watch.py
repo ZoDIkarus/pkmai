@@ -26,8 +26,9 @@ TELEMETRY_INTERVAL = 0.5
 FPS_TITLE_INTERVAL = 0.5
 
 # Action-Block: Taste halten + neutrale Frames
-ACTION_HOLD_FRAMES = 5
-ACTION_RELEASE_FRAMES = 3
+# Exakt dieselbe Aktionsausfuehrung wie PokemonFireRedEnv.step().
+ACTION_HOLD_FRAMES = 4
+ACTION_RELEASE_FRAMES = 4
 
 # Reload / RAM
 MODEL_CHECK_INTERVAL = 1.0
@@ -53,7 +54,31 @@ BOTTOM_H = 74
 # ================================================================
 MODEL_DIR = os.path.join(RUNTIME_DIR, "checkpoints")
 LATEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_latest.zip")
+BEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_best.zip")
 VERSION_FILE = os.path.join(RUNTIME_DIR, "model_version.json")
+SKILL_MODELS = {
+    "intro": os.path.join(MODEL_DIR, "pokemon_skill_intro_best.zip"),
+    "stairs": os.path.join(MODEL_DIR, "pokemon_skill_stairs_best.zip"),
+    "exit": os.path.join(MODEL_DIR, "pokemon_skill_exit_best.zip"),
+    "starter": os.path.join(MODEL_DIR, "pokemon_skill_starter_best.zip"),
+    "progress": os.path.join(MODEL_DIR, "pokemon_skill_progress_best.zip"),
+}
+
+# V10.25: stage-specific protected policies; Champion/latest are fallbacks.
+def get_watcher_model_path(skill=None):
+    skill_path = SKILL_MODELS.get(str(skill or ""))
+    if skill_path and os.path.exists(skill_path):
+        return skill_path
+    if os.path.exists(BEST_MODEL):
+        return BEST_MODEL
+    return LATEST_MODEL
+
+def get_model_signature(path):
+    try:
+        st = os.stat(path)
+        return (path, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
 CUSTOM_DIR = os.path.join(LOCAL_DIR, "custom_integrations")
 INSTANCES_DIR = os.path.join(RUNTIME_DIR, "instances_data")
 
@@ -126,6 +151,38 @@ def load_global_navigation_memory():
     return edges, maps, transitions
 
 
+def load_confirmed_story_warps(kind, min_agents=2):
+    base = os.path.join(
+        RUNTIME_DIR,
+        "curriculum_shared",
+        "confirmed_story_warps"
+    )
+    votes = {}
+    try:
+        names = os.listdir(base)
+    except Exception:
+        return set()
+
+    suffix = f"_{kind}.json"
+    for name in names:
+        if not name.startswith("agent_") or not name.endswith(suffix):
+            continue
+        try:
+            with open(os.path.join(base, name), "r") as f:
+                data = json.load(f)
+            raw = data.get("transition", [])
+            if isinstance(raw, list) and len(raw) == 8:
+                t = tuple(int(v) for v in raw)
+                votes[t] = votes.get(t, 0) + 1
+        except Exception:
+            pass
+
+    return {
+        t for t, count in votes.items()
+        if count >= min_agents
+    }
+
+
 def watcher_nav_target(
     bank, map_id, x, y,
     known_edges, known_maps, known_transitions
@@ -180,6 +237,37 @@ def watcher_nav_target(
     )
 
 
+def watcher_objective(loc, info):
+    valid = bool(
+        loc.get("valid", False)
+        and loc.get("trusted", False)
+    )
+
+    if not valid:
+        return "intro"
+
+    bank = int(loc.get("map_bank", 0))
+    in_battle = int(info.get("in_battle", 0))
+    p_lvl = int(info.get("p1_level", 0))
+
+    badges_raw = int(info.get("badges", 0))
+    badges = bin(badges_raw).count("1") if badges_raw > 0 else 0
+
+    if in_battle:
+        return "battle"
+    if bank == 4:
+        return "stairs"
+    if bank != 3:
+        return "exit"
+    if p_lvl < 5:
+        return "starter"
+    if p_lvl < 7:
+        return "level"
+    if badges < 1:
+        return "badge"
+    return "progress"
+
+
 def build_v7_obs(
     screen,
     loc,
@@ -188,6 +276,7 @@ def build_v7_obs(
     known_maps,
     known_transitions,
     party=None,
+    story_flags=None,
 ):
     valid = bool(
         loc.get("valid", False)
@@ -198,23 +287,30 @@ def build_v7_obs(
     x = int(loc.get("x_pos", 0)) if valid else 0
     y = int(loc.get("y_pos", 0)) if valid else 0
 
-    # Watcher fuehrt die Policy als Full-Chain-Agent aus.
+    # V10 unified policy: Watcher uses exactly the same policy objective
+    # as every training agent. Stage specialization now lives only in
+    # curriculum/reward control, not in the PPO observation.
+    active_objective = "full"
     vec = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
     in_battle = int(info.get("in_battle", 0))
     p_lvl = int(info.get("p1_level", 0))
     badges_raw = int(info.get("badges", 0))
-    badges = (
-        bin(badges_raw).count("1")
-        if badges_raw > 8 else badges_raw
-    )
+    badges = bin(badges_raw).count("1") if badges_raw > 0 else 0
 
     gameplay_ready = bool(valid and 0 <= x < 512 and 0 <= y < 512)
-    has_starter = p_lvl >= 5
+    party = party or []
+    party_has_starter = any(
+        int(mon.get("level", 0) or 0) >= 5
+        and int(mon.get("max_hp", 0) or 0) > 0
+        for mon in party
+    )
+    has_starter = p_lvl >= 5 or party_has_starter
 
-    # Watcher kennt Storyflags nur konservativ aus aktuellem Ort.
-    stairs_done = 1.0 if gameplay_ready and bank != 4 else 0.0
-    house_left = 1.0 if gameplay_ready and bank == 3 else 0.0
+    # Persistente Flags muessen exakt dieselbe Bedeutung wie im Training haben.
+    story_flags = story_flags or {}
+    stairs_done = 1.0 if story_flags.get("stairs_done", False) else 0.0
+    house_left = 1.0 if story_flags.get("house_left", False) else 0.0
 
     vec.extend([
         1.0 if gameplay_ready else 0.0,
@@ -234,10 +330,25 @@ def build_v7_obs(
     else:
         vec.extend([0.0, 0.0, 0.0, 0.0])
 
+    # V10.4.1 WATCHER PARITY:
+    # Policy objective remains FULL, but navigation stage is independent.
+    if gameplay_ready and bool(story_flags.get("house_left", False)):
+        nav_stage = "overworld"
+        nav_transitions = known_transitions
+    elif gameplay_ready and not bool(story_flags.get("stairs_done", False)):
+        nav_stage = "stairs"
+        nav_transitions = load_confirmed_story_warps("stairs")
+    elif gameplay_ready:
+        nav_stage = "exit"
+        nav_transitions = load_confirmed_story_warps("exit")
+    else:
+        nav_stage = "intro"
+        nav_transitions = set()
+
     target = (
         watcher_nav_target(
             bank, map_id, x, y,
-            known_edges, known_maps, known_transitions
+            known_edges, known_maps, nav_transitions
         )
         if gameplay_ready else None
     )
@@ -260,7 +371,6 @@ def build_v7_obs(
         float(np.clip(badges / 8.0, 0.0, 1.0)),
     ])
 
-    party = party or []
     levels = [int(m.get("level", 0)) for m in party if int(m.get("level", 0)) > 0]
     hp_values = [
         float(m.get("hp_ratio", 0.0))
@@ -565,6 +675,10 @@ def main():
 
     model = None
     loaded_version = -1
+    loaded_model_signature = None
+    loaded_model_name = "kein Modell"
+    watcher_skill = "intro"
+    loaded_skill = None
 
     env.reset()
 
@@ -653,6 +767,8 @@ def main():
     watcher_has_starter = False
     watcher_stuck_counter = 0
     watcher_last_progress_signature = None
+    watcher_room_steps = 0
+    watcher_last_room = None
 
     watcher_intro_seen_states = set()
     watcher_intro_last_thumb = None
@@ -661,6 +777,8 @@ def main():
     watcher_intro_complete_rewarded = False
 
     watcher_left_house_rewarded = False
+    watcher_stairs_done = False
+    watcher_initial_indoor_room = None
     watcher_north_grass_rewarded = False
     watcher_next_outdoor_map_rewarded = False
     watcher_first_outdoor_map = None
@@ -679,23 +797,72 @@ def main():
             total_steps += 1
 
             now_model = time.perf_counter()
-            if now_model - last_model_check_time >= MODEL_CHECK_INTERVAL:
+            party_has_starter = any(
+                int(mon.get("level", 0) or 0) >= 5
+                and int(mon.get("max_hp", 0) or 0) > 0
+                for mon in (watcher_party or [])
+            )
+            if not bool(watcher_loc.get("trusted", False)):
+                watcher_skill = "intro"
+            elif int(watcher_info.get("in_battle", 0)) == 1:
+                watcher_skill = "progress"
+            elif not watcher_stairs_done:
+                watcher_skill = "stairs"
+            elif not watcher_left_house_rewarded:
+                watcher_skill = "exit"
+            elif not party_has_starter and p1_level < 5:
+                watcher_skill = "starter"
+            else:
+                watcher_skill = "progress"
+
+            if (
+                watcher_skill != loaded_skill
+                or now_model - last_model_check_time >= MODEL_CHECK_INTERVAL
+            ):
                 last_model_check_time = now_model
                 current_version = get_latest_version()
 
+                wanted_model = get_watcher_model_path(watcher_skill)
+                wanted_signature = get_model_signature(wanted_model)
+
                 if (
-                    current_version != loaded_version and
-                    os.path.exists(LATEST_MODEL)
+                    wanted_signature is not None and
+                    wanted_signature != loaded_model_signature
                 ):
                     try:
-                        model = PPO.load(LATEST_MODEL, device=WATCHER_DEVICE)
-                        loaded_version = current_version
-                        print(
-                            f"Watcher loaded brain: "
-                            f"PKMAI v{loaded_version:06d}"
+                        new_model = PPO.load(
+                            wanted_model,
+                            device=WATCHER_DEVICE
                         )
+
+                        # Erst nach erfolgreichem Load austauschen.
+                        model = new_model
+                        loaded_model_signature = wanted_signature
+                        loaded_skill = watcher_skill
+                        loaded_version = current_version
+                        loaded_model_name = (
+                            f"SKILL-{watcher_skill.upper()}"
+                            if os.path.abspath(wanted_model) in {
+                                os.path.abspath(p) for p in SKILL_MODELS.values()
+                            }
+                            else "CHAMPION"
+                            if os.path.abspath(wanted_model)
+                            == os.path.abspath(BEST_MODEL)
+                            else "LATEST"
+                        )
+
+                        print(
+                            f"🏆 Watcher HOT-RELOAD: "
+                            f"{loaded_model_name} | "
+                            f"PKMAI v{loaded_version:06d} | "
+                            f"{os.path.basename(wanted_model)}"
+                        )
+
                     except Exception as e:
-                        print("Model load failed:", e)
+                        print(
+                            "❌ Champion model load failed:",
+                            e
+                        )
 
             now_nav = time.time()
             if now_nav - last_global_nav_reload >= 2.0:
@@ -718,9 +885,18 @@ def main():
                 global_nav_maps,
                 global_nav_transitions,
                 watcher_party,
+                {
+                    "stairs_done": watcher_stairs_done,
+                    "house_left": watcher_left_house_rewarded,
+                },
             )
 
             if model is not None:
+                # V10.4.2:
+                # The unified PPO currently has a very dominant A logit in some
+                # early-game states. deterministic=True therefore collapses the
+                # Watcher to A,A,A,A... and prevents movement/exploration.
+                # Use PPO sampling like the training rollouts again.
                 action, _ = model.predict(
                     obs,
                     deterministic=False
@@ -728,8 +904,9 @@ def main():
                 action_idx = int(action)
                 current_action_name = action_names[action_idx]
                 current_action = action_map[action_idx]
-                action_history.append(current_action_name)
-                action_history = action_history[-10:]
+                if current_action_name != "START":
+                    action_history.append(current_action_name)
+                    action_history = action_history[-10:]
 
                 if action_idx == 2:
                     if total_steps - watcher_last_start_decision <= 6:
@@ -743,13 +920,18 @@ def main():
                 action_idx = int(np.random.randint(0, len(action_map)))
                 current_action = action_map[action_idx]
                 current_action_name = action_names[action_idx]
-                action_history.append(current_action_name)
-                action_history = action_history[-10:]
+                if current_action_name != "START":
+                    action_history.append(current_action_name)
+                    action_history = action_history[-10:]
 
-        # 5 aktive + 3 Ruheframes.
+        # Exakt dieselbe 4+4-Ausfuehrung wie in PokemonFireRedEnv.step().
         # Am letzten Ruheframe ist das Bild fuer Mapping stabiler.
         phase = frame_counter % action_cycle_frames
-        step_action = current_action if phase < 5 else no_action
+        step_action = (
+            current_action
+            if phase < ACTION_HOLD_FRAMES
+            else no_action
+        )
 
         step_res = env.step(step_action)
 
@@ -785,6 +967,11 @@ def main():
                 env,
                 allow_scan=allow_full_scan
             )
+
+            # V10.1 CRITICAL FIX:
+            # build_v7_obs() consumes watcher_loc. Keep it synchronized with
+            # the actual RAM location instead of leaving the initial invalid dict.
+            watcher_loc = dict(loc)
 
             if loc.get("valid", False):
                 bank = int(loc["map_bank"])
@@ -1048,6 +1235,13 @@ def main():
                 watcher_step_reward += 35.0
 
             if gameplay_ready and in_battle == 0:
+                if bank != 3:
+                    current_indoor_room = (bank, map_id)
+                    if watcher_initial_indoor_room is None:
+                        watcher_initial_indoor_room = current_indoor_room
+                    elif current_indoor_room != watcher_initial_indoor_room:
+                        watcher_stairs_done = True
+
                 # Haus verlassen: Indoor -> FireRed Overworld Bank 3.
                 if (
                     not watcher_left_house_rewarded
@@ -1056,6 +1250,7 @@ def main():
                     and watcher_previous_valid_bank != 3
                 ):
                     watcher_left_house_rewarded = True
+                    watcher_stairs_done = True
                     watcher_first_outdoor_map = map_id
                     watcher_outdoor_entry_y = y
                     watcher_step_reward += 52.0
@@ -1095,18 +1290,23 @@ def main():
                     watcher_seen_coords.add(coord)
                     watcher_step_reward += 0.25
 
-            # Erstes Pokemon exakt +100, danach normale Levelups.
-            if not watcher_has_starter and p1_level >= 5:
+            # Party-Reader und p1_level sind beide gueltige Starter-Signale.
+            live_party_level = max(
+                [int(mon.get("level", 0) or 0) for mon in (watcher_party or [])]
+                or [0]
+            )
+            effective_level = max(p1_level, live_party_level)
+            if not watcher_has_starter and effective_level >= 5:
                 watcher_has_starter = True
                 watcher_step_reward += 100.0
-                watcher_last_level = p1_level
-            elif watcher_has_starter and p1_level > watcher_last_level:
+                watcher_last_level = effective_level
+            elif watcher_has_starter and effective_level > watcher_last_level:
                 watcher_step_reward += (
-                    p1_level - watcher_last_level
+                    effective_level - watcher_last_level
                 ) * 25.0
-                watcher_last_level = p1_level
-            elif watcher_last_level == 0 and p1_level > 0:
-                watcher_last_level = p1_level
+                watcher_last_level = effective_level
+            elif watcher_last_level == 0 and effective_level > 0:
+                watcher_last_level = effective_level
 
             if badge_count > watcher_last_badges:
                 watcher_step_reward += (
@@ -1115,6 +1315,13 @@ def main():
                 watcher_last_badges = badge_count
 
             if gameplay_ready:
+                current_room = (bank, map_id)
+                if current_room != watcher_last_room:
+                    watcher_last_room = current_room
+                    watcher_room_steps = 0
+                elif in_battle == 0:
+                    watcher_room_steps += 1
+
                 watcher_progress_signature = (
                     bank,
                     map_id,
@@ -1149,10 +1356,17 @@ def main():
             # Watcher-Anti-Loop-Reset:
             # Neue Modellversionen uebernehmen sonst denselben festgefahrenen
             # Emulatorzustand (z.B. PC -> Itemfach -> raus -> rein).
-            if gameplay_ready and in_battle == 0 and watcher_stuck_counter >= 900:
+            if (
+                gameplay_ready
+                and in_battle == 0
+                and (
+                    watcher_stuck_counter >= 900
+                    or watcher_room_steps >= 1800
+                )
+            ):
                 print(
-                    f"🔄 Watcher Anti-Loop Reset nach "
-                    f"{watcher_stuck_counter} stagnierenden Aktionsschritten "
+                    f"🔄 Watcher Anti-Loop Reset: "
+                    f"still={watcher_stuck_counter}, room={watcher_room_steps} "
                     f"(Episode {watcher_episode_reward:.2f})"
                 )
 
@@ -1166,6 +1380,8 @@ def main():
                 watcher_last_badges = 0
                 watcher_has_starter = False
                 watcher_stuck_counter = 0
+                watcher_room_steps = 0
+                watcher_last_room = None
 
                 watcher_intro_seen_states = set()
                 watcher_intro_last_thumb = None
@@ -1175,6 +1391,8 @@ def main():
                 watcher_last_progress_signature = None
 
                 watcher_left_house_rewarded = False
+                watcher_stairs_done = False
+                watcher_initial_indoor_room = None
                 watcher_north_grass_rewarded = False
                 watcher_next_outdoor_map_rewarded = False
                 watcher_first_outdoor_map = None
@@ -1196,6 +1414,7 @@ def main():
                     "x_pos": 0,
                     "y_pos": 0,
                 }
+                watcher_loc = dict(loc)
                 bank = map_id = x = y = 0
                 coord = (0, 0, 0, 0)
                 trusted_loc = False
@@ -1217,16 +1436,16 @@ def main():
             last_telemetry_time = telemetry_now
             inst_file = os.path.join(
                 INSTANCES_DIR,
-                "inst_99.json"
+                "inst_120.json"
             )
             tmp_file = os.path.join(
                 INSTANCES_DIR,
-                "tmp_99.json"
+                "tmp_120.json"
             )
 
             try:
                 data = {
-                    "id": 99,
+                    "id": 120,
                     "name": "Alex (Watcher)",
                     "bank": bank,
                     "map": map_id,
@@ -1240,6 +1459,13 @@ def main():
                     "stuck_counter": watcher_stuck_counter,
                     "level": p1_level,
                     "party": watcher_party,
+                    "has_starter": bool(watcher_has_starter),
+                    "active_skill": watcher_skill,
+                    "loaded_model": loaded_model_name,
+                    "story_flags": {
+                        "stairs_done": bool(watcher_stairs_done),
+                        "house_left": bool(watcher_left_house_rewarded),
+                    },
                     "exp_stats": {
                         "gained_total": int(watcher_exp_gained),
                         "last_gain": int(watcher_last_exp_gain),
@@ -1326,7 +1552,7 @@ def main():
             )
 
             brain = (
-                f"PKMAI v{loaded_version:06d}"
+                f"{loaded_model_name} | PKMAI v{loaded_version:06d}"
                 if loaded_version >= 0
                 else "Random Policy"
             )
@@ -1451,4 +1677,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n🛑 Watcher beendet.")

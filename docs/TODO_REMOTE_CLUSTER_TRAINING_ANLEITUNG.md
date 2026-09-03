@@ -55,7 +55,7 @@ Ein selbst implementierter HTTP-Parameter-Server ist möglich, aber erst sinnvol
 ## 3. Sicherheits- und Betriebsregeln vorab
 
 1. **Keinen Master-Port offen ins öffentliche Internet stellen.**
-2. Remote-Verbindungen ausschließlich über ein privates Netz, vorzugsweise **Tailscale** oder WireGuard, herstellen.
+2. Remote-Verbindungen ausschließlich über ein privates Netz, vorzugsweise WireGuard, herstellen.
 3. ROMs, Save-States, lokale `.env`, Checkpoints und `runtime/` bleiben lokal und werden weder übertragen noch committed.
 4. Der Cluster-Key gehört in lokale Konfiguration/Umgebungsvariablen, nie in Git und nie in Logs. Vor der produktiven Nutzung muss die Key-Ausgabe in `src/cluster_master.py` entfernt werden.
 5. Der Master akzeptiert nur Worker mit exakt passender Software-/Environment-Signatur.
@@ -72,7 +72,7 @@ Wähle einen Rechner, der während des Trainings zuverlässig laufen kann. Er br
 
 - genügend CPU/RAM für PPO-Learner, lokale Emulatoren (falls gewünscht) und die Annahme der Remote-Rollouts;
 - schnellen, stabilen Speicher für Checkpoints;
-- einen festen Namen bzw. eine stabile Tailscale-/LAN-Adresse;
+- einen festen Namen bzw. eine stabile Wireguard-/LAN-Adresse;
 - möglichst eine USV oder zumindest einen kontrollierten Neustartplan.
 
 Der Master bleibt die alleinige Quelle für:
@@ -113,7 +113,7 @@ Der Master lehnt einen Worker bei Abweichung ab. Besonders die Observation-Signa
 
 ### Schritt A4: VPN/LAN einrichten und testen
 
-1. Tailscale oder WireGuard auf Master und Test-Worker installieren.
+1. WireGuard auf Master und Test-Worker installieren.
 2. Beide Rechner in dasselbe private Netz aufnehmen.
 3. Nur die private VPN-Adresse des Masters verwenden.
 4. Vom Worker aus den Health-Endpunkt testen:
@@ -288,11 +288,85 @@ Ein Worker darf bei schlechter Verbindung pausieren oder nur wieder verbinden; e
 
 ---
 
-## 9. Fehlerfälle und erwartetes Verhalten
+## 9. Offline-Fallback: Lokales Training bei nicht erreichbarem Master
+
+**Ja: Lokale Rechner sollen bei einem Ausfall oder einer nicht verfügbaren Remote-Verbindung weiter nutzbar bleiben.** Das muss jedoch als klar getrennter Betriebsmodus umgesetzt werden, weil sich zwei unabhängig per PPO weitertrainierte Modelle nicht sicher zu einem gemeinsamen Brain zusammenführen lassen.
+
+### Betriebsmodi
+
+| Modus | Wann | Verhalten | Checkpoint-Ziel |
+|---|---|---|---|
+| `cluster` | Master erreichbar und Worker akzeptiert | Worker erzeugt Rollouts für das zentrale Brain; nur Master lernt | ausschließlich Master-Checkpoint |
+| `buffered` | kurze Unterbrechung nach zuvor gültiger Cluster-Verbindung | Worker arbeitet mit der zuletzt geladenen Master-Policy weiter und puffert nur begrenzte, versionierte Rollouts | keine lokalen Brain-Saves |
+| `local` | Master beim Start nicht erreichbar oder Unterbrechung zu lang | der Rechner trainiert mit dem vorhandenen lokalen SB3-Trainer weiter | ausschließlich lokaler Fallback-Checkpoint |
+| `paused` | weder Master noch erlaubter lokaler Fallback verfügbar | Emulatoren/Worker werden kontrolliert angehalten | keiner |
+
+### Schritt F1: Lokale und Cluster-Checkpoint-Bereiche strikt trennen
+
+Die vorhandenen lokalen Pfade unter `runtime/checkpoints/` dürfen nicht mit Cluster-Checkpoints oder Worker-Puffern geteilt werden. Bei der Implementierung werden mindestens diese getrennten Bereiche benötigt:
+
+```text
+runtime/checkpoints/                  # bestehendes lokales SB3-Brain
+runtime/cluster/checkpoints/          # ausschließlich Master-Cluster-Brain
+runtime/cluster/rollout_spool/        # begrenzter, temporärer Worker-Puffer
+runtime/local_fallback/               # lokale Fallback-Logs und Metadaten
+```
+
+Ein lokaler Fallback darf nie `runtime/cluster/checkpoints/` beschreiben. Der Master darf nie einen lokalen Fallback-Checkpoint automatisch übernehmen.
+
+### Schritt F2: Verhalten bei kurzer Unterbrechung
+
+Ein zuvor akzeptierter Cluster-Worker darf bei einer kurzen Verbindungslücke weiter Emulator-Erfahrung sammeln, aber **keine PPO-Updates ausführen**. Jeder gepufferte Batch erhält:
+
+```text
+policy_version
+environment_signature
+worker_id
+erzeugt_am
+anzahl_steps
+checksum
+```
+
+Nach einem reconnect entscheidet der Master:
+
+1. Batch passt zu Build, Observation und noch zulässiger Policy-Version: annehmen.
+2. Batch ist zu alt oder stammt aus einer unzulässigen Policy-Version: verwerfen und aktuelle Policy laden.
+3. Puffer ist voll oder die Offline-Grenze überschritten: Worker wechselt kontrolliert in `local` oder `paused`.
+
+Der Puffer muss eine feste Obergrenze für Alter, Größe und Batchzahl haben. PPO ist on-policy; alte Rollouts dürfen nicht unbegrenzt nachträglich gelernt werden.
+
+### Schritt F3: Verhalten bei längerer Nichtverfügbarkeit
+
+Ist der Master beim Start nicht erreichbar oder dauert die Unterbrechung länger als die konfigurierte Offline-Grenze, darf der Rechner den bestehenden lokalen Trainer starten. Dieser läuft weiter mit seinem **eigenen lokalen Brain** und dem vorhandenen lokalen Curriculum-/Exploration-Zustand.
+
+Dabei gelten zwingend:
+
+1. Der Start muss sichtbar als `LOCAL FALLBACK` geloggt werden.
+2. Lokale Checkpoints bleiben ausschließlich lokal.
+3. Der lokale Trainer versucht nicht, das zentrale Brain zu sperren, zu ersetzen oder hochzuladen.
+4. Nach Rückkehr des Masters wird der lokale Trainingslauf nicht automatisch mit dem Cluster vermischt.
+5. Für eine Rückkehr in den Cluster wird der lokale Trainer kontrolliert gestoppt, sein Final-Save abgeschlossen und anschließend ein Cluster-Worker mit der aktuellen Master-Policy gestartet.
+
+### Schritt F4: Optionalen lokalen Kandidaten bewusst bewerten
+
+Ein lokaler Fallback-Checkpoint kann später manuell als **Kandidat** geprüft werden. Er wird nicht gemergt. Der sichere Ablauf ist:
+
+1. Kandidaten-Checkpoint als unveränderliche Kopie kennzeichnen.
+2. Aktuelles Master-Brain und Kandidat mit derselben Evaluation-Suite, Seeds und Erfolgsmetriken ausführen.
+3. Nur wenn der Kandidat nach definierten Kriterien besser ist, wird er durch eine explizite Operator-Entscheidung als neue Ausgangsbasis für einen neuen Master-Trainingslauf übernommen.
+4. Optimiererzustand, Versionshistorie und Rückrollmöglichkeit des bisherigen Master-Brains bleiben erhalten.
+
+Eine Mittelung oder ein automatisches "Zusammenführen" der PPO-Gewichte ist ausdrücklich verboten.
+
+---
+
+## 10. Fehlerfälle und erwartetes Verhalten
 
 | Fehlerfall | Erwartetes Verhalten |
 |---|---|
-| Worker verliert Verbindung | Master markiert ihn nach Timeout offline; laufende Updates bleiben gültig |
+| Worker verliert Verbindung | Worker puffert nur kurz versionierte Rollouts, danach `local` oder `paused`; Master markiert ihn nach Timeout offline |
+| Master beim Worker-Start nicht erreichbar | Worker startet klar markierten lokalen Fallback oder bleibt kontrolliert pausiert |
+| Lokaler Fallback endet | Final-Save bleibt lokal; kein automatischer Upload oder Merge in das Cluster-Brain |
 | Worker startet mit falschem Build/ROM/Observation | Master lehnt ihn vor dem ersten Rollout ab |
 | Master startet neu | Master lädt den letzten vollständigen Cluster-Checkpoint und akzeptiert Worker erneut |
 | Worker startet neu | Worker registriert sich erneut und lädt die aktuelle Policy |
@@ -302,7 +376,7 @@ Ein Worker darf bei schlechter Verbindung pausieren oder nur wieder verbinden; e
 
 ---
 
-## 10. Geplante Repository-Änderungen bei der Umsetzung
+## 11. Geplante Repository-Änderungen bei der Umsetzung
 
 Die genauen Dateinamen können während des Designs angepasst werden. Voraussichtlich betroffen:
 
@@ -314,7 +388,8 @@ Die genauen Dateinamen können während des Designs angepasst werden. Voraussich
 | `src/cluster_worker.py` (neu) | Anmeldung, Compatibility-Check, Rollout-Worker-Start, Health/Telemetry |
 | `src/cluster_config.py` (neu) | zentrale, testbare Cluster-Konfiguration und Signaturbildung |
 | `scripts/start_cluster_master_wsl.sh` (neu) | idempotenter Master-Start mit PID/Log |
-| `scripts/start_cluster_worker_wsl.sh` (neu) | idempotenter Worker-Start mit PID/Log |
+| `scripts/start_cluster_worker_wsl.sh` (neu) | idempotenter Worker-Start mit PID/Log und expliziter Fallback-Modusentscheidung |
+| `scripts/start_local_fallback_wsl.sh` (neu oder bestehendes Script erweitert) | klar gekennzeichneter lokaler SB3-Fallback mit getrenntem Checkpoint-Pfad |
 | `scripts/stop_cluster_*_wsl.sh` (neu) | kontrolliertes Stoppen ohne fremde Prozesse zu beenden |
 | `tests/` | Kompatibilität, Versionierung, Worker-Ablehnungen, Checkpoint-/Recovery-Tests |
 | `docs/WINDOWS_WSL_ANLEITUNG.md` | konkrete Start-, Status-, Log- und Stop-Kommandos nach erfolgreicher Umsetzung |
@@ -322,7 +397,7 @@ Die genauen Dateinamen können während des Designs angepasst werden. Voraussich
 
 ---
 
-## 11. Go-Live-Checkliste
+## 12. Go-Live-Checkliste
 
 Vor dauerhaftem Clustertraining müssen alle Punkte erfüllt sein:
 
@@ -334,13 +409,16 @@ Vor dauerhaftem Clustertraining müssen alle Punkte erfüllt sein:
 - [ ] Master-Port ist nicht öffentlich erreichbar; Zugriff läuft nur über LAN/VPN.
 - [ ] Cluster-Key erscheint weder in Logs noch Dashboard noch Git.
 - [ ] Worker-Ausfall und Worker-Restart wurden getestet.
+- [ ] Kurze Master-Unterbrechung mit begrenztem Rollout-Puffer wurde getestet.
+- [ ] Längerer Master-Ausfall startet keinen konkurrierenden Cluster-Writer, sondern nur den getrennten lokalen Fallback oder pausiert kontrolliert.
+- [ ] Ein lokaler Fallback-Checkpoint wird beim Reconnect nicht automatisch hochgeladen oder mit dem Master-Brain gemergt.
 - [ ] Checkpoint-Ausfall und Master-Restart wurden getestet.
 - [ ] Watcher bleibt optional und nimmt nicht am Training teil.
 - [ ] Die Laufdokumentation enthält die tatsächlich geprüften Start-/Stop-/Status-Kommandos.
 
 ---
 
-## 12. Empfohlener erster Umsetzungsschritt
+## 13. Empfohlener erster Umsetzungsschritt
 
 Nicht sofort mehrere Rechner anbinden. Zuerst einen kleinen lokalen Prototyp erstellen:
 

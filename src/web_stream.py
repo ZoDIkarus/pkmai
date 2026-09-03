@@ -18,9 +18,40 @@ INSTANCES_DIR = os.path.join(RUNTIME_DIR, "instances_data")
 VERSION_FILE = os.path.join(RUNTIME_DIR, "model_version.json")
 SKELETON_FILE = os.path.join(RUNTIME_DIR, "skeleton_map.json")
 HISTORY_FILE = os.path.join(RUNTIME_DIR, "training_history.json")
+CHAMPION_FILE = os.path.join(RUNTIME_DIR, "champion_score.json")
+TRAINER_STATUS_FILE = os.path.join(RUNTIME_DIR, "trainer_status.json")
 HISTORY_LOCK = threading.Lock()
 EXPLORATION_MEMORY_DIR = os.path.join(RUNTIME_DIR, "exploration_memory")
 WATCHER_MAPPING_FILE = os.path.join(RUNTIME_DIR, "watcher_mapping.json")
+TRAINER_STATUS_FILE = os.path.join(RUNTIME_DIR, "trainer_status.json")
+
+def _live_learner_steps(fallback=0):
+    try:
+        with open(TRAINER_STATUS_FILE, "r") as f:
+            d = json.load(f) or {}
+        n = int(d.get("learner_steps", 0) or 0)
+        return n if n > 0 else int(fallback or 0)
+    except Exception:
+        return int(fallback or 0)
+
+
+@app.get("/api/champion")
+def get_champion():
+    try:
+        with open(CHAMPION_FILE, "r") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {"version":0,"timesteps":0,"metrics":{},"score":[]}
+
+
+@app.get("/api/trainer-status")
+def get_trainer_status():
+    try:
+        with open(TRAINER_STATUS_FILE, "r") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {"learner_steps":0,"champion_steps":0,"champion_version":0,"delta_steps":0}
+
 
 @app.get("/map.png")
 def get_map():
@@ -70,7 +101,7 @@ def _save_training_history(history):
 def _aggregate_training_stats(instances):
     agents = [
         x for x in instances
-        if isinstance(x, dict) and 0 <= int(x.get("id", -1)) <= 39
+        if isinstance(x, dict) and 0 <= int(x.get("id", -1)) <= 119
     ]
 
     episodes = 0
@@ -114,6 +145,10 @@ def _aggregate_training_stats(instances):
         "journey_progress_checkpoint": 0,
         "journey_badge1": 0,
     }
+
+    # V83_REQUIRED_COUNTERS
+    for _k in ('v8_starter_episodes', 'v8_starter_success', 'v8_battle_episodes', 'v8_battle_success', 'v8_level_episodes', 'v8_level_success', 'v8_badge_episodes', 'v8_badge_success', 'v2_full_starter', 'v7_full_badge1', 'enemy_faints', 'enemy_damage_hp'):
+        run_totals.setdefault(_k, 0)
 
     for inst in agents:
         max_level = max(max_level, int(inst.get("level", 0)))
@@ -162,12 +197,13 @@ def _aggregate_training_stats(instances):
         )
 
     def specialist_rate(success_key, episode_key):
-        episode_count = run_totals[episode_key]
+        episode_count = int(run_totals.get(episode_key, 0) or 0)
         if episode_count <= 0:
             return 0.0
+        success_count = int(run_totals.get(success_key, 0) or 0)
         return min(
             100.0,
-            100.0 * run_totals[success_key] / episode_count
+            100.0 * success_count / episode_count
         )
 
     loop_rate = (
@@ -228,19 +264,48 @@ def _aggregate_training_stats(instances):
             ),
         },
         "beginning_loop_resets": run_totals["beginning_loop_resets"],
+        "v8_skill_rates": {
+            "starter": round(
+                specialist_rate("v8_starter_success", "v8_starter_episodes"), 2
+            ),
+            "battle": round(
+                specialist_rate("v8_battle_success", "v8_battle_episodes"), 2
+            ),
+            "level": round(
+                specialist_rate("v8_level_success", "v8_level_episodes"), 2
+            ),
+            "badge": round(
+                specialist_rate("v8_badge_success", "v8_badge_episodes"), 2
+            ),
+            "full_starter": round(
+                specialist_rate("v2_full_starter", "v2_full_episodes"), 2
+            ),
+            "full_badge1": round(
+                specialist_rate("v7_full_badge1", "v2_full_episodes"), 2
+            ),
+        },
         "beginning_loops_per_100_runs": round(loop_rate, 2),
     }
 
 
 def _maybe_record_history(version_meta, instances):
     with HISTORY_LOCK:
-        version = int(version_meta.get("version", 0))
-        timesteps = int(version_meta.get("timesteps", 0))
-        if version <= 0 or timesteps <= 0:
+        version = int(version_meta.get("version", 0) or 0)
+        champion_steps = int(version_meta.get("timesteps", 0) or 0)
+        learner_steps = 0
+        try:
+            with open(TRAINER_STATUS_FILE, "r") as f:
+                ts = json.load(f) or {}
+            learner_steps = int(ts.get("learner_steps", 0) or 0)
+        except Exception:
+            pass
+        timesteps = learner_steps if learner_steps > 0 else champion_steps
+        if timesteps <= 0:
             return
-
+        # One live history point every 25k learner steps.
+        bucket = (timesteps // 25000) * 25000
         history = _load_training_history()
-        if history and int(history[-1].get("version", -1)) == version:
+        if history and int(history[-1].get("timesteps", -1)) >= bucket:
             return
 
         stats = _aggregate_training_stats(instances)
@@ -260,6 +325,7 @@ def _maybe_record_history(version_meta, instances):
                 stats["beginning_loops_per_100_runs"],
             "beginning_success_rates": stats["beginning_success_rates"],
             "v6_skill_rates": stats["v6_skill_rates"],
+            "v8_skill_rates": stats.get("v8_skill_rates", {}),
             "v6_skill_totals": {
                 "intro_episodes": stats["run_totals"]["v2_intro_episodes"],
                 "intro_success": stats["run_totals"]["v2_intro_success"],
@@ -375,6 +441,80 @@ def api_v81_skills():
     return _v81_skill_health()
 
 
+
+def _v84_skill_stats():
+    stats_dir = os.path.join(RUNTIME_DIR, "training_stats")
+    keys = (
+        "v2_intro_episodes","v2_intro_success",
+        "v2_stairs_episodes","v2_stairs_success",
+        "v2_exit_episodes","v2_exit_success",
+        "v2_full_episodes","v2_full_intro","v2_full_stairs",
+        "v2_full_left_house","v2_full_starter",
+        "v8_starter_episodes","v8_starter_success",
+        "v8_battle_episodes","v8_battle_success",
+        "v8_level_episodes","v8_level_success",
+        "v8_badge_episodes","v8_badge_success",
+        "v7_full_badge1",
+        "battles_started","battles_completed",
+        "enemy_faints","enemy_damage_hp"
+    )
+    totals = {k: 0 for k in keys}
+    agents_seen = set()
+
+    for path in sorted(glob.glob(os.path.join(stats_dir, "agent_*.json"))):
+        try:
+            aid = int(os.path.basename(path)[6:8])
+            if not (0 <= aid <= 119):
+                continue
+            with open(path, "r") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                continue
+            agents_seen.add(aid)
+            for k in keys:
+                totals[k] += int(data.get(k, 0) or 0)
+        except Exception:
+            pass
+
+    def pct(ok, ep):
+        e = int(totals.get(ep, 0))
+        o = int(totals.get(ok, 0))
+        return round(100.0 * o / e, 2) if e else 0.0
+
+    full_ep = int(totals.get("v2_full_episodes", 0))
+    def fpct(k):
+        return round(100.0 * int(totals.get(k, 0)) / full_ep, 2) if full_ep else 0.0
+
+    skills = [
+        {"label":"Intro","rate":pct("v2_intro_success","v2_intro_episodes"),"success":totals["v2_intro_success"],"episodes":totals["v2_intro_episodes"]},
+        {"label":"Treppe","rate":pct("v2_stairs_success","v2_stairs_episodes"),"success":totals["v2_stairs_success"],"episodes":totals["v2_stairs_episodes"]},
+        {"label":"Haus Exit","rate":pct("v2_exit_success","v2_exit_episodes"),"success":totals["v2_exit_success"],"episodes":totals["v2_exit_episodes"]},
+        {"label":"Erstes Pokémon","rate":pct("v8_starter_success","v8_starter_episodes"),"success":totals["v8_starter_success"],"episodes":totals["v8_starter_episodes"]},
+        {"label":"Battle KO","rate":pct("v8_battle_success","v8_battle_episodes"),"success":totals["v8_battle_success"],"episodes":totals["v8_battle_episodes"]},
+        {"label":"Level-Up","rate":pct("v8_level_success","v8_level_episodes"),"success":totals["v8_level_success"],"episodes":totals["v8_level_episodes"]},
+        {"label":"Gym / Badge","rate":pct("v8_badge_success","v8_badge_episodes"),"success":totals["v8_badge_success"],"episodes":totals["v8_badge_episodes"]},
+        {"label":"Full Intro","rate":fpct("v2_full_intro"),"success":totals["v2_full_intro"],"episodes":full_ep},
+        {"label":"Full Treppe","rate":fpct("v2_full_stairs"),"success":totals["v2_full_stairs"],"episodes":full_ep},
+        {"label":"Full Exit","rate":fpct("v2_full_left_house"),"success":totals["v2_full_left_house"],"episodes":full_ep},
+        {"label":"Full Pokémon","rate":fpct("v2_full_starter"),"success":totals["v2_full_starter"],"episodes":full_ep},
+        {"label":"Full Badge 1","rate":fpct("v7_full_badge1"),"success":totals["v7_full_badge1"],"episodes":full_ep}
+    ]
+
+    return {
+        "agents_seen": len(agents_seen),
+        "skills": skills,
+        "battle": {
+            "started": totals["battles_started"],
+            "completed": totals["battles_completed"],
+            "enemy_faints": totals["enemy_faints"],
+            "enemy_damage_hp": totals["enemy_damage_hp"]
+        }
+    }
+
+@app.get("/api/v84_skills")
+def get_v84_skills():
+    return _v84_skill_stats()
+
 @app.get("/api/state")
 def get_state():
     files = glob.glob(os.path.join(INSTANCES_DIR, "inst_*.json"))
@@ -414,8 +554,24 @@ def get_state():
         except Exception:
             pass
 
-    training_stats = _aggregate_training_stats(instances)
-    _maybe_record_history(version_meta, instances)
+    try:
+        training_stats = _aggregate_training_stats(instances)
+    except Exception as _agg_error:
+        print(f"[WEB] aggregate warning: {_agg_error}")
+        training_stats = {
+            "episodes": 0, "avg_episode_reward": 0.0,
+            "best_episode_reward": 0.0, "max_level": 0,
+            "max_badges": 0, "max_maps": 0,
+            "max_explored_tiles": 0,
+            "run_totals": {}, "beginning_success_rates": {},
+            "v6_skill_rates": {}, "v8_skill_rates": {},
+            "beginning_loop_resets": 0,
+            "beginning_loops_per_100_runs": 0.0,
+        }
+    try:
+        _maybe_record_history(version_meta, instances)
+    except Exception as _history_error:
+        print(f"[WEB] history warning: {_history_error}")
     try:
         global_exploration = _global_exploration_summary()
     except Exception:
@@ -430,7 +586,7 @@ def get_state():
     return {
         "trainer_name": trainer_name,
         "version": int(version_meta.get("version", 0)),
-        "training_timesteps": int(version_meta.get("timesteps", 0)),
+        "training_timesteps": _live_learner_steps(int(version_meta.get("timesteps", 0))),
         "max_level": max(max_level, training_stats["max_level"]),
         "max_badges": max(max_badges, training_stats["max_badges"]),
         "total_steps": total_steps,
@@ -662,8 +818,8 @@ def get_global_mapping():
     maps = set()
     transitions = set()
 
-    # 30 Trainingsagenten
-    for agent_id in range(40):
+    # 120 Trainingsagenten
+    for agent_id in range(120):
         path = os.path.join(
             EXPLORATION_MEMORY_DIR,
             f"agent_{agent_id:02d}.json"
@@ -734,7 +890,7 @@ def get_global_mapping():
 @app.get("/api/explorations")
 def get_explorations():
     result = {}
-    for agent_id in range(40):
+    for agent_id in range(120):
         path = os.path.join(
             EXPLORATION_MEMORY_DIR,
             f"agent_{agent_id:02d}.json"
@@ -756,7 +912,7 @@ def get_explorations():
 
 @app.get("/api/exploration/{agent_id}")
 def get_exploration(agent_id: int):
-    if agent_id < 0 or agent_id > 39:
+    if agent_id < 0 or agent_id > 119:
         return {"agent_id": agent_id, "edges": [], "maps": [], "transitions": []}
 
     path = os.path.join(
@@ -810,7 +966,7 @@ def index():
                 if (selectedAgentId !== null) {
                     inst = list.find(x => Number(x.id) === Number(selectedAgentId));
                 }
-                if (!inst) inst = list.find(x => Number(x.id) === 99) || null;
+                if (!inst) inst = list.find(x => Number(x.id) === 120) || null;
                 if (!inst) return;
 
                 const role = document.getElementById('v8-agent-role');
@@ -913,10 +1069,104 @@ def index():
         }
         setInterval(refreshV81Skills,1500);setTimeout(refreshV81Skills,250);
 
+    
+        async function refreshV83Skills(){
+            try{
+                const d = await (await fetch('/api/state',{cache:'no-store'})).json();
+                const ts = d.training_stats || {};
+                const a = ts.v6_skill_rates || {};
+                const b = ts.v8_skill_rates || {};
+                const rt = ts.run_totals || {};
+                const rows = [
+                    ['Intro',a.intro||0,rt.v2_intro_success||0,rt.v2_intro_episodes||0],
+                    ['Treppe',a.stairs||0,rt.v2_stairs_success||0,rt.v2_stairs_episodes||0],
+                    ['Haus Exit',a.exit||0,rt.v2_exit_success||0,rt.v2_exit_episodes||0],
+                    ['Erstes Pokémon',b.starter||0,rt.v8_starter_success||0,rt.v8_starter_episodes||0],
+                    ['Battle KO',b.battle||0,rt.v8_battle_success||0,rt.v8_battle_episodes||0],
+                    ['Level-Up',b.level||0,rt.v8_level_success||0,rt.v8_level_episodes||0],
+                    ['Gym / Badge',b.badge||0,rt.v8_badge_success||0,rt.v8_badge_episodes||0],
+                    ['Full Intro',a.full_intro||0,rt.v2_full_intro||0,rt.v2_full_episodes||0],
+                    ['Full Treppe',a.full_stairs||0,rt.v2_full_stairs||0,rt.v2_full_episodes||0],
+                    ['Full Exit',a.full_exit||0,rt.v2_full_left_house||0,rt.v2_full_episodes||0],
+                    ['Full Pokémon',b.full_starter||0,rt.v2_full_starter||0,rt.v2_full_episodes||0],
+                    ['Full Badge 1',b.full_badge1||0,rt.v7_full_badge1||0,rt.v2_full_episodes||0]
+                ];
+                const box=document.getElementById('v83-skill-table');
+                if(box){
+                    box.innerHTML=rows.map(x=>`<div style="background:#0c121a;border:1px solid #283649;border-radius:9px;padding:8px">
+                        <div style="font-size:9px;color:#8291a5">${x[0]}</div>
+                        <div style="font-size:19px;font-weight:900;color:#7df9b7">${Number(x[1]).toFixed(1)}%</div>
+                        <div style="font-size:8px;color:#657488">${x[2]}/${x[3]}</div>
+                    </div>`).join('');
+                }
+                const c=document.getElementById('v83-skill-canvas');
+                if(c){
+                    const ctx=c.getContext('2d'), W=c.width, H=c.height;
+                    ctx.clearRect(0,0,W,H);
+                    ctx.fillStyle='#0c121a'; ctx.fillRect(0,0,W,H);
+                    const bw=(W-80)/rows.length;
+                    rows.forEach((x,i)=>{
+                        const p=Math.max(0,Math.min(100,Number(x[1]||0)));
+                        const h=(H-55)*p/100;
+                        ctx.fillStyle='#2ddf9b';
+                        ctx.fillRect(45+i*bw,H-35-h,bw*.62,h);
+                        ctx.save();
+                        ctx.translate(45+i*bw,H-20);
+                        ctx.rotate(-0.55);
+                        ctx.fillStyle='#91a0b4';
+                        ctx.font='11px sans-serif';
+                        ctx.fillText(x[0],0,0);
+                        ctx.restore();
+                    });
+                    ctx.strokeStyle='#344255'; ctx.beginPath();
+                    ctx.moveTo(35,10);ctx.lineTo(35,H-35);ctx.lineTo(W-10,H-35);ctx.stroke();
+                }
+            }catch(e){ console.error('V83 skills',e); }
+        }
+        setInterval(refreshV83Skills,1500);
+        setTimeout(refreshV83Skills,300);
+
+    
+        function v84Card(s){
+            return `<div class="v84-card"><div class="n">${s.label}</div><div class="v">${Number(s.rate||0).toFixed(1)}%</div><div class="s">${s.success||0}/${s.episodes||0}</div></div>`;
+        }
+        function drawV84(rows){
+            const c=document.getElementById('v84-skill-canvas'); if(!c)return;
+            const ctx=c.getContext('2d'),W=c.width,H=c.height;ctx.clearRect(0,0,W,H);ctx.fillStyle='#0b121a';ctx.fillRect(0,0,W,H);
+            const left=55,right=20,top=18,bottom=72,plotW=W-left-right,plotH=H-top-bottom,slot=plotW/Math.max(1,rows.length);
+            ctx.strokeStyle='#2a394b';ctx.lineWidth=1;
+            for(let p=0;p<=100;p+=20){const y=top+plotH-(plotH*p/100);ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(W-right,y);ctx.stroke();ctx.fillStyle='#73849a';ctx.font='11px sans-serif';ctx.fillText(p+'%',8,y+4);}
+            rows.forEach((s,i)=>{const pct=Math.max(0,Math.min(100,Number(s.rate||0)));const h=plotH*pct/100,bw=slot*.58,x=left+i*slot+(slot-bw)/2,y=top+plotH-h;ctx.fillStyle='#28dfa0';ctx.fillRect(x,y,bw,h);ctx.fillStyle='#d9e7f5';ctx.font='10px sans-serif';ctx.fillText(pct.toFixed(1)+'%',x,y-5);ctx.save();ctx.translate(x+bw/2,H-bottom+14);ctx.rotate(-0.58);ctx.fillStyle='#8b9bb0';ctx.font='11px sans-serif';ctx.fillText(s.label,0,0);ctx.restore();});
+        }
+        async function refreshV84Skills(){
+            try{
+                const r=await fetch('/api/v84_skills',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);
+                const d=await r.json(),rows=d.skills||[],b=d.battle||{};
+                const g=document.getElementById('v84-skill-grid');if(g)g.innerHTML=rows.map(v84Card).join('');
+                const m=document.getElementById('v84-meta');if(m)m.innerHTML=[[d.agents_seen||0,'Agents mit Stats'],[b.started||0,'Battles gestartet'],[b.completed||0,'Battles beendet'],[b.enemy_faints||0,'Enemy KOs'],[b.enemy_damage_hp||0,'Enemy HP Damage']].map(x=>`<div><b>${x[0]}</b><span>${x[1]}</span></div>`).join('');
+                drawV84(rows);
+            }catch(e){const g=document.getElementById('v84-skill-grid');if(g)g.innerHTML=`<div class="v84-card" style="grid-column:1/-1"><div class="n">API FEHLER</div><div class="s">${String(e)}</div></div>`;}
+        }
+        setInterval(refreshV84Skills,1500);setTimeout(refreshV84Skills,250);
+
     </script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <style>
         * { box-sizing: border-box; }
+        /* V85 SINGLE SKILL VIEW */
+        #v84-skill-panel,.v8-skill-panel,.graph-card:has(#v81skillschart),.graph-card:has(#v83-skill-canvas){display:none !important;}
+        /* V84 CANONICAL SKILLS */
+        .v81skills,.v8-skill-panel{display:none !important;}
+        .v84-skill-panel{margin:0 0 14px 0;background:#0d141d;border:1px solid #29384a;border-radius:14px;padding:14px;}
+        .v84-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}
+        .v84-head b{font-size:14px;color:#eef7ff}.v84-head span{font-size:10px;color:#7c8ca1}
+        .v84-grid{display:grid;grid-template-columns:repeat(6,minmax(110px,1fr));gap:8px;}
+        .v84-card{background:#101821;border:1px solid #263648;border-radius:10px;padding:9px;}
+        .v84-card .n{font-size:9px;color:#8191a5;text-transform:uppercase}.v84-card .v{font-size:20px;font-weight:900;color:#7df9b7;margin-top:4px}.v84-card .s{font-size:8px;color:#607085;margin-top:2px}
+        .v84-meta{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px;}
+        .v84-meta div{background:#0a1118;border:1px solid #223142;border-radius:9px;padding:8px;text-align:center;}
+        .v84-meta b{display:block;font-size:16px;color:#eaf7ff}.v84-meta span{font-size:8px;color:#68788d}
+        .v84-canvas-wrap{height:300px;margin-top:12px;}#v84-skill-canvas{width:100%;height:300px;}
         /* V81 NIGHT SKILLS */
         .v81skills{position:absolute;top:14px;left:14px;z-index:930;width:min(800px,calc(100vw - 300px));background:rgba(7,12,18,.94);border:1px solid #29384a;border-radius:13px;padding:9px;backdrop-filter:blur(10px)}
         .v81grid{display:grid;grid-template-columns:repeat(6,1fr);gap:5px}.v81card{background:#101821;border:1px solid #243244;border-radius:8px;padding:6px}.v81n{font-size:8px;color:#8190a3}.v81v{font-size:15px;font-weight:900;color:#79f5b2}.v81s{font-size:7px;color:#617085}
@@ -1235,8 +1485,59 @@ def index():
         .chart-label { font-size:9px; color:#888; margin:0 0 3px 4px; }
         .mini-chart { width:100%; height:72px; display:block; }
     </style>
+<style id="champion-night-style">
+#champion-night-card{position:fixed;right:390px;top:72px;z-index:4800;width:285px;padding:10px 12px;border-radius:14px;background:linear-gradient(145deg,rgba(8,17,28,.96),rgba(15,27,41,.93));border:1px solid rgba(68,214,255,.28);box-shadow:0 14px 42px rgba(0,0,0,.34);backdrop-filter:blur(12px);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+#champion-night-card.minimized{width:185px}
+#champion-night-card.minimized .cn-grid,#champion-night-card.minimized .cn-foot{display:none}
+.cn-title{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;font-weight:900;letter-spacing:.65px;color:#55e4a3}
+.cn-title-right{display:flex;align-items:center;gap:7px}.cn-toggle{border:0;background:rgba(255,255,255,.08);color:#a9bdd2;border-radius:7px;padding:2px 7px;cursor:pointer;font-size:12px}
+.cn-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
+.cn-grid div{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.065);border-radius:9px;padding:7px 3px;text-align:center}
+.cn-grid b{display:block;font-size:13px;color:#f4f8ff}.cn-grid small{font-size:7px;color:#8191a7;text-transform:uppercase}
+.cn-foot{margin-top:7px;font-size:7px;color:#74879d}
+@media(max-width:1200px){#champion-night-card{right:18px;top:145px}}
+</style>
+<style id="pkmai-window-tools-style">
+.pkmai-float-tools{position:absolute;right:8px;top:7px;display:flex;gap:4px;z-index:30}
+.pkmai-float-tools button{border:0;border-radius:7px;background:rgba(255,255,255,.08);color:#b8c7d8;font-size:11px;line-height:1;padding:4px 7px;cursor:pointer}
+.pkmai-float-tools button:hover{background:rgba(255,255,255,.15)}
+.pkmai-movable{touch-action:none}
+.pkmai-minimized{height:38px!important;min-height:38px!important;overflow:hidden!important}
+.pkmai-hidden{display:none!important}
+#pkmai-hidden-tray{position:fixed;left:10px;bottom:10px;z-index:6000;display:flex;gap:6px;flex-wrap:wrap;max-width:calc(100vw - 20px)}
+#pkmai-hidden-tray button{border:1px solid rgba(77,208,225,.25);background:rgba(10,18,28,.94);color:#aee8dd;border-radius:9px;padding:7px 10px;font-size:10px;cursor:pointer}
+@media(max-width:820px){
+  body{overflow:auto!important}
+  #map-view,#rooms-view,#graphs-view{position:relative!important;min-height:calc(100vh - 54px)!important;height:auto!important}
+  .pkmai-movable{position:relative!important;left:auto!important;right:auto!important;top:auto!important;bottom:auto!important;width:calc(100% - 16px)!important;max-width:none!important;margin:8px!important;transform:none!important}
+  #champion-night-card{position:relative!important;right:auto!important;top:auto!important;width:calc(100% - 16px)!important;margin:8px!important}
+  .graphs-grid{grid-template-columns:1fr!important}
+  .journey-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+}
+@media(max-width:480px){
+  .journey-grid{grid-template-columns:1fr!important}
+  .graph-card{min-height:320px!important}
+}
+</style>
+<style id="learner-truth-style">
+#learner-truth-hud{position:fixed;left:16px;bottom:16px;z-index:4900;width:300px;padding:10px 12px;border-radius:13px;background:rgba(7,14,23,.96);border:1px solid rgba(82,222,172,.30);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+#learner-truth-hud.minimized .lth-body{display:none}.lth-head{display:flex;justify-content:space-between;align-items:center;color:#58e3a5;font-size:10px;font-weight:900}.lth-head button{border:0;background:rgba(255,255,255,.08);color:#b7c7d8;border-radius:7px;padding:2px 7px}
+.lth-body{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}.lth-cell{background:rgba(255,255,255,.045);border-radius:8px;padding:7px 5px;text-align:center}.lth-cell b{display:block;font-size:13px;color:#f5f8fc}.lth-cell small{font-size:7px;color:#8393a8;text-transform:uppercase}
+@media(max-width:820px){#learner-truth-hud{position:relative!important;left:auto!important;bottom:auto!important;width:calc(100% - 16px)!important;margin:8px!important}}
+</style>
 </head>
 <body>
+<div id="learner-truth-hud"><div class="lth-head"><span>🧠 TRAINER · LIVE</span><button onclick="document.getElementById('learner-truth-hud').classList.toggle('minimized')">−</button></div><div class="lth-body"><div class="lth-cell"><b id="lth-learner">0</b><small>Learner Steps</small></div><div class="lth-cell"><b id="lth-champion">0</b><small>Champion Steps</small></div><div class="lth-cell"><b id="lth-delta">0</b><small>Seit Champion</small></div></div></div>
+<div id="champion-night-card">
+  <div class="cn-title"><span>🏆 FRONTIER CHAMPION</span><span class="cn-title-right"><span id="cn-ver">v0</span><button class="cn-toggle" onclick="document.getElementById('champion-night-card').classList.toggle('minimized')">−</button></span></div>
+  <div class="cn-grid">
+    <div><b id="cn-steps">0</b><small>Steps</small></div>
+    <div><b id="cn-full">0%</b><small>Full Exit</small></div>
+    <div><b id="cn-starter">0%</b><small>Full Starter</small></div>
+    <div><b id="cn-badge">0</b><small>Badge</small></div>
+  </div>
+  <div class="cn-foot">30 Episoden + 4 Full · neue Full-Meilensteine sofort</div>
+</div>
     <header>
         <div class="header-left">
             <div class="logo-title">⚡ PKMAI <span id="model-ver" style="color:#2979ff;">v000001</span></div>
@@ -1267,11 +1568,11 @@ def index():
             <!-- AGENTEN FILTER INPUT -->
             <div class="filter-control">
                 <span>Zeige Agenten:</span>
-                <input type="number" id="agent-limit" class="filter-input" value="40" min="0" max="40" onchange="updateFilter(this.value)">
+                <input type="number" id="agent-limit" class="filter-input" value="120" min="0" max="120" onchange="updateFilter(this.value)">
                 <button class="filter-btn" onclick="setFilter(5)">5</button>
                 <button class="filter-btn" onclick="setFilter(10)">10</button>
                 <button class="filter-btn" onclick="setFilter(20)">20</button>
-                <button class="filter-btn" onclick="setFilter(40)">Alle 40</button>
+                <button class="filter-btn" onclick="setFilter(120)">Alle 120</button>
             </div>
         </div>
 
@@ -1285,7 +1586,7 @@ def index():
     </header>
 
     <div id="main-container">
-        <div id="map-view"><div class="v81skills"><div style="font-size:11px;font-weight:800;margin-bottom:6px">V8.1 TRAINING SKILLS · 40 AGENTS</div><div class="v81grid" id="v81skills"></div></div>
+        <div id="map-view"><div class="v81skills"><div style="font-size:11px;font-weight:800;margin-bottom:6px">V8.4 TRAINING SKILLS · 120 AGENTS</div><div class="v81grid" id="v81skills"></div></div>
             <div class="live-global">
                 <div class="live-global-title"><span><span class="live-dot"></span>GLOBAL AI</span><span id="live-model">v0</span></div>
                 <div class="live-global-grid">
@@ -1299,7 +1600,17 @@ def index():
             </div>
         </div>
         <div id="rooms-view"><div class="room-grid" id="room-grid"></div></div>
-        <div id="graphs-view"><div class="graph-card" style="min-height:350px;margin-bottom:12px"><div class="graph-title">V8.1 – Alle Skill-Raten</div><div class="graph-sub">Spezialisten + Full-Chain</div><div class="graph-canvas-wrap" style="height:300px"><canvas id="v81skillschart"></canvas></div></div><div class="v8-skill-panel"><div class="v8-skill-title"><b>V8 Skill Matrix</b><span>direkt aus Training-Stats · nicht Watcher</span></div><div class="v8-skill-cards" id="v8-skill-cards"></div><div class="v8-skill-chart-wrap"><canvas id="v8-skill-chart"></canvas></div></div>
+        <div id="graphs-view"><div class="v84-skill-panel" id="v84-skill-panel">
+            <div class="v84-head"><b>V8.4 – Trainings-Skills · 120 Agents</b><span>direkt aus agent_00…119 Training-Stats</span></div>
+            <div class="v84-grid" id="v84-skill-grid"></div>
+            <div class="v84-meta" id="v84-meta"></div>
+            <div class="v84-canvas-wrap"><canvas id="v84-skill-canvas" width="1500" height="300"></canvas></div>
+        </div><div class="graph-card" style="min-height:390px;margin-bottom:12px">
+            <div class="graph-title">V8.3 – Vollständige Skill-Statistik</div>
+            <div class="graph-sub">Intro → Treppe → Exit → Erstes Pokémon → Battle → Level → Gym + Full Chain</div>
+            <div id="v83-skill-table" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:12px 0"></div>
+            <canvas id="v83-skill-canvas" width="1200" height="250" style="width:100%;height:250px"></canvas>
+        </div><div class="graph-card" style="min-height:350px;margin-bottom:12px"><div class="graph-title">V8.1 – Alle Skill-Raten</div><div class="graph-sub">Spezialisten + Full-Chain</div><div class="graph-canvas-wrap" style="height:300px"><canvas id="v81skillschart"></canvas></div></div><div class="v8-skill-panel"><div class="v8-skill-title"><b>V8 Skill Matrix</b><span>direkt aus Training-Stats · nicht Watcher</span></div><div class="v8-skill-cards" id="v8-skill-cards"></div><div class="v8-skill-chart-wrap"><canvas id="v8-skill-chart"></canvas></div></div>
             <div class="journey-wrap">
                 <div class="journey-title"><h3>🚀 Journey Skills</h3><span>Early Game → Vertania → Wald → Orden 1</span></div>
                 <div class="journey-grid">
@@ -1322,7 +1633,7 @@ def index():
             </div>
             <div class="graphs-grid">
                 <div class="graph-card"><div class="graph-title">Lernkurve</div><div class="graph-sub">Ø Episode-Reward über echte PPO-Trainingsschritte.</div><div class="graph-canvas-wrap"><canvas id="graph-reward"></canvas></div></div>
-                <div class="graph-card"><div class="graph-title">Story-Erfolgsquote</div><div class="graph-sub">V7.4.5: Party + EXP + Warp Markers Hidden.</div><div class="graph-canvas-wrap"><canvas id="graph-success"></canvas></div></div>
+                <div class="graph-card"><div class="graph-title">V9.0 – Clean Night 120</div><div class="graph-sub">Kumulative Erfolgsquote aller Spezialisten + Full-Chain. Sinkende Linien = neue Runs sind aktuell schwächer als der bisherige Durchschnitt.</div><div class="graph-canvas-wrap"><canvas id="graph-success"></canvas></div></div>
                 <div class="graph-card"><div class="graph-title">Spiel-Fortschritt</div><div class="graph-sub">Bestes Level, Orden und Maps je Modellstand.</div><div class="graph-canvas-wrap"><canvas id="graph-progress"></canvas></div></div>
                 <div class="graph-card"><div class="graph-title">Festfahren / Anti-Loop</div><div class="graph-sub">Loops pro 100 echte Beginning-Runs; Curriculum wird separat gezählt.</div><div class="graph-canvas-wrap"><canvas id="graph-loops"></canvas></div></div>
             </div>
@@ -1411,7 +1722,7 @@ def index():
     </div>
 
     <script>
-        let maxVisibleAgents = 40;
+        let maxVisibleAgents = 120;
         let selectedAgentId = null; // null = alle Agenten sichtbar.
         let latestInstances = [];
         const historyByAgent = {};
@@ -1926,7 +2237,13 @@ def index():
                     {label:'Exit Skill',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).exit||0)),borderWidth:2,pointRadius:1,tension:.2},
                     {label:'Full Intro',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).full_intro||0)),borderWidth:2,pointRadius:1,tension:.2},
                     {label:'Full Treppe',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).full_stairs||0)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Full Haus raus',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).full_exit||0)),borderWidth:2,pointRadius:1,tension:.2}
+                    {label:'Full Haus raus',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).full_exit||0)),borderWidth:2,pointRadius:1,tension:.2},
+                    {label:'Erstes Pokémon',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).starter||0)),borderWidth:2,pointRadius:1,tension:.2},
+                    {label:'Battle KO',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).battle||0)),borderWidth:2,pointRadius:1,tension:.2},
+                    {label:'Level-Up',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).level||0)),borderWidth:2,pointRadius:1,tension:.2},
+                    {label:'Gym / Badge',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).badge||0)),borderWidth:2,pointRadius:1,tension:.2},
+                    {label:'Full Pokémon',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).full_starter||0)),borderWidth:2,pointRadius:1,tension:.2},
+                    {label:'Full Badge 1',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).full_badge1||0)),borderWidth:2,pointRadius:1,tension:.2}
                 ],true);
 
                 const runningMax=(arr)=>{let m=0;return arr.map(v=>{m=Math.max(m,Number(v||0));return m;});};
@@ -2594,6 +2911,68 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
         setInterval(updateDashboard, 1000);
 
     </script>
+<script id="champion-night-js">
+async function refreshChampionNight(){
+  try{
+    const r=await fetch('/api/champion?ts='+Date.now());
+    const c=await r.json(),m=c.metrics||{};
+    const fmt=n=>Number(n||0).toLocaleString('de-DE');
+    document.getElementById('cn-ver').textContent='v'+String(c.version||0).padStart(6,'0');
+    document.getElementById('cn-steps').textContent=fmt(c.timesteps||0);
+    document.getElementById('cn-full').textContent=(Number(m.full_exit_permille||0)/10).toFixed(1)+'%';
+    document.getElementById('cn-starter').textContent=(Number(m.full_starter_permille||0)/10).toFixed(1)+'%';
+    document.getElementById('cn-badge').textContent=String(m.max_badges||0);
+  }catch(e){}
+}
+setInterval(refreshChampionNight,2000);refreshChampionNight();
+</script>
+<div id="pkmai-hidden-tray"></div>
+<script id="pkmai-window-tools-js">
+(function(){
+  const tray=document.getElementById('pkmai-hidden-tray');
+  const preferred=['#champion-night-card','.v81skills','.live-global','.instance-panel','.agents-panel','.agent-list','.global-ai','.watcher-panel'];
+  function titleOf(el){const t=el.querySelector('.cn-title,.graph-title,.live-global-title,h1,h2,h3,b,strong');return (t&&t.textContent.trim())||el.id||'Fenster';}
+  function restoreButton(el,label){const b=document.createElement('button');b.textContent='↩ '+label;b.onclick=()=>{el.classList.remove('pkmai-hidden');b.remove();};tray.appendChild(b);}
+  function addTools(el){
+    if(!el||el.dataset.pkmaiTools==='1')return;
+    el.dataset.pkmaiTools='1';el.classList.add('pkmai-movable');
+    if(getComputedStyle(el).position==='static')el.style.position='relative';
+    const tools=document.createElement('div');tools.className='pkmai-float-tools';
+    const min=document.createElement('button');min.textContent='−';min.title='Minimieren';
+    const hide=document.createElement('button');hide.textContent='×';hide.title='Ausblenden';
+    tools.append(min,hide);el.appendChild(tools);
+    min.onclick=e=>{e.stopPropagation();el.classList.toggle('pkmai-minimized');};
+    hide.onclick=e=>{e.stopPropagation();const label=titleOf(el);el.classList.add('pkmai-hidden');restoreButton(el,label);};
+    if(matchMedia('(max-width:820px)').matches)return;
+    let drag=false,ox=0,oy=0;
+    el.addEventListener('pointerdown',e=>{
+      if(e.target.closest('button,input,canvas,a'))return;
+      drag=true;el.setPointerCapture(e.pointerId);
+      const r=el.getBoundingClientRect();ox=e.clientX-r.left;oy=e.clientY-r.top;
+      el.style.position='fixed';el.style.margin='0';
+    });
+    el.addEventListener('pointermove',e=>{
+      if(!drag)return;
+      const x=Math.max(0,Math.min(innerWidth-el.offsetWidth,e.clientX-ox));
+      const y=Math.max(52,Math.min(innerHeight-40,e.clientY-oy));
+      el.style.left=x+'px';el.style.top=y+'px';el.style.right='auto';el.style.bottom='auto';
+    });
+    el.addEventListener('pointerup',()=>drag=false);
+    el.addEventListener('pointercancel',()=>drag=false);
+  }
+  function scan(){
+    preferred.forEach(sel=>document.querySelectorAll(sel).forEach(addTools));
+    document.querySelectorAll('body > div,#map-view > div,#graphs-view > div').forEach(el=>{
+      const cs=getComputedStyle(el);
+      if((cs.position==='fixed'||cs.position==='absolute')&&el.offsetWidth>180&&el.offsetHeight>80)addTools(el);
+    });
+  }
+  scan();setInterval(scan,2000);
+})();
+</script>
+<script id="learner-truth-js">async function refreshLearnerTruth(){try{const r=await fetch('/api/trainer-status?ts='+Date.now());const d=await r.json();const f=n=>Number(n||0).toLocaleString('de-DE');document.getElementById('lth-learner').textContent=f(d.learner_steps);document.getElementById('lth-champion').textContent=f(d.champion_steps);document.getElementById('lth-delta').textContent=(Number(d.delta_steps||0)>=0?'+':'')+f(d.delta_steps);}catch(e){}}setInterval(refreshLearnerTruth,1000);refreshLearnerTruth();</script>
+
+
 </body>
 </html>
     """

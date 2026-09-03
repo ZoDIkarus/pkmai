@@ -31,28 +31,30 @@ os.makedirs(STATS_DIR, exist_ok=True)
 
 
 class PokemonFireRedEnv(gym.Env):
-    BUILD_TAG = "V8.1.1_FAKE_WARP_QUARANTINE"
+    BUILD_TAG = "V10.25_SKILL_VAULT_FULL_CHAIN"
     metadata = {"render_modes": []}
 
     # Training V2 nutzt feste Spezialisten statt einer 90/10-Zufallsquote.
 
     # Fuer einen langen 4-5h-Lauf deutlich laengere Episoden als bisher.
+    # V10.19_1_EARLY_ROUTE_SAFE
     MAX_EPISODE_STEPS = 65536
     PROGRESS_STALL_TIMEOUT = 12000
     POST_STARTER_STALL_TIMEOUT = 12000
     STARTER_RUSH_TIMEOUT = 5000
     STARTER_RUSH_OBJECTIVE_BONUS = 100.0
     PROGRESS_CHECKPOINT_COOLDOWN = 800
-    STARTER_SPECIALIST_TIMEOUT = 5000
-    BATTLE_SPECIALIST_TIMEOUT = 12000
-    LEVEL_SPECIALIST_TIMEOUT = 16000
+    STARTER_SPECIALIST_TIMEOUT = 6500
+    BATTLE_SPECIALIST_TIMEOUT = 14000
+    LEVEL_SPECIALIST_TIMEOUT = 18000
     BADGE_SPECIALIST_TIMEOUT = 32768
     PARTY_READ_EVERY = 64
-    SPECIALIST_SUCCESS_BONUS = 100.0
-    FULL_INTRO_STAGE_CAP = 1600
-    FULL_STAIRS_STAGE_CAP = 2600
-    FULL_EXIT_STAGE_CAP = 4200
+    SPECIALIST_SUCCESS_BONUS = 200.0
+    FULL_INTRO_STAGE_CAP = 2500
+    FULL_STAIRS_STAGE_CAP = 3500
+    FULL_EXIT_STAGE_CAP = 10000
 
+    LONG_FULL_PROBE_STEPS = 32768
     # ============================================================
     # TRAINING V2 / REWARD TUNING
     # ============================================================
@@ -74,50 +76,53 @@ class PokemonFireRedEnv(gym.Env):
 
     # Mapping-Novelty ist nur ein kleiner Bonus. Story-/Zielnavigation
     # bleibt deutlich wichtiger.
-    NEW_EDGE_REWARD = 0.10
+    NEW_EDGE_REWARD = 0.01
     # V7.5: echter Weltfortschritt soll lokales Herumlaufen klar schlagen.
-    NEW_MAP_REWARD = 50.0
+    NEW_MAP_REWARD = 20.0
     # Bekannte notwendige Map, erstmals in dieser Episode erreicht.
     EPISODE_NEW_MAP_REWARD = 0.0
-    NEW_GLOBAL_DEPTH_REWARD = 100.0
-    STARTER_REWARD = 150.0
+    NEW_GLOBAL_DEPTH_REWARD = 300.0
+    STARTER_REWARD = 500.0
     ENEMY_DAMAGE_REWARD_PER_HP = 0.75
     ENEMY_FAINT_REWARD = 20.0
     ENEMY_HP_READ_EVERY = 2
-    NEW_TRANSITION_REWARD = 20.0
+    NEW_TRANSITION_REWARD = 35.0
+    REPLAY_MAP_REWARD = 5.0
+    REPLAY_EDGE_REWARD = 0.0
+    REPLAY_TRANSITION_REWARD = 8.0
 
     # Bekannte Wege: erster Durchgang in einer Episode ist erlaubt.
     # Wiederholtes Hin-und-Her wird zunehmend negativ.
-    SECOND_EDGE_VISIT_PENALTY = -0.005
+    SECOND_EDGE_VISIT_PENALTY = -0.01
     REPEAT_EDGE_VISITS_FOR_LOOP = 3
-    REPEAT_EDGE_PENALTY = -0.03
+    REPEAT_EDGE_PENALTY = -0.08
 
     # Sobald ein bekannter Story-Uebergang existiert, wird jede Bewegung
     # in Richtung des Ziels wiederholbar belohnt, weg davon symmetrisch
     # bestraft. So vergisst PPO den guten Weg nicht, wenn Novelty weg ist.
-    TARGET_PROGRESS_REWARD = 0.12
+    TARGET_PROGRESS_REWARD = 2.5
 
     EXPLORATION_MEMORY_ENABLED = True
+    CONFIRMED_WARP_MIN_AGENTS = 2
+    CONFIRMED_WARP_REWARD = 6.0
+    V9_STUCK_SAME_POS_STEPS = 96
+    V9_STUCK_PENALTY = -2.0
+    V9_EXPLORER_NEW_TILE_BONUS = 0.50
+    V9_EXPLORER_REPEAT_TILE_PENALTY = -0.02
+    EXIT_ROUTE_EDGE_REWARD = 1.0
+    EXIT_ROUTE_REVERSE_PENALTY = -0.50
+    EXIT_ROUTE_REPEAT2_PENALTY = -0.50
+    EXIT_ROUTE_REPEAT3_PENALTY = -1.00
+    EXIT_ROUTE_CONFIRM_AGENTS = 2
+    EXIT_ROUTE_MAX_EDGES = 256
+    BATTLE_BLOCKED_START_PENALTY = -0.10
 
     # Early-game Safety / kurze, dichte Lern-Episoden.
     OUTDOOR_CONFIRM_READS = 3
-    INTRO_TIMEOUT_STEPS = 900
-    STAIRS_TIMEOUT_STEPS = 1600
-    EXIT_TIMEOUT_STEPS = 1800
-    EARLY_HOUSE_HARD_CAP = 6000
-
-    # Die 30 Agents werden als Spezialisten verteilt:
-    # 0-7 Intro, 8-15 Treppe, 16-23 Hausausgang, 24-29 Full Chain.
-    INTRO_SPECIALISTS = 4
-    STAIRS_SPECIALISTS = 4
-    EXIT_SPECIALISTS = 8
-    STARTER_SPECIALISTS = 7
-    BATTLE_SPECIALISTS = 3
-    LEVEL_SPECIALISTS = 2
-    BADGE_SPECIALISTS = 2
-    STARTER_SPECIALISTS = 8
-    PROGRESS_SPECIALISTS = 5
-    FULL_SPECIALISTS = 5
+    INTRO_TIMEOUT_STEPS = 1800
+    STAIRS_TIMEOUT_STEPS = 1800
+    EXIT_TIMEOUT_STEPS = 7500
+    EARLY_HOUSE_HARD_CAP = 12000
 
     # Dynamic FireRed SaveBlock RAM is relatively expensive to copy.
     # Exploration position is sampled every 4 agent steps (~32 emulator frames).
@@ -164,6 +169,7 @@ class PokemonFireRedEnv(gym.Env):
         self._nav_target_cache_step = -999999
         self._last_exploration_save_step = -999999
         self.training_objective = "full"
+        self.full_chain_ready = False
         self.objective_success = False
         self.last_gameplay_ready = False
         self.last_in_battle = 0
@@ -250,6 +256,11 @@ class PokemonFireRedEnv(gym.Env):
         self.total_steps = 0
         self.seen_coords = set()
         self.visited_maps = set()
+
+        # V10.3 non-persistent learning memory
+        self.learning_seen_maps = set()
+        self.learning_seen_edges = set()
+        self.learning_seen_transitions = set()
         self.recent_path = []
 
         # Persistentes Explorationsgedaechtnis (bleibt ueber Episoden erhalten).
@@ -378,6 +389,9 @@ class PokemonFireRedEnv(gym.Env):
         self.north_progress_tiles_rewarded = 0
         self.previous_valid_bank = None
         self.previous_valid_map = None
+        self.pending_exit_story_transition = None
+        self.previous_valid_x = None
+        self.previous_valid_y = None
 
         self.last_pos = None
         self.stuck_counter = 0
@@ -461,7 +475,7 @@ class PokemonFireRedEnv(gym.Env):
             if self.left_house_confirmed:
                 self.run_stats["v2_exit_success"] += 1
 
-        elif self.training_objective == "full":
+        elif self.training_objective == "full" and self.episode_start == "beginning":
             self.run_stats["v2_full_episodes"] += 1
             self.run_stats["v7_full_episodes"] += 1
             if self.intro_complete_rewarded:
@@ -520,13 +534,27 @@ class PokemonFireRedEnv(gym.Env):
         )
         return np.expand_dims(resized, axis=0).astype(np.uint8)
 
+    def _policy_objective(self):
+        # V10.13 FULL-POLICY UNIFICATION:
+        # Story specialists keep their own rewards and curriculum starts,
+        # but they all train the exact Full-Journey policy context used by
+        # the Watcher. This prevents stairs/exit/starter skills from being
+        # trapped behind different objective one-hot inputs.
+        if self.training_objective in (
+            "intro", "stairs", "exit", "starter", "battle",
+            "level", "progress", "badge", "full"
+        ):
+            return "full"
+        return self.training_objective
+
     def _objective_one_hot(self):
         names = (
             "intro", "stairs", "exit", "starter",
             "battle", "level", "progress", "badge", "full"
         )
+        policy_objective = self._policy_objective()
         return [
-            1.0 if self.training_objective == name else 0.0
+            1.0 if policy_objective == name else 0.0
             for name in names
         ]
 
@@ -547,12 +575,72 @@ class PokemonFireRedEnv(gym.Env):
             return self.shared_edge_snapshot
         return self.persistent_known_edges | self.shared_edge_snapshot
 
-    def _combined_transitions(self):
-        # V8.1.1: raw transitions are not navigation targets before a REAL house exit.
-        # This quarantines false bedroom warps without deleting mapping history.
-        if not self.left_house_rewarded:
+    def _confirmed_warp_dir(self):
+        path = os.path.join(SHARED_CURRICULUM_DIR, "confirmed_story_warps")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def _save_confirmed_story_warp(self, kind, transition):
+        if kind not in ("stairs", "exit"):
+            return
+        if not transition or len(transition) != 8:
+            return
+
+        path = os.path.join(
+            self._confirmed_warp_dir(),
+            f"agent_{self.rank:03d}_{kind}.json"
+        )
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(
+                    {
+                        "agent": int(self.rank),
+                        "kind": kind,
+                        "transition": [int(v) for v in transition],
+                    },
+                    f,
+                    separators=(",", ":"),
+                )
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+
+    def _load_confirmed_story_warps(self, kind):
+        votes = {}
+        try:
+            names = os.listdir(self._confirmed_warp_dir())
+        except Exception:
             return set()
 
+        suffix = f"_{kind}.json"
+        for name in names:
+            if not name.startswith("agent_") or not name.endswith(suffix):
+                continue
+            try:
+                with open(os.path.join(self._confirmed_warp_dir(), name), "r") as f:
+                    data = json.load(f)
+                raw = data.get("transition", [])
+                if isinstance(raw, list) and len(raw) == 8:
+                    t = tuple(int(v) for v in raw)
+                    votes[t] = votes.get(t, 0) + 1
+            except Exception:
+                pass
+
+        return {
+            t for t, count in votes.items()
+            if count >= self.CONFIRMED_WARP_MIN_AGENTS
+        }
+
+    def _combined_transitions(self):
+        # V10.11 NIGHT ROUTE FIX
+        # Known transitions must be visible before the house is left.
+        # _target_coords_for_stage filters bedroom to indoor targets and
+        # F1/other indoor rooms to overworld targets.
         if not self.shared_transition_snapshot:
             return self.persistent_known_transitions
         if not self.persistent_known_transitions:
@@ -671,6 +759,7 @@ class PokemonFireRedEnv(gym.Env):
 
         if (
             not targets
+            and self.left_house_rewarded
             and self.training_objective in ("progress", "full")
             and self._valid_coord(bank, map_id, x, y)
         ):
@@ -1124,19 +1213,122 @@ class PokemonFireRedEnv(gym.Env):
         self._transition_target_cache[cache_key] = result
         return result
 
-    def _target_coords_for_stage(self, bank, map_id):
-        # Bedroom/F2: sobald Treppen-Warp bekannt ist, dorthin navigieren.
-        if (
-            self.initial_indoor_map is not None
-            and (bank, map_id) == self.initial_indoor_map
-            and not self.stairs_down_rewarded
-        ):
-            return self._known_transition_targets_for_map(
-                bank, map_id, require_indoor=True
-            )
+    # V10.17_1_STARTER_STORY_GUARD_SAFE
+    def _v10171_party_has_starter(self):
+        try:
+            step_no = int(getattr(self, "total_steps", 0) or 0)
+        except Exception:
+            step_no = 0
 
-        # F1/anderer Indoor-Raum: sobald Haustuer-Warp bekannt ist,
-        # direkt zum Outdoor-Uebergang navigieren.
+        cached = bool(getattr(self, "_v10171_has_starter_cached", False))
+        if cached:
+            return True
+
+        last = int(getattr(self, "_v10171_party_check_step", -999999))
+        if step_no - last < 24:
+            return False
+
+        self._v10171_party_check_step = step_no
+        try:
+            party = read_player_party(self.env)
+            if party:
+                self.player_party_cache = list(party)
+            good = [
+                mon for mon in (party or [])
+                if int(mon.get("level", 0) or 0) >= 5
+                and int(mon.get("max_hp", 0) or 0) > 0
+            ]
+            if good:
+                self._v10171_has_starter_cached = True
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _v10171_story_guard(self, bank, map_id, x, y, reward):
+        try:
+            if not bool(getattr(self, "left_house_rewarded", False)):
+                return reward
+            if self._v10171_party_has_starter():
+                return reward
+
+            coord = (int(bank), int(map_id), int(x), int(y))
+            hist = getattr(self, "_v10171_post_house_hist", None)
+            if hist is None:
+                hist = []
+                self._v10171_post_house_hist = hist
+            hist.append(coord)
+            if len(hist) > 96:
+                del hist[:-96]
+
+            seen = getattr(self, "_v10171_post_house_seen", None)
+            if seen is None:
+                seen = set()
+                self._v10171_post_house_seen = seen
+
+            if coord not in seen:
+                seen.add(coord)
+                reward += 0.35
+
+            recent = hist[-32:]
+            unique = len(set(recent))
+            if len(recent) >= 24 and unique <= 8:
+                reward -= 0.75
+            if len(recent) >= 32 and unique <= 5:
+                reward -= 1.25
+
+            if len(hist) >= 12 and len(set(hist[-12:])) <= 3:
+                reward -= 1.00
+
+            return reward
+        except Exception:
+            return reward
+
+    def _target_coords_for_stage(self, bank, map_id):
+        # V10.4: raw indoor transitions remain quarantined, but confirmed
+        # story warps may guide every role.
+        key = (int(bank), int(map_id))
+
+        if not self.stairs_down_rewarded:
+            targets = []
+            for t in self._load_confirmed_story_warps("stairs"):
+                if len(t) != 8:
+                    continue
+                a = tuple(int(v) for v in t[:4])
+                b = tuple(int(v) for v in t[4:])
+                if (a[0], a[1]) == key:
+                    targets.append((a[2], a[3]))
+                if (b[0], b[1]) == key:
+                    targets.append((b[2], b[3]))
+            if not targets:
+                # V10.19.1: confirmed-first, aber nicht confirmed-only.
+                # Solange noch kein bestaetigter Story-Warp existiert, darf
+                # eine real beobachtete Indoor->Indoor-Transition als
+                # Treppen-Ziel dienen. Keine FireRed-Koordinate wird hardcodiert.
+                for t in self._combined_transitions():
+                    if len(t) != 8:
+                        continue
+                    a = tuple(int(v) for v in t[:4])
+                    b = tuple(int(v) for v in t[4:])
+                    if (a[0], a[1]) == key and b[0] != self.OVERWORLD_BANK:
+                        targets.append((a[2], a[3]))
+                    if (b[0], b[1]) == key and a[0] != self.OVERWORLD_BANK:
+                        targets.append((b[2], b[3]))
+            return list(dict.fromkeys(targets))
+
+        if not self.left_house_rewarded:
+            targets = []
+            for t in self._load_confirmed_story_warps("exit"):
+                if len(t) != 8:
+                    continue
+                a = tuple(int(v) for v in t[:4])
+                b = tuple(int(v) for v in t[4:])
+                if (a[0], a[1]) == key:
+                    targets.append((a[2], a[3]))
+                if (b[0], b[1]) == key:
+                    targets.append((b[2], b[3]))
+            return list(dict.fromkeys(targets))
+
         if bank != self.OVERWORLD_BANK:
             return self._known_transition_targets_for_map(
                 bank, map_id, require_overworld=True
@@ -1365,74 +1557,137 @@ class PokemonFireRedEnv(gym.Env):
         return None
 
     def _is_starter_rusher(self):
-        slot = self.rank % 30
-        return 3 <= slot <= 10
+        # V10.15: only actual Starter specialists.
+        return self.training_objective == "starter"
+
+    def _champion_full_starter_ready(self):
+        try:
+            path = os.path.join(RUNTIME_DIR, "champion_score.json")
+            with open(path, "r") as f:
+                data = json.load(f) or {}
+            metrics = data.get("metrics") or {}
+            return int(metrics.get("full_starter_permille", 0)) > 0
+        except Exception:
+            return False
 
     def _agent_role(self):
-        slot = self.rank % 40
-        if slot <= 3:
-            return "intro", f"Intro Scout {slot + 1:02d}"
-        if slot <= 7:
-            return "stairs", f"Stair Runner {slot - 3:02d}"
-        if slot <= 15:
-            return "exit", f"House Escape {slot - 7:02d}"
-        if slot <= 22:
-            return "starter", f"Starter Hunter {slot - 15:02d}"
-        if slot <= 25:
-            return "battle", f"Battle Rookie {slot - 22:02d}"
-        if slot <= 27:
-            return "level", f"Level Grinder {slot - 25:02d}"
-        if slot <= 32:
-            return "progress", f"Frontier Explorer {slot - 27:02d}"
-        if slot <= 34:
-            return "badge", f"Gym Pioneer {slot - 32:02d}"
-        return "full", f"Full Journey {slot - 34:02d}"
+        # V10.25 THREE-PHASE CURRICULUM:
+        # 1) Kein Starter-State: Starter-Durchbruch suchen.
+        # 2) Starter-State vorhanden, aber kein Full-Starter-Champion:
+        #    Treppe/Ausgang/Starter zu einer Kette konsolidieren.
+        # 3) Full-Starter-Champion vorhanden: Richtung Wald expandieren.
+        slot = self.rank % 120
+        saved = set(getattr(self, "saved_milestones", ()) or ())
+        starter_ready = "starter" in saved
+
+        if not starter_ready:
+            if slot <= 3: return "intro", f"Intro Maintainer {slot + 1:02d}"          # 4
+            if slot <= 15: return "stairs", f"Stair Retention {slot - 3:02d}"        # 12
+            if slot <= 35: return "exit", f"Exit Retention {slot - 15:02d}"          # 20
+            if slot <= 87: return "starter", f"Starter Breakthrough {slot - 35:02d}" # 52
+            if slot <= 95: return "progress", f"Early Frontier {slot - 87:02d}"      # 8
+            return "full", f"Full Journey {slot - 95:02d}"                           # 24
+
+        if not bool(getattr(self, "full_chain_ready", False)):
+            if slot <= 3: return "intro", f"Intro Maintainer {slot + 1:02d}"       # 4
+            if slot <= 23: return "stairs", f"Chain Stair {slot - 3:02d}"          # 20
+            if slot <= 43: return "exit", f"Chain Exit {slot - 23:02d}"            # 20
+            if slot <= 61: return "starter", f"Chain Starter {slot - 43:02d}"      # 18
+            if slot <= 65: return "battle", f"Battle Seed {slot - 61:02d}"         # 4
+            if slot <= 67: return "level", f"Level Seed {slot - 65:02d}"           # 2
+            if slot <= 83: return "progress", f"Frontier Seed {slot - 67:02d}"     # 16
+            return "full", f"Chain Assembly {slot - 83:02d}"                       # 36
+
+        if slot <= 3: return "intro", f"Intro Maintainer {slot + 1:02d}"           # 4
+        if slot <= 13: return "stairs", f"Stair Vault {slot - 3:02d}"              # 10
+        if slot <= 25: return "exit", f"Exit Vault {slot - 13:02d}"                # 12
+        if slot <= 37: return "starter", f"Starter Vault {slot - 25:02d}"          # 12
+        if slot <= 45: return "battle", f"Battle Specialist {slot - 37:02d}"       # 8
+        if slot <= 49: return "level", f"Level Specialist {slot - 45:02d}"         # 4
+        if slot <= 83: return "progress", f"Forest Frontier {slot - 49:02d}"       # 34
+        if slot <= 87: return "badge", f"Badge 1 Push {slot - 83:02d}"             # 4
+        return "full", f"Full Journey {slot - 87:02d}"                             # 32
 
     def _choose_episode_start(self):
         self.saved_milestones = self._discover_saved_milestones()
+        self.full_chain_ready = self._champion_full_starter_ready()
         role, _ = self._agent_role()
         self.training_objective = role
         saved = set(self.saved_milestones)
 
-        if role == "intro":
-            return "beginning"
-        if role == "stairs":
-            return "intro_complete" if "intro_complete" in saved else "beginning"
+        if role == "intro": return "beginning"
+        if role == "stairs": return "intro_complete" if "intro_complete" in saved else "beginning"
         if role == "exit":
-            if "stairs_down" in saved:
-                return "stairs_down"
-            if "intro_complete" in saved:
-                return "intro_complete"
+            if "stairs_down" in saved: return "stairs_down"
+            if "intro_complete" in saved: return "intro_complete"
             return "beginning"
         if role == "starter":
-            if "left_house" in saved:
-                return "left_house"
-            if "stairs_down" in saved:
-                return "stairs_down"
-            if "intro_complete" in saved:
-                return "intro_complete"
+            if "left_house" in saved: return "left_house"
+            if "stairs_down" in saved: return "stairs_down"
+            if "intro_complete" in saved: return "intro_complete"
             return "beginning"
         if role in ("battle", "level"):
-            if "starter" in saved:
-                return "starter"
-            if "left_house" in saved:
-                return "left_house"
+            if "starter" in saved: return "starter"
+            if "left_house" in saved: return "left_house"
             return self._best_progress_milestone()
         if role in ("progress", "badge"):
-            # Until the starter checkpoint exists, downstream agents reinforce
-            # the early chain instead of wandering around Pallet Town.
-            if "starter" in saved:
-                return self._best_progress_milestone()
-            if "left_house" in saved:
-                return "left_house"
-            if "stairs_down" in saved:
-                return "stairs_down"
-            if "intro_complete" in saved:
-                return "intro_complete"
+            if "starter" in saved: return self._best_progress_milestone()
+            if "left_house" in saved: return "left_house"
+            if "stairs_down" in saved: return "stairs_down"
+            if "intro_complete" in saved: return "intro_complete"
             return "beginning"
 
-        # Full Journey proves complete start-to-frontier behavior.
+        # In der Chain-Repair-Phase laufen 28, danach 24 Full-Agenten komplett
+        # vom Anfang. Acht weitere ueben ueberlappende Story-Bruecken.
+        slot = self.rank % 120
+        starter_ready = "starter" in saved
+
+        if not starter_ready:
+            if slot <= 111:
+                return "beginning"
+            if slot <= 115:
+                return "intro_complete" if "intro_complete" in saved else "beginning"
+            if slot <= 117:
+                if "stairs_down" in saved: return "stairs_down"
+                if "intro_complete" in saved: return "intro_complete"
+                return "beginning"
+            if "left_house" in saved: return "left_house"
+            if "stairs_down" in saved: return "stairs_down"
+            if "intro_complete" in saved: return "intro_complete"
+            return "beginning"
+
+        if slot <= 111:
+            return "beginning"
+        if slot <= 113:
+            return "intro_complete" if "intro_complete" in saved else "beginning"
+        if slot <= 115:
+            if "stairs_down" in saved: return "stairs_down"
+            if "intro_complete" in saved: return "intro_complete"
+            return "beginning"
+        if slot <= 117:
+            if "left_house" in saved: return "left_house"
+            if "stairs_down" in saved: return "stairs_down"
+            return "beginning"
+        if "starter" in saved: return "starter"
+        if "left_house" in saved: return "left_house"
+        if "stairs_down" in saved: return "stairs_down"
+        if "intro_complete" in saved: return "intro_complete"
         return "beginning"
+
+    def _is_long_full_probe(self):
+        slot = self.rank % 120
+        saved = set(getattr(self, "saved_milestones", ()) or ())
+        if "starter" not in saved:
+            lo, count = 96, 8
+        elif not bool(getattr(self, "full_chain_ready", False)):
+            lo, count = 84, 16
+        else:
+            lo, count = 88, 12
+        return (
+            self.training_objective == "full"
+            and self.episode_start == "beginning"
+            and lo <= slot < lo + count
+        )
 
     def _read_info_with_idle_frame(self):
         """
@@ -1464,7 +1719,15 @@ class PokemonFireRedEnv(gym.Env):
 
         self.last_level = p_lvl
         self.last_badges = badges
-        self.has_starter = p_lvl >= 5
+        self.has_starter = (
+            p_lvl >= 5 or self._v10171_party_has_starter()
+        )
+        if self.has_starter:
+            # Der Party-Reader ist ebenso gueltig wie p1_level. Sonst zeigt
+            # die Journey-Karte trotz sichtbarem Starter weiterhin 0%.
+            self._claim_journey_milestone(
+                "journey_starter", "journey_seen_starter"
+            )
 
         loc = loc_override
         if loc is None:
@@ -1486,6 +1749,8 @@ class PokemonFireRedEnv(gym.Env):
 
             self.previous_valid_bank = bank
             self.previous_valid_map = map_id
+            self.previous_valid_x = x
+            self.previous_valid_y = y
 
             if (
                 self.episode_start != "beginning"
@@ -1540,6 +1805,12 @@ class PokemonFireRedEnv(gym.Env):
         self.episode_enemy_faints = 0
         self.seen_coords = set()
         self.visited_maps = set()
+        # V10.23: pro Episode erneut belohnen, wenn eine bekannte Map oder ein
+        # bekannter Warp korrekt wiederholt wird. Persistente Weltkenntnis
+        # bleibt davon getrennt und wird nicht geloescht.
+        self.learning_seen_maps = set()
+        self.learning_seen_edges = set()
+        self.learning_seen_transitions = set()
         self.recent_path = []
         self.current_reward = 0.0
         self.last_exploration_coord = None
@@ -1554,6 +1825,8 @@ class PokemonFireRedEnv(gym.Env):
         self.last_level = 0
         self.last_badges = 0
         self.has_starter = False
+        self._v10171_has_starter_cached = False
+        self._v10171_party_check_step = -999999
 
         self.initial_indoor_map = None
         self.stairs_down_rewarded = False
@@ -1579,6 +1852,9 @@ class PokemonFireRedEnv(gym.Env):
 
         self.previous_valid_bank = None
         self.previous_valid_map = None
+        self.previous_valid_x = None
+        self.previous_valid_y = None
+        self.pending_exit_story_transition = None
 
         self.last_pos = None
         self.stuck_counter = 0
@@ -1659,14 +1935,86 @@ class PokemonFireRedEnv(gym.Env):
             }
         )
 
+
+    def _exit_route_dir(self):
+        path = os.path.join(SHARED_CURRICULUM_DIR, "exit_routes")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def _load_confirmed_exit_route_edges(self):
+        votes = {}
+        try:
+            names = os.listdir(self._exit_route_dir())
+        except Exception:
+            names = []
+
+        for name in names:
+            if not name.startswith("agent_") or not name.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(self._exit_route_dir(), name), "r") as f:
+                    data = json.load(f)
+                seen = set()
+                for raw in data.get("edges", []):
+                    if isinstance(raw, list) and len(raw) == 8:
+                        edge = tuple(int(v) for v in raw)
+                        if edge not in seen:
+                            votes[edge] = votes.get(edge, 0) + 1
+                            seen.add(edge)
+            except Exception:
+                pass
+
+        return {
+            edge for edge, count in votes.items()
+            if count >= self.EXIT_ROUTE_CONFIRM_AGENTS
+        }
+
+    def _commit_successful_exit_route(self):
+        edges = list(dict.fromkeys(
+            getattr(self, "episode_exit_route_edges", [])
+        ))
+        if not edges:
+            return
+
+        edges = edges[-self.EXIT_ROUTE_MAX_EDGES:]
+        path = os.path.join(
+            self._exit_route_dir(),
+            f"agent_{self.rank:02d}.json"
+        )
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(
+                    {
+                        "agent": int(self.rank),
+                        "edges": [list(edge) for edge in edges],
+                    },
+                    f
+                )
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+
     def step(self, action):
         requested_action = int(action)
         effective_action = requested_action
 
-        # START bleibt eine echte Aktion. Wir fuehren sie IMMER aus.
-        # Spam wird ausschliesslich ueber Reward bestraft, damit die Policy
-        # den kausalen Zusammenhang korrekt lernen kann.
-        raw_act = self.action_map[effective_action]
+        # V8.7.1: Action 2 = START. SELECT is not in the current
+        # seven-action space. During an already detected battle START
+        # becomes NO-OP and receives a small penalty below.
+        battle_was_active = int(getattr(self, "last_in_battle", 0)) == 1
+        blocked_battle_start = bool(
+            battle_was_active and requested_action == 2
+        )
+        raw_act = (
+            self.btn_none
+            if blocked_battle_start
+            else self.action_map[effective_action]
+        )
 
         for _ in range(4):
             step_res = self.env.step(raw_act)
@@ -1675,6 +2023,21 @@ class PokemonFireRedEnv(gym.Env):
             step_res = self.env.step(self.btn_none)
 
         self.total_steps += 1
+        if self.total_steps == 1 or not hasattr(self, "v9_last_pos"):
+            self.v9_last_pos = None
+            self.v9_same_pos_steps = 0
+            self.v9_episode_tiles = set()
+
+        if (
+            self.total_steps == 1
+            or not hasattr(self, "episode_exit_route_edges")
+        ):
+            self.episode_exit_route_edges = []
+            self.exit_route_edge_visits = {}
+            self.confirmed_exit_route_edges = (
+                self._load_confirmed_exit_route_edges()
+            )
+
 
         info = (
             step_res[4]
@@ -1787,6 +2150,10 @@ class PokemonFireRedEnv(gym.Env):
         reward_events = []
         truncated = False
         objective_done = False
+
+        if blocked_battle_start:
+            reward += self.BATTLE_BLOCKED_START_PENALTY
+            reward_events.append("battle_start_blocked:-0.10")
 
         # V7.5.1: reward only NEW opponent HP damage.
         if p_lvl >= 5 and self.total_steps % self.ENEMY_HP_READ_EVERY == 0:
@@ -1986,6 +2353,83 @@ class PokemonFireRedEnv(gym.Env):
         else:
             info["intro_loop_reset"] = False
 
+        # V8.7: route learning from previously successful exits.
+        if (
+            gameplay_ready
+            and in_battle == 0
+            and not self.left_house_rewarded
+            and self.previous_valid_bank is not None
+            and self.previous_valid_map is not None
+            and getattr(self, "previous_valid_x", None) is not None
+            and getattr(self, "previous_valid_y", None) is not None
+        ):
+            edge = (
+                int(self.previous_valid_bank),
+                int(self.previous_valid_map),
+                int(self.previous_valid_x),
+                int(self.previous_valid_y),
+                int(bank),
+                int(map_id),
+                int(x),
+                int(y),
+            )
+
+            if edge[:4] != edge[4:]:
+                self.episode_exit_route_edges.append(edge)
+                if len(self.episode_exit_route_edges) > self.EXIT_ROUTE_MAX_EDGES:
+                    self.episode_exit_route_edges = (
+                        self.episode_exit_route_edges[
+                            -self.EXIT_ROUTE_MAX_EDGES:
+                        ]
+                    )
+
+                visits = self.exit_route_edge_visits.get(edge, 0) + 1
+                self.exit_route_edge_visits[edge] = visits
+                reverse = edge[4:] + edge[:4]
+
+                if edge in self.confirmed_exit_route_edges:
+                    if visits == 1:
+                        reward += self.EXIT_ROUTE_EDGE_REWARD
+                        reward_events.append(
+                            f"exit_route_edge:+{self.EXIT_ROUTE_EDGE_REWARD:.2f}"
+                        )
+                    elif visits == 2:
+                        reward += self.EXIT_ROUTE_REPEAT2_PENALTY
+                        reward_events.append(
+                            f"exit_route_repeat2:{self.EXIT_ROUTE_REPEAT2_PENALTY:.2f}"
+                        )
+                    elif visits == 3:
+                        reward += self.EXIT_ROUTE_REPEAT3_PENALTY
+                        reward_events.append(
+                            f"exit_route_repeat3:{self.EXIT_ROUTE_REPEAT3_PENALTY:.2f}"
+                        )
+                elif reverse in self.confirmed_exit_route_edges:
+                    reward += self.EXIT_ROUTE_REVERSE_PENALTY
+                    reward_events.append(
+                        f"exit_route_reverse:{self.EXIT_ROUTE_REVERSE_PENALTY:.2f}"
+                    )
+
+        # V9 anti-camping / exploration shaping.
+        if gameplay_ready and in_battle == 0:
+            pos_key = (int(bank), int(map_id), int(x), int(y))
+            if self.v9_last_pos == pos_key:
+                self.v9_same_pos_steps += 1
+            else:
+                self.v9_same_pos_steps = 0
+                self.v9_last_pos = pos_key
+
+            if self.v9_same_pos_steps == self.V9_STUCK_SAME_POS_STEPS:
+                reward += self.V9_STUCK_PENALTY
+                reward_events.append("v9_stuck_same_pos:-2")
+
+            if self.training_objective == "progress":
+                if pos_key not in self.v9_episode_tiles:
+                    self.v9_episode_tiles.add(pos_key)
+                    reward += self.V9_EXPLORER_NEW_TILE_BONUS
+                    reward_events.append("v9_explorer_new_tile:+0.5")
+                else:
+                    reward += self.V9_EXPLORER_REPEAT_TILE_PENALTY
+
         # ---------------------------------------------------------
         # STORY SHAPING
         # ---------------------------------------------------------
@@ -2002,6 +2446,26 @@ class PokemonFireRedEnv(gym.Env):
                 and (bank, map_id) != self.initial_indoor_map
             ):
                 self.stairs_down_rewarded = True
+
+                if (
+                    getattr(self, "previous_valid_bank", None) is not None
+                    and getattr(self, "previous_valid_map", None) is not None
+                    and getattr(self, "previous_valid_x", None) is not None
+                    and getattr(self, "previous_valid_y", None) is not None
+                ):
+                    stairs_transition = (
+                        int(self.previous_valid_bank),
+                        int(self.previous_valid_map),
+                        int(self.previous_valid_x),
+                        int(self.previous_valid_y),
+                        int(bank), int(map_id), int(x), int(y),
+                    )
+                    self._save_confirmed_story_warp(
+                        "stairs", stairs_transition
+                    )
+                    reward += self.CONFIRMED_WARP_REWARD
+                    reward_events.append("confirmed_stairs_warp:+6")
+
                 reward += 150.0
                 reward_events.append("stairs_down:+150")
 
@@ -2043,6 +2507,17 @@ class PokemonFireRedEnv(gym.Env):
                 and self.previous_valid_bank is not None
                 and self.previous_valid_bank != self.OVERWORLD_BANK
             ):
+                if (
+                    getattr(self, "previous_valid_x", None) is not None
+                    and getattr(self, "previous_valid_y", None) is not None
+                ):
+                    self.pending_exit_story_transition = (
+                        int(self.previous_valid_bank),
+                        int(self.previous_valid_map),
+                        int(self.previous_valid_x),
+                        int(self.previous_valid_y),
+                        int(bank), int(map_id), int(x), int(y),
+                    )
                 self.outdoor_confirm_reads = 1
 
             elif (
@@ -2069,12 +2544,23 @@ class PokemonFireRedEnv(gym.Env):
                 self.outdoor_entry_y = y
                 self.outdoor_entry_coord = (x, y)
                 self.best_north_y = y
+                if self.pending_exit_story_transition is not None:
+                    self._save_confirmed_story_warp(
+                        "exit", self.pending_exit_story_transition
+                    )
+                    reward += self.CONFIRMED_WARP_REWARD
+                    reward_events.append("confirmed_exit_warp:+6")
+
                 reward += 500.0
                 reward_events.append("left_house_confirmed:+500")
+                self._commit_successful_exit_route()
+                self.confirmed_exit_route_edges = (
+                    self._load_confirmed_exit_route_edges()
+                )
 
                 if self.training_objective == "exit":
-                    reward += 100.0
-                    reward_events.append("objective_exit:+100")
+                    reward += 300.0
+                    reward_events.append("objective_exit:+300")
                     self.objective_success = True
                     objective_done = True
                 self.reward_event_counts["left_house"] += 1
@@ -2179,7 +2665,8 @@ class PokemonFireRedEnv(gym.Env):
         # 4) Erstes Pokemon/Starter: starkes Storysignal.
         # Den normalen Levelreward fuer Level 1->5 unterdruecken wir dabei,
         # sonst waeren es unbeabsichtigt +225.
-        if not self.has_starter and p_lvl >= 5:
+        party_has_starter = self._v10171_party_has_starter()
+        if not self.has_starter and (p_lvl >= 5 or party_has_starter):
             self.has_starter = True
             reward += self.STARTER_REWARD
             reward_events.append(
@@ -2189,10 +2676,11 @@ class PokemonFireRedEnv(gym.Env):
             self.episode_milestone_steps.setdefault(
                 "first_pokemon", self.total_steps
             )
-            self.last_level = p_lvl
+            self.last_level = max(p_lvl, 5 if party_has_starter else 0)
             self.last_progress_advance_step = self.total_steps
-            if p_lvl >= 5:
-                self._claim_journey_milestone("journey_starter","journey_seen_starter")
+            self._claim_journey_milestone(
+                "journey_starter", "journey_seen_starter"
+            )
 
             bridge = self._maybe_save_progress_bridge("starter")
             if bridge:
@@ -2281,6 +2769,12 @@ class PokemonFireRedEnv(gym.Env):
             if map_key not in self.visited_maps:
                 self.visited_maps.add(map_key)
 
+                if map_key not in self.learning_seen_maps:
+                    self.learning_seen_maps.add(map_key)
+                    if map_key in self.persistent_known_maps:
+                        reward += self.REPLAY_MAP_REWARD
+                        reward_events.append(f"replay_map:+{self.REPLAY_MAP_REWARD:.2f}")
+
                 # V7.7: bekannte Maps sind neutral.
                 # Kein Reward und kein Progress-Timer-Reset.
 
@@ -2299,6 +2793,17 @@ class PokemonFireRedEnv(gym.Env):
                         reward_events.append(
                             "new_map_global:"
                             f"+{self.NEW_MAP_REWARD:.2f}"
+                        )
+                    else:
+                        # V10.2:
+                        # Global bekannte Map, aber fuer DIESEN Agent neu.
+                        # PPO muss richtiges Nachmachen ebenfalls lernen.
+                        local_map_reward = self.NEW_MAP_REWARD * 0.25
+                        reward += local_map_reward
+                        self.last_progress_advance_step = self.total_steps
+                        reward_events.append(
+                            "new_map_local:"
+                            f"+{local_map_reward:.2f}"
                         )
 
                 # Zusaetzliche Zwischenstaende nach wachsender Episode-Map-Abdeckung.
@@ -2349,6 +2854,12 @@ class PokemonFireRedEnv(gym.Env):
                         edge_key = self._edge_key(
                             bank, map_id, px, py, x, y
                         )
+
+                        if edge_key not in self.learning_seen_edges:
+                            self.learning_seen_edges.add(edge_key)
+                            if edge_key in self.persistent_known_edges:
+                                reward += self.REPLAY_EDGE_REWARD
+                                reward_events.append(f"replay_edge:+{self.REPLAY_EDGE_REWARD:.2f}")
                         visit_count = self.episode_edge_visits.get(
                             edge_key, 0
                         ) + 1
@@ -2373,8 +2884,16 @@ class PokemonFireRedEnv(gym.Env):
                                     f"+{self.NEW_EDGE_REWARD:.2f}"
                                 )
                             else:
-                                self.steps_since_new_edge += (
-                                    self.LOCATION_READ_EVERY
+                                # V10.2:
+                                # Edge ist global bekannt, aber fuer diesen
+                                # Agent erstmals gelaufen. Positives Imitations-
+                                # signal statt den richtigen Weg neutral zu machen.
+                                local_edge_reward = self.NEW_EDGE_REWARD * 0.20
+                                self.steps_since_new_edge = 0
+                                reward += local_edge_reward
+                                reward_events.append(
+                                    "new_edge_local:"
+                                    f"+{local_edge_reward:.2f}"
                                 )
                         else:
                             self.steps_since_new_edge += (
@@ -2406,6 +2925,7 @@ class PokemonFireRedEnv(gym.Env):
                         )
                         if (
                             not targets
+                            and self.left_house_rewarded
                             and self.training_objective
                                 in ("progress", "full")
                         ):
@@ -2444,6 +2964,13 @@ class PokemonFireRedEnv(gym.Env):
                         pb, pm, px, py,
                         bank, map_id, x, y
                     )
+
+                    if transition_key not in self.learning_seen_transitions:
+                        self.learning_seen_transitions.add(transition_key)
+                        if transition_key in self.persistent_known_transitions:
+                            reward += self.REPLAY_TRANSITION_REWARD
+                            self.last_progress_advance_step = self.total_steps
+                            reward_events.append(f"replay_transition:+{self.REPLAY_TRANSITION_REWARD:.2f}")
                     if (
                         transition_key
                         not in self.persistent_known_transitions
@@ -2464,6 +2991,20 @@ class PokemonFireRedEnv(gym.Env):
                             reward_events.append(
                                 "new_transition_global:"
                                 f"+{self.NEW_TRANSITION_REWARD:.2f}"
+                            )
+                        else:
+                            # V10.2:
+                            # Besonders wichtig fuer Treppen/Tueren:
+                            # Jeder Agent bekommt beim ersten eigenen Benutzen
+                            # eines bereits bekannten Warps ein Lernsignal.
+                            local_transition_reward = (
+                                self.NEW_TRANSITION_REWARD * 0.50
+                            )
+                            reward += local_transition_reward
+                            self.last_progress_advance_step = self.total_steps
+                            reward_events.append(
+                                "new_transition_local:"
+                                f"+{local_transition_reward:.2f}"
                             )
 
                         # Sofort fuer alle lokalen Zielabfragen sichtbar.
@@ -2497,7 +3038,10 @@ class PokemonFireRedEnv(gym.Env):
         # - Nach Intro: max. 1500 weitere Steps bis F1/Treppe
         # - Nach Treppe: max. 2000 weitere Steps bis Hausausgang
         # - Nach Verlassen des Hauses: keine Early-Game-Begrenzung mehr
-        if not self.left_house_confirmed:
+        if (
+            not self.left_house_confirmed
+            and not self._is_long_full_probe()
+        ):
             stage_timeout = None
 
             # Absoluter Failsafe: Solange das Start-Haus nicht bestaetigt
@@ -2604,8 +3148,14 @@ class PokemonFireRedEnv(gym.Env):
             self.last_stage_timeout = "post_starter_stall"
             reward_events.append("post_starter_stall:truncate")
 
-        # V8.1 full-chain stage caps: do not waste long episodes in the house.
-        if self.training_objective == "full" and not truncated:
+        # V10.25: kurze Full-Probes behalten die Stage-Caps. Die langen
+        # Beginning-Probes muessen davon ausgenommen sein, sonst enden sie wie
+        # bisher bereits bei ca. 1800 statt erst bei 32768 Schritten.
+        if (
+            self.training_objective == "full"
+            and not self._is_long_full_probe()
+            and not truncated
+        ):
             if not self.intro_complete_rewarded and self.total_steps >= self.FULL_INTRO_STAGE_CAP:
                 truncated = True
                 self.last_stage_timeout = "full_intro_cap"
@@ -2619,6 +3169,11 @@ class PokemonFireRedEnv(gym.Env):
                 self.last_stage_timeout = "full_exit_cap"
                 reward_events.append("full_exit_cap:truncate")
 
+        # V10.15: ten long full probes get a real 32k horizon.
+        if self._is_long_full_probe() and self.total_steps >= self.LONG_FULL_PROBE_STEPS and not truncated:
+            truncated = True
+            self.last_stage_timeout = "long_full_32k"
+            reward_events.append("long_full_32k:truncate")
         # V8 specialist timeouts.
         specialist_timeout = None
         if self.training_objective == "starter" and not self.has_starter:
@@ -2652,6 +3207,8 @@ class PokemonFireRedEnv(gym.Env):
 
         # Zusaetzliche Infos fuer Training/Callback/Debug.
         info["episode_start"] = self.episode_start
+        info["training_objective"] = self.training_objective
+        info["training_role"] = self._agent_role()[0]
         info["curriculum_states"] = len(self.saved_milestones)
         info["milestone_saved"] = milestone_saved
         info["explored_tiles"] = len(self.seen_coords)
@@ -2668,6 +3225,13 @@ class PokemonFireRedEnv(gym.Env):
             "INTRO"
         )
         info["left_house_confirmed"] = self.left_house_confirmed
+        info["has_starter"] = bool(self.has_starter)
+        info["level"] = int(self.last_level)
+        info["badges_count"] = int(self.last_badges)
+        info["frontier_maps"] = int(len(self.visited_maps))
+        info["has_starter"] = bool(self.has_starter)
+        info["level"] = int(self.last_level)
+        info["badges_count"] = int(self.last_badges)
         info["outdoor_confirm_reads"] = self.outdoor_confirm_reads
         info["last_stage_timeout"] = self.last_stage_timeout
 
@@ -2704,6 +3268,14 @@ class PokemonFireRedEnv(gym.Env):
                             or [0]
                         ),
                     },
+                    "has_starter": bool(self.has_starter),
+                    "training_phase": (
+                        "forest_push"
+                        if self.full_chain_ready
+                        else "chain_repair"
+                        if "starter" in set(self.saved_milestones)
+                        else "starter_breakthrough"
+                    ),
                     "in_battle": in_battle,
                     "battle_stats": {
                         "started": int(self.run_stats.get("battles_started", 0)),
@@ -2826,6 +3398,8 @@ class PokemonFireRedEnv(gym.Env):
             objective_done
             or self.total_steps >= episode_limit
         )
+
+        reward = self._v10171_story_guard(bank, map_id, x, y, reward)
 
         return (
             self._make_obs(

@@ -65,11 +65,23 @@ sudo apt-get install -y \
 In WSL:
 
 ```bash
-python3 -m venv /opt/pkmai-venv
-/opt/pkmai-venv/bin/pip install --upgrade pip
+sudo python3 -m venv /opt/pkmai-venv
+sudo /opt/pkmai-venv/bin/python -m pip install --upgrade pip
 cd /mnt/c/zod/pkmai
-/opt/pkmai-venv/bin/pip install -r requirements.txt
-/opt/pkmai-venv/bin/pip install stable-retro==1.0.1
+sudo /opt/pkmai-venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+sudo /opt/pkmai-venv/bin/python -m pip install -r requirements.txt
+sudo /opt/pkmai-venv/bin/python -m pip install stable-retro==1.0.1
+```
+
+Die CPU-PyTorch-Quelle verhindert, dass pip unnötig große CUDA-Pakete lädt.
+Das Projekt nutzt bei der aktuellen WSL-Einrichtung CPU-Training.
+
+Falls `python3 -m venv` mit `ensurepip is not available` abbricht, einmalig
+unter Ubuntu installieren:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3.12-venv
 ```
 
 Kurztest:
@@ -110,7 +122,60 @@ Diese Installation nutzt bewusst folgende lokale Einstellungen:
 
 Diese Änderungen sind lokale Arbeitsanpassungen und müssen bei einem zukünftigen `git pull` geprüft bzw. erneut übernommen werden.
 
-## 8. Starten
+### Neues Brain ohne Curriculum-Reset
+
+Wenn der Log beim Laden eines vorhandenen Modells einen frischen Brain empfiehlt,
+zuerst den Trainer anhalten und dann ausführen:
+
+```bash
+cd /mnt/c/zod/pkmai
+./scripts/stop_trainers_wsl.sh
+./scripts/reset_brain_wsl.sh
+```
+
+Das Script verschiebt das aktuelle PPO-Modell, Bestmodell und die zugehörigen
+Versionsmetadaten nach `runtime/brain_backups/`. Beim nächsten Trainerstart
+wird dadurch ein neues PPO-Modell initialisiert. Curriculum-States und
+Exploration-Memory bleiben bewusst erhalten.
+
+## 8. Headless im Hintergrund trainieren (empfohlen)
+
+Der Trainer kann ohne Watcher als robuster WSL-Hintergrundprozess laufen:
+
+```bash
+cd /mnt/c/zod/pkmai
+./scripts/start_trainers_wsl.sh
+```
+
+Das Script startet **nur** `src/train.py`; es startet weder den sichtbaren
+Watcher noch Dashboard, Uvicorn oder ngrok. Es speichert die PID in
+`runtime/train.pid` und schreibt die Ausgabe nach `runtime/train.log`.
+
+Zu Beginn und bei jedem Checkpoint zeigt der Trainer einen lesbaren
+Curriculum-Block. `8/10 = 80%` bedeutet: Acht der letzten zehn Versuche einer
+Stage waren erfolgreich. `Median 320 Schritte ab Stage-Start` ist die typische
+Länge erfolgreicher Versuche ab ihrem jeweiligen gespeicherten Startzustand —
+nicht die gesamte Spielzeit. Eine Stage ist ab mindestens zehn jüngsten
+Versuchen und mindestens 60 % Erfolgsquote `bestätigt`.
+
+```bash
+# Live-Log anzeigen
+tail -f runtime/train.log
+
+# Laufenden Trainer prüfen
+./scripts/start_trainers_wsl.sh
+
+# Beenden; der letzte zyklische Checkpoint bleibt erhalten
+./scripts/stop_trainers_wsl.sh
+```
+
+Optional kann ein anderer WSL-Python-Interpreter verwendet werden:
+
+```bash
+PKMAI_PYTHON=/opt/pkmai-venv/bin/python ./scripts/start_trainers_wsl.sh
+```
+
+## 9. Optionale sichtbare Dienste
 
 Drei WSL-Terminals öffnen und jeweils einen Befehl starten.
 
@@ -119,13 +184,6 @@ Drei WSL-Terminals öffnen und jeweils einen Befehl starten.
 ```bash
 cd /mnt/c/zod/pkmai
 exec env PYTHONPATH=src /opt/pkmai-venv/bin/python -m uvicorn web_stream:app --host 0.0.0.0 --port 8001 --log-level warning
-```
-
-### Training
-
-```bash
-cd /mnt/c/zod/pkmai
-exec env PYTHONPATH=src /opt/pkmai-venv/bin/python src/train.py
 ```
 
 ### Sichtbarer Watcher
@@ -146,9 +204,12 @@ Im Windows-Browser öffnen:
 
 Die Dienste binden zwar innerhalb von WSL an `0.0.0.0`, werden hier aber nur über `127.0.0.1` auf dem lokalen Windows-Rechner genutzt.
 
-## 9. Kontrolliertes Stoppen und Update
+## 10. Kontrolliertes Stoppen und Update
 
-Den Trainer immer mit `Ctrl+C` beenden. Dadurch schreibt er den letzten Checkpoint.
+Den Hintergrund-Trainer mit `./scripts/stop_trainers_wsl.sh` beenden. Das
+Script sendet `SIGTERM`; damit wird der Trainer zuverlässig beendet und der
+letzte zyklische Checkpoint bleibt erhalten. Einen optionalen Foreground-Trainer
+immer mit `Ctrl+C` beenden, damit er zusätzlich seinen Final-Checkpoint schreibt.
 
 Danach Watcher und Uvicorn ebenfalls mit `Ctrl+C` stoppen. Erst dann aktualisieren:
 
@@ -165,7 +226,7 @@ Vor einem Pull lokale Änderungen sichern, beispielsweise über einen Git-Stash 
 - `runtime/`-Laufzeitdaten
 - lokale `.env`-Dateien oder Zugangsdaten
 
-## 10. Typische Probleme
+## 11. Typische Probleme
 
 ### `No romfiles found for game: PokemonFireRed-Gba`
 

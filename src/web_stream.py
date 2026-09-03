@@ -23,6 +23,7 @@ TRAINER_STATUS_FILE = os.path.join(RUNTIME_DIR, "trainer_status.json")
 HISTORY_LOCK = threading.Lock()
 EXPLORATION_MEMORY_DIR = os.path.join(RUNTIME_DIR, "exploration_memory")
 WATCHER_MAPPING_FILE = os.path.join(RUNTIME_DIR, "watcher_mapping.json")
+WATCHER_FRAME_FILE = os.path.join(RUNTIME_DIR, "watcher.jpg")
 TRAINER_STATUS_FILE = os.path.join(RUNTIME_DIR, "trainer_status.json")
 
 def _live_learner_steps(fallback=0):
@@ -58,6 +59,23 @@ def get_map():
     if os.path.exists(MAP_FILE):
         return FileResponse(MAP_FILE, media_type="image/png", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     return Response(status_code=404)
+
+
+@app.get("/watcher.jpg")
+def get_watcher_jpeg():
+    """Return the newest complete watcher frame without caching."""
+    try:
+        with open(WATCHER_FRAME_FILE, "rb") as f:
+            jpeg = f.read()
+        if not jpeg:
+            raise OSError("empty watcher frame")
+        return Response(
+            content=jpeg,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
+    except OSError:
+        return Response(status_code=404)
 
 
 def _load_training_history():
@@ -1387,7 +1405,7 @@ def index():
         .tab-btn.active { background: #00e676; color: #000; font-weight: 700; }
 
         #main-container { flex: 1; position: relative; overflow: hidden; }
-        #map-view, #rooms-view, #graphs-view { width: 100%; height: 100%; position: absolute; top:0; left:0; }
+        #map-view, #rooms-view, #graphs-view, #watcher-view { width: 100%; height: 100%; position: absolute; top:0; left:0; }
         #rooms-view { display: none; overflow-y: auto; padding: 24px; }
         #graphs-view { display:none; overflow-y:auto; padding:18px 22px 30px; background:#0c0e14; }
         .graphs-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; margin-bottom:12px; }
@@ -1682,6 +1700,7 @@ def index():
                 <button class="tab-btn active" onclick="showTab('map', event)">🗺️ Overworld Map</button>
                 <button class="tab-btn" onclick="showTab('rooms', event)">🏠 Indoor Mapping</button>
                 <button class="tab-btn" onclick="showTab('graphs', event)">📈 Graphs</button>
+                <button class="tab-btn" onclick="showTab('watcher', event)">👁️ Watcher</button>
             </div>
         </div>
     </header>
@@ -1701,6 +1720,7 @@ def index():
             </div>
         </div>
         <div id="rooms-view"><div class="room-grid" id="room-grid"></div></div>
+        <div id="watcher-view"><section class="watcher-page"><div class="watcher-page-head"><div><b>● LIVE WATCHER</b><span>Aktueller Screenshot aus dem unabhängigen End-to-End-Run</span></div><a href="/watcher.jpg" target="_blank" rel="noopener">JPEG in neuem Tab öffnen ↗</a></div><img id="watcher-stream" src="/watcher.jpg" alt="Live-Bild des Watchers"></section></div>
         <div id="graphs-view"><div class="v84-skill-panel" id="v84-skill-panel">
             <div class="v84-head"><b>V8.4 – Trainings-Skills · 120 Agents</b><span>direkt aus agent_00…119 Training-Stats</span></div>
             <div class="v84-grid" id="v84-skill-grid"></div>
@@ -2041,6 +2061,14 @@ def index():
 
         let currentTab = 'map';
 
+        function refreshWatcherStream() {
+            const img = document.getElementById('watcher-stream');
+            if (img) img.src = '/watcher.jpg?ts=' + Date.now();
+        }
+        setInterval(() => {
+            if (currentTab === 'watcher') refreshWatcherStream();
+        }, 500);
+
         function showTab(t, e) {
             currentTab = t;
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -2049,6 +2077,7 @@ def index():
             document.getElementById('map-view').style.display = t === 'map' ? 'block' : 'none';
             document.getElementById('rooms-view').style.display = t === 'rooms' ? 'block' : 'none';
             document.getElementById('graphs-view').style.display = t === 'graphs' ? 'block' : 'none';
+            document.getElementById('watcher-view').style.display = t === 'watcher' ? 'block' : 'none';
 
             const showOverlays = t === 'map';
             document.getElementById('hud').style.display = showOverlays ? 'block' : 'none';
@@ -2066,6 +2095,7 @@ def index():
                 updateGlobalMapping(true);
             }
             if (t === 'graphs') loadTrainingGraphs();
+            if (t === 'watcher') refreshWatcherStream();
             if (t === 'map') {
                 updateGlobalMapping(true);
                 setTimeout(() => map.invalidateSize(), 50);

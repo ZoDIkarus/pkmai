@@ -2,6 +2,7 @@ gymnasium
 numpy
 opencv-python
 stable-baselines3
+stable-retro
 torch
 fastapi
 uvicorn

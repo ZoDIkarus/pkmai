@@ -1,0 +1,42 @@
+services:
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pkmai-trainer:local
+    container_name: pkmai-trainer
+    profiles: ["trainer"]
+    environment:
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    volumes:
+      - ./runtime:/app/runtime
+      - ./local:/app/local:ro
+    networks:
+      wireguard_net:
+        ipv4_address: 10.10.15.110
+    cpus: 1.5
+    mem_limit: 1g
+    memswap_limit: 2g
+    restart: "no"
+
+  web:
+    image: pkmai-trainer:local
+    container_name: pkmai-web
+    profiles: ["web"]
+    entrypoint: ["python", "-u", "src/web_stream.py"]
+    volumes:
+      - ./runtime:/app/runtime
+    networks:
+      wireguard_net:
+        ipv4_address: 10.10.15.111
+    cpus: 0.25
+    mem_limit: 256m
+    memswap_limit: 512m
+    restart: unless-stopped
+
+networks:
+  wireguard_net:
+    external: true
+    name: wireguard_net

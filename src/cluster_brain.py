@@ -9,20 +9,22 @@ import shutil
 import time
 from pathlib import Path
 
+import numpy as np
 import ray
 from ray.rllib.algorithms.ppo import PPOConfig
+from ray.rllib.models import ModelCatalog
 from ray.tune.registry import register_env
 
 from cluster_config import build_environment_signature
 from pokemon_env import PokemonFireRedEnv
 from gymnasium import spaces
-import gymnasium as gym
+from rllib_model import PKMAIDictCNN
 
 class ClusteredPokemonEnv(PokemonFireRedEnv):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.observation_space = spaces.Dict({
-            "image": spaces.Box(low=0, high=255, shape=(64, 64, 1), dtype=np.uint8),
+            "image": spaces.Box(low=0, high=255, shape=(1, 64, 64), dtype=np.uint8),
             "nav": spaces.Box(low=-1.0, high=1.0, shape=(28,), dtype=np.float32),
         })
 
@@ -60,24 +62,31 @@ def main() -> None:
     env_runners = max(0, int(os.getenv("PKMAI_CLUSTER_ENV_RUNNERS", "1")))
     checkpoint_every = max(1, int(os.getenv("PKMAI_CLUSTER_CHECKPOINT_EVERY", "10")))
     register_env("pkmai_cluster_env", make_cluster_env)
+    ModelCatalog.register_custom_model("pkmai_dict_cnn", PKMAIDictCNN)
     ray.init(address=os.getenv("RAY_ADDRESS", "auto"), ignore_reinit_error=True)
 
     config = (
         PPOConfig()
         .environment("pkmai_cluster_env", env_config={"agent_count": 1})
         .framework("torch")
-        .training(model={"custom_model_config": {}})
+        .training(model={"custom_model": "pkmai_dict_cnn"})
         .api_stack(
             enable_rl_module_and_learner=False,
             enable_env_runner_and_connector_v2=False,
         )
-        .env_runners(num_env_runners=env_runners, num_envs_per_env_runner=1)
+        .env_runners(
+            num_env_runners=env_runners,
+            num_envs_per_env_runner=1,
+            custom_resources_per_env_runner={"pkmai_rollout": 1},
+            sample_timeout_s=30,
+        )
     )
-    config.train_batch_size = 64
-    config.minibatch_size = 32
+
     config.train_batch_size = 128
     config.minibatch_size = 64
     config.num_epochs = 1
+    config.ignore_env_runner_failures = True
+    config.restart_failed_env_runners = True
     algorithm = config.build()
     version = 0
     publish_policy(version)
@@ -91,7 +100,7 @@ def main() -> None:
                 temporary = CHECKPOINTS_DIR / f".policy-v{version:08d}.tmp"
                 if temporary.exists():
                     shutil.rmtree(temporary)
-                saved = Path(algorithm.save_to_path(str(temporary)))
+                saved = Path(algorithm.save(str(temporary)))
                 os.replace(saved, target)
                 checkpoint = str(target)
             publish_policy(version, checkpoint)

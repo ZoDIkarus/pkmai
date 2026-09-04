@@ -66,13 +66,20 @@ def main() -> None:
         raise SystemExit(f"registration rejected: {exc.read().decode('utf-8', 'replace')}") from exc
     except URLError as exc:
         raise SystemExit(f"master unavailable: {exc.reason}") from exc
-    if not registration.get("accepted"):
-        raise SystemExit(f"registration not accepted: {registration.get('reason')}")
     version = int(registration["policy_version"])
-    print(f"registered worker={WORKER_ID} policy_version={version}", flush=True)
+    if not registration.get("accepted"):
+        if registration.get("reason") != "policy_reload_required":
+            raise SystemExit(f"registration not accepted: {registration.get('reason')}")
+        print(f"policy reload required; adopting version={version}", flush=True)
+    else:
+        print(f"registered worker={WORKER_ID} policy_version={version}", flush=True)
     while True:
         time.sleep(HEARTBEAT_SECONDS)
-        response = request("/api/worker/heartbeat", payload(version))
+        try:
+            response = request("/api/worker/heartbeat", payload(version))
+        except (HTTPError, URLError, TimeoutError) as exc:
+            print(f"heartbeat failed; retrying: {exc}", flush=True)
+            continue
         version = int(response.get("policy_version", version))
 
 

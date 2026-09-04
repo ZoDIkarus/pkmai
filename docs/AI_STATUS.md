@@ -8,32 +8,158 @@ Laufende Runtime-Werte immer aus `tools/pkmai_status.py` lesen, nicht hier absch
 
 ---
 
-## Wo wir gerade stehen (2026-09-03, V13.2)
+## Wo wir gerade stehen (2026-09-04, V15.2)
 
 **Das Ziel:** von Spielanfang → Starter → Alabastia raus → Route 1 →
 **Vertania City** → Vertania-Wald → Orden 1 (Rocko).
 
-**Neue Diagnose (V13.2):** Skills intro/treppe/exit/starter alle bei **1000**.
-Die Flotte war schon **auf Route 1** — aber laut `journey_routes` klebte sie am
-**Südrand (y≈37–39, direkt an der Alabastia-Grenze)**. ALLE Resume-States
-(`outdoor_1/2`, `maps_3–6`, `progress_1–14`) sind dort gespeichert → Agent
-resumt am Rand → läuft zurück nach Alabastia → Schleife.
-Dazu: `global_progress.json` stand auf `6` (alte Zählweise inkl. Innenräume) →
-der V13-Eskalations-Bonus hätte erst ab der 7. Map gefeuert.
+**Aktueller Blocker (Stand 2026-09-04 ~12:45):** Der Champion stand ~23 Mio
+Steps still (v6 @ 9,87 Mio). Ursache-Kette: die Flottenverteilung `_agent_role()`
+schaltet Phase 5 (freie Welt / World-Push zum Wald) erst frei, wenn der
+gemessene Starter-Skill ≥ 880 ist. Der lag bei **0** (Lifetime 21/1160 ≈ 1,9 %
+Erfolg), weil ~alle 22 Starter-Agenten in Alabastia im Kreis liefen und nie
+Eichs Labor erreichten. Kein Rollback auf V14 möglich: Champion v6 nutzt schon
+den V15-Obs-Space (4×64×64 + 31), V14-Code macht 1×64×64 + 28 → `PPO.load`
+inkompatibel.
 
-**Fix beim Neustart:** grenz-nahe/veraltete Resume-States gelöscht,
-`global_progress` auf `1` re-baselined (neue Zählweise: alles außer Bank 4).
-Damit resumt jeder Progress-Agent von `starter_outdoor`/`outdoor_1` (sauber,
-Alabastia) und schiebt Route 1 neu — mit +600 für den ersten der 60 Schritte
-tief auf Route 1 steht, +900 Vertania, +1200 Route 2, +1500 Wald.
+**Heute umgesetzt (V15.2, siehe Änderungs-Log):** Tastendruck-Timing 4/4 → 16/8
+Frames, Learner von Champion v6 neu aufgesetzt, echte Step-Kosten für
+Meilenstein-Spezialisten, Anti-Kreis-Penalty, Status-Terminal um SHIGGY-Block
+erweitert. Erste Wirkung: 16 von 22 Starter-Agenten stehen nun IM Labor.
 
-**Champion:** frozen bei v27 (`champion_score.json`, `max_maps:5` = 5 Rohmaps
-= bis Route-1-Rand). Wird erst wieder publiziert, wenn ein Full-Agent echt
-weiter kommt (Vertania = 6 Rohmaps).
+**Offen / TODO:**
+- Beobachten ob Starter-Agenten mit 16/8-Timing jetzt wirklich Schiggy holen
+  (`SHIGGY/STARTER … mit Schiggy N` im Status). Wenn ja, steigt der Skill über
+  880 und Phase 5 öffnet von selbst.
+- Falls sie im Labor hängen: `left_house`-Resume-State prüfen/löschen (der
+  Spezialist startet dort und schafft trotzdem nur 1,9 %, während Full-Runs von
+  vorne 25 % schaffen — verdächtig).
+- Step-Kosten `SPECIALIST_STEP_COST = -0.10` ist ein Startwert. Nach Beobachtung
+  nachziehen: zu hoch → Agent lernt „schnell scheitern" statt „schnell lösen".
+- Watcher-Exit dauert lang (Sekunden) — niedrige Priorität.
+- Champion-`_score` hat einen Tempo-Tiebreaker (`-full_best_stage_steps`), aber
+  Skill-Score selbst ist rein binär. Ggf. später Tempo in die Skill-Bewertung.
+
+**Neustart:** V15 nutzt ein frisches Modell. Alte Modelle, Champion,
+Curriculum-States, Karten und Statistiken werden gemeinsam archiviert.
+Fortschritt wird nur noch als explizite Feuerrot-Kette 0–9 gezählt: Alabastia,
+Route 1, Vertania, Eichs Paket, Paketabgabe/Pokédex, Route 2, Wald, Marmoria,
+Orden. Beliebige Räume und Warps sind kein Fortschritt.
 
 ---
 
 ## Änderungs-Log (neueste zuerst)
+
+### V15.3 — ALL-FULL + Reward radikal vereinfacht + kein Champion-Gate (2026-09-04)
+Kurskorrektur Richtung PWhiddy-Modell. Grund: Spezialisten überfitten auf ihren
+einen Resume-State ("Skill 1000" ≠ echter Lauf), Champion 23 Mio Steps eingefroren.
+
+- **`FULL_ONLY_MODE = True`** (`pokemon_env.py`). `_agent_role` kurzgeschlossen:
+  30 Agenten = `full` ab Spielanfang (inkl. Intro), 2 = `progress` Deep-Warm
+  (halten die erreichte Spätphase warm). Kein Spezialisten-Bootcamp mehr.
+- **Reward-Chirurgie** — hinter `FULL_ONLY_MODE` (ein Schalter, reversibel):
+  RAUS: V9-Anti-Camping-Block komplett (v9_explorer_new_tile +1.0 farmbar,
+  indoor_stall, v9_stuck), Korridor-/Nord-Richtungsreward, exit_/journey_route_edge
+  ("viel gelaufen = gut"), intro_novelty-Screens, `_v10171_story_guard`
+  (+0.35/Kachel Post-Haus-Wandern), rollenabhängiges Step-Cost-Tuning.
+  BLEIBT: alle Meilenstein-Einmalboni (Intro/Treppe/Haus/Schiggi +1000/Map
+  +250/Stufe +250/Orden), `new_edge_global` +0.10 (un-farmbare Erkundungs-Spur),
+  Level +150, Kampf, Blackout, `EARLY_STORY_STEP_REWARD` ±1.0 (Haus-Ausgang,
+  symmetrisch), einheitliche Zeitgebühr −0.002.
+- **Kein Champion-Gate mehr** (`train.py`): `_protected_regression` → immer False,
+  `min_full_episodes` 8→4, `_score` auf reine Tiefe+Tempo
+  `(orden, stufe, level, maps, -best_stage_steps, starter_permille)` — die
+  fragilen permille-Endpositions-Raten sind raus.
+- **Learner-Reset** auf Champion v6 (`best.zip` → `resume.zip`). Nicht Random:
+  v6 kann laufen/menüen/Intro/Treppe/Haus + teilweise Schiggi.
+- Frames bleiben 12/6. **Neustart: Trainer** (+ Watcher hat 12/6 schon).
+- `_choose_episode_start`: im `FULL_ONLY_MODE` startet JEDER full-Agent bei
+  "beginning" (ganz von vorn, inkl. Intro); nur die 2 progress-Slots resumen tief.
+- **Web (`web_stream.py`)**: Watcher-Tab hat jetzt eine klickbare Agenten-Liste
+  (Watcher + alle Runner) mit Live-Detail-Panel (Episode-Reward, Steps, Stufe,
+  Level, Schiggi, Eich-Szene, Kämpfe, Taste, letzter Abbruchgrund,
+  Reward-Events-Aufschlüsselung). Mobile: Seiten-Overflow behoben (kam aus der
+  v81-Skill-Zeile in der Graphs-View).
+- **Champion-Promotion:** strikte Logik erst mal beobachten (1-2 h). Wenn v6
+  hält und die Flotte bei Stufe 2-3 klemmt → `_score`-Primärachse von max auf
+  mittlere Full-Lauf-Tiefe umstellen (progressiv, schreibt öfter neue Brains),
+  v6 vorher als best_v6.zip sichern.
+- Offen: Watcher-„Brain-Modus" (echtes resume/best-Netz end-to-end statt der
+  ~14h-alten Skill-Snapshot-Umschaltung in `get_watcher_model_path`).
+
+### V15.2b — Nachjustierung nach 40-Min-Test (2026-09-04)
+- Starter-Skill stieg mit V15.2 von **0 → 538** (Gate 880), plateaute dann.
+  Ursache: `SPECIALIST_STEP_COST = -0.10` zu hart (−500 über eine 5000-Step-
+  Episode, bevor Erfolg möglich → Netz resigniert, Agenten hocken in Alabastia).
+- `SPECIALIST_STEP_COST` −0.10 → **−0.02**, `INTRO_STEP_COST` −0.02 → **−0.01**.
+- Frames 16/8 → **12/6** (12 reicht meist für echten Kachel-Schritt, weniger
+  Umgewöhnung fürs 4/4-trainierte Champion-Netz, 2× statt 3× langsamer).
+- Learner NICHT resettet — die ~500k Steps „wie komme ich ins Labor" behalten.
+- Anti-Loop (`REPEAT_TILE_PENALTY -0.05`, `STUCK_SAME_POS 60`) unverändert.
+
+### V15.2 — Timing-Fix + Tempo-Reward + Learner-Reset (2026-09-04)
+- **Tastendruck 4/4 → 16/8 Frames.** War hart kodiert als `for _ in range(4)`
+  in `PokemonFireRedEnv.step()` und als `ACTION_HOLD_FRAMES/RELEASE = 4` in
+  `watch.py`. 4 Halte-Frames *drehen* die Figur in FireRed nur — ein echter
+  Kachel-Schritt braucht ~16. Die Hälfte aller „Geh"-Aktionen war wirkungslos
+  → Agenten drehten auf der Stelle; kurze START-Taps wurden in der
+  Namensvergabe geschluckt. Jetzt Klassen-Konstanten `ACTION_HOLD_FRAMES = 16`
+  / `ACTION_RELEASE_FRAMES = 8` in `pokemon_env.py`, identische Modul-Konstanten
+  in `watch.py` (MÜSSEN gleich bleiben). ~3× langsamer Wall-Clock/Step,
+  Step-basierte Timeouts unberührt.
+- **Echte Step-Kosten für Meilenstein-Spezialisten.** `INTRO_STEP_COST`
+  −0.002 → −0.02; neu `SPECIALIST_STEP_COST = -0.10` für Rollen
+  intro/stairs/exit/starter (und `full` vor dem Starter). Reward = fester
+  Zielbonus − feste Kosten/Step → schnellster Lauf = höchster Reward. Ziel-Boni
+  (stairs +150, exit +500/+800, starter ~1550) bleiben Größenordnungen größer,
+  Erfolg schlägt immer den Timeout.
+- **Anti-Kreis.** `V9_EXPLORER_REPEAT_TILE_PENALTY` 0.0 → −0.05 (bekannte
+  Kachel kostet jetzt), `V9_EXPLORER_NEW_TILE_BONUS` 2.0 → 1.0,
+  `V9_STUCK_SAME_POS_STEPS` 240 → 60.
+- **Learner-Reset.** `pokemon_model_best.zip` (Champion v6) → `…_resume.zip`.
+  Die ~23 Mio regredierten Steps verworfen, Training läuft vom bekannt-guten
+  Champion + neuem Timing weiter.
+- **Status-Terminal** (`tools/pkmai_status.py`): Einzel-Agenten-Dump raus, neuer
+  `SHIGGY/STARTER`-Block (Vault/880-Gate, Live-Health, Lifetime-%, Champion
+  Full-Starter %, Live-Agentenzahl + wie viele Schiggy haben, Timeout-Histogramm).
+- **Start-Skripte**: `start_all.sh` startet Cloudflare + Mapper standardmäßig
+  nicht mehr (`--cloudflare` / `--mapper` zum Reaktivieren). Dashboard bleibt
+  HTTP-only auf :8001 — immer `http://` benutzen, nie `https://` (sonst
+  `Invalid HTTP request` im uvicorn-Log).
+- **Neustart: Trainer + Watcher** (beide laden `pokemon_env` bzw. die
+  Timing-Konstanten beim Start).
+
+### V15.1 — `stage_`-Resume-Bug behoben (pokemon_env.py)
+- **Warum:** die Resume-Flag-Logik in `reset()` kannte nur
+  `progress_/maps_/outdoor_/level_/badge_`, nicht `stage_`. Ein Resume von
+  `stage_4` (Vertania-Markt, Bank 5) oder `stage_5` (Eichs Labor, Bank 4)
+  bekam `left_house_confirmed` nicht gesetzt (der Overworld-Zweig in
+  `_set_baseline_from_info` greift nur bei Bank 3) → der early-house-Failsafe
+  hätte den Run per `stairs_timeout` / `early_house_hard_cap` gekappt. Dazu
+  hätte der Agent beim Rausgehen erneut `starter_outdoor:+150` kassiert.
+- **Fix:** Flag-Logik in `_apply_curriculum_resume_flags()` ausgelagert,
+  `stage_` in die Post-Haus-Präfixe aufgenommen. `stage_N` (N≥2) setzt jetzt
+  `stairs_down/left_house/left_house_confirmed` + `starter_outdoor_rewarded`.
+- Neue Unit-Tests (`CurriculumResumeFlagTests`). Noch nicht scharf: es gibt
+  bislang keine `stage_N`-Savestates (globale Stufe 2). **Neustart: Trainer**
+  (Subprozess-Envs laden `pokemon_env` beim Spawn).
+
+### V15 — FireRed-Story-Curriculum + Frame-Stack + frisches Gehirn
+- 4 Bilder statt eines Standbilds; 31 RAM-/Nav-/Storyfeatures.
+- 32 headless Envs × 128 Schritte = 4096 Samples je PPO-Rollout.
+- Deutsche `BPRD`-ROM: Paket-/Eich-/Old-Man-Status direkt aus den
+  FireRed-SaveBlock-Variablen, mit Plausibilitätsprüfung.
+- Explizite Stufen 0–9; Stage-Savestates validieren aktuelle Map und Storywert.
+- Weltrollen erhalten keinen Map-/Warp-Reward; Journey-Routen deaktiviert.
+- Starter-Erfolg erst draußen, nicht beim Erhalt im Labor.
+- Rollen: World-Push zuerst, Kampf nach Paketabgabe, Orden ab Wald.
+- Neue Unit-Tests decken Stufen, Story-Checkpoints und Rollenverteilung ab.
+
+### V14.1 — Champion-Log NameError behoben (train.py)
+- Beim ersten V14-Frontier-Fortschritt referenzierte die Logmeldung noch die
+  entfernte Variable `maps` und beendete den Trainer mit `NameError`.
+- Logausgabe verwendet jetzt den tatsächlichen V14-Wert `stage={wstage}`.
+- Das Resume-Modell war vor dem Fehler bereits sicher gespeichert.
 
 ### V13.4 — NORD-KORRIDOR-RAMPE (pokemon_env.py)
 - **Warum:** in 30 Mio Steps hat KEIN Agent Route 1 durchquert. Kein „langsam",

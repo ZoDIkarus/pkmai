@@ -4,6 +4,19 @@ set -euo pipefail
 PROJECT="$HOME/pokemon_ai_project"
 PY="/opt/homebrew/Caskroom/miniforge/base/envs/pokemon-ai/bin/python"
 
+# Cloudflare und Mapper sind bewusst standardmaessig AUS.
+NO_CLOUDFLARE=true
+NO_MAPPER=true
+for arg in "$@"; do
+  case "$arg" in
+    --no-cloudflare) NO_CLOUDFLARE=true ;;
+    --cloudflare)    NO_CLOUDFLARE=false ;;
+    --no-mapper)     NO_MAPPER=true ;;
+    --mapper)        NO_MAPPER=false ;;
+    *) echo "Unbekannte Option: $arg" >&2; exit 2 ;;
+  esac
+done
+
 cd "$PROJECT"
 
 if [ -f "$PROJECT/.env" ]; then
@@ -16,20 +29,58 @@ echo "=== PKMAI start_all ==="
 echo "Projekt: $PROJECT"
 echo
 
-start_terminal() {
-  local title="$1"
-  local command="$2"
+TMUX_BIN="$(command -v tmux || true)"
+[ -x "/opt/homebrew/bin/tmux" ] && TMUX_BIN="/opt/homebrew/bin/tmux"
+SESSION="pkmai"
 
+start_window() {
+  # Eigenes Terminal-Fenster (fuer den Watcher).
+  local title="$1" command="$2"
   osascript <<EOF
 tell application "Terminal"
     activate
-    do script "printf '\\\\e]1;${title}\\\\a'; ${command}"
+    do script "printf '\\\\e]0;${title}\\\\a\\\\e]1;${title}\\\\a'; ${command}; exit"
 end tell
 EOF
 }
 
+# ------------------------------------------------------------------
+# Sammelfenster: EIN Fenster, mehrere Tabs.
+#   * mit tmux  -> echtes ein-Fenster-mit-Tabs (Ctrl-b + Zahl zum Wechseln,
+#                  Ctrl-b d zum Loesen ohne zu stoppen)
+#   * ohne tmux -> Fallback: je ein eigenes Terminal-Fenster
+# ------------------------------------------------------------------
+USE_TMUX=false
+if [ -n "$TMUX_BIN" ]; then
+  USE_TMUX=true
+  if ! "$TMUX_BIN" has-session -t "$SESSION" 2>/dev/null; then
+    "$TMUX_BIN" new-session -d -s "$SESSION" -n TRAIN -x 220 -y 50
+    "$TMUX_BIN" set-option -t "$SESSION" -g mouse on
+    "$TMUX_BIN" set-option -t "$SESSION" -g status-style "bg=colour24,fg=white"
+  fi
+fi
+
+SHARED_OPENED_NONTMUX=false
+shared_run() {
+  # $1 = tmux-Fenstername / Fenstertitel, $2 = Kommando
+  local name="$1" command="$2"
+  if [ "$USE_TMUX" = true ]; then
+    if [ "$name" = "TRAIN" ]; then
+      "$TMUX_BIN" send-keys -t "${SESSION}:TRAIN" "cd '$PROJECT' && $command" C-m
+    else
+      "$TMUX_BIN" new-window -t "$SESSION" -n "$name" "cd '$PROJECT' && $command; exec \$SHELL"
+    fi
+  else
+    if [ "$SHARED_OPENED_NONTMUX" = false ]; then
+      start_window "PKMAI $name" "cd '$PROJECT' && $command"
+      SHARED_OPENED_NONTMUX=true
+    else
+      start_window "PKMAI $name" "cd '$PROJECT' && $command"
+    fi
+  fi
+}
+
 find_bin() {
-  # $1 = Name, $2.. = Fallback-Pfade
   local name="$1"; shift
   local found
   found="$(command -v "$name" || true)"
@@ -39,87 +90,87 @@ find_bin() {
   done
 }
 
-# ------------------------------------------------------------------
-# TRAINER
-# ------------------------------------------------------------------
-if pgrep -f "$PROJECT/src/train.py" >/dev/null 2>&1; then
+# ---------------- TRAINER (Sammelfenster, Tab TRAIN) ----------------
+if pgrep -f "[s]rc/train.py" >/dev/null 2>&1; then
   echo "✓ Trainer läuft bereits"
 else
   echo "▶ Starte Trainer"
-  start_terminal "PKMAI TRAIN" \
-    "cd '$PROJECT' && '$PY' src/train.py"
+  shared_run "TRAIN" "'$PY' src/train.py"
 fi
 
-# ------------------------------------------------------------------
-# WATCHER
-# ------------------------------------------------------------------
-if pgrep -f "$PROJECT/src/watch.py" >/dev/null 2>&1; then
-  echo "✓ Watcher läuft bereits"
-else
-  echo "▶ Starte Watcher"
-  start_terminal "PKMAI WATCHER" \
-    "cd '$PROJECT' && '$PY' src/watch.py"
-fi
-
-# ------------------------------------------------------------------
-# WEBSERVER (Dashboard auf :8000)
-# ------------------------------------------------------------------
-if pgrep -f "$PROJECT/src/web_stream.py" >/dev/null 2>&1; then
+# ---------------- WEBSERVER (Sammelfenster, Tab WEB) ----------------
+if pgrep -f "[s]rc/web_stream.py" >/dev/null 2>&1; then
   echo "✓ Webserver läuft bereits"
 else
   echo "▶ Starte Webserver"
-  start_terminal "PKMAI WEB" \
-    "cd '$PROJECT' && '$PY' src/web_stream.py"
+  shared_run "WEB" "'$PY' src/web_stream.py"
 fi
 
-# ------------------------------------------------------------------
-# STATUS-MONITOR (tools/pkmai_status.py, auto-refresh 5s)
-# ------------------------------------------------------------------
-if pgrep -f "tools/pkmai_status.py" >/dev/null 2>&1; then
+# ---------------- STATUS-MONITOR (Sammelfenster, Tab STATUS) --------
+if pgrep -f "[t]ools/pkmai_status.py" >/dev/null 2>&1; then
   echo "✓ Status-Monitor läuft bereits"
 else
   echo "▶ Starte Status-Monitor"
-  start_terminal "PKMAI STATUS" \
-    "cd '$PROJECT' && '$PY' tools/pkmai_status.py"
+  shared_run "STATUS" "'$PY' tools/pkmai_status.py"
 fi
 
-# ------------------------------------------------------------------
-# CLOUDFLARE TUNNEL (Quick Tunnel -> https://*.trycloudflare.com)
-# ------------------------------------------------------------------
-CF_BIN="$(find_bin cloudflared /opt/homebrew/bin/cloudflared /usr/local/bin/cloudflared)"
+# ---------------- MAPPER (nur wenn aktiviert) ----------------------
+if [[ "$NO_MAPPER" == true ]]; then
+  echo "✓ Mapper bleibt ausgeschaltet"
+elif pgrep -f "[s]rc/mapper.py" >/dev/null 2>&1; then
+  echo "✓ Mapper läuft bereits"
+else
+  echo "▶ Starte Mapper"
+  shared_run "MAPPER" "'$PY' src/mapper.py"
+fi
 
-if pgrep -f "cloudflared tunnel" >/dev/null 2>&1; then
+# ---------------- CLOUDFLARE (nur wenn aktiviert) -----------------
+CF_BIN="$(find_bin cloudflared /opt/homebrew/bin/cloudflared /usr/local/bin/cloudflared)"
+if [[ "$NO_CLOUDFLARE" == true ]]; then
+  echo "✓ Cloudflare unverändert (lokaler Neustartmodus)"
+elif pgrep -f "cloudflared tunnel" >/dev/null 2>&1; then
   echo "✓ cloudflared läuft bereits"
 elif [ -n "$CF_BIN" ]; then
-  echo "▶ Starte cloudflared  (URL steht im Fenster: https://<zufall>.trycloudflare.com)"
-  start_terminal "PKMAI CLOUDFLARE" \
-    "cd '$PROJECT' && '$CF_BIN' tunnel --url http://localhost:8000"
+  echo "▶ Starte cloudflared"
+  rm -f "$PROJECT/runtime/cloudflare.log"
+  shared_run "CLOUDFLARE" "'$CF_BIN' tunnel --url http://localhost:8001 --logfile '$PROJECT/runtime/cloudflare.log' --loglevel info"
 else
   echo "⚠ cloudflared nicht gefunden (brew install cloudflared)"
 fi
 
-# ------------------------------------------------------------------
-# NGROK TUNNEL (https://*.ngrok-free.app / eigene Domain)
-# ------------------------------------------------------------------
-NGROK_BIN="$(find_bin ngrok /opt/homebrew/bin/ngrok /usr/local/bin/ngrok)"
-
-if pgrep -f "ngrok http 8000" >/dev/null 2>&1; then
-  echo "✓ ngrok läuft bereits"
-elif [ -n "$NGROK_BIN" ]; then
-  if [ -n "${NGROK_AUTHTOKEN:-}" ]; then
-    "$NGROK_BIN" config add-authtoken "$NGROK_AUTHTOKEN" >/dev/null 2>&1 || true
-  fi
-  echo "▶ Starte ngrok  (URL + Web-Interface: http://localhost:4040)"
-  start_terminal "PKMAI NGROK" \
-    "cd '$PROJECT' && '$NGROK_BIN' http 8000"
+# ---------------- WATCHER (immer eigenes Fenster) -----------------
+if pgrep -f "[s]rc/watch.py" >/dev/null 2>&1; then
+  echo "✓ Watcher läuft bereits"
 else
-  echo "⚠ ngrok nicht gefunden"
+  echo "▶ Starte Watcher  (eigenes Fenster)"
+  start_window "PKMAI WATCHER" "cd '$PROJECT' && '$PY' src/watch.py"
+fi
+
+echo "✓ ngrok deaktiviert"
+
+# Sammelfenster sichtbar machen (tmux attach in EINEM Terminal-Fenster).
+if [ "$USE_TMUX" = true ]; then
+  "$TMUX_BIN" select-window -t "${SESSION}:TRAIN" 2>/dev/null || true
+  osascript <<EOF
+tell application "Terminal"
+    activate
+    do script "printf '\\\\e]0;PKMAI SAMMELFENSTER\\\\a'; '${TMUX_BIN}' attach -t ${SESSION}"
+end tell
+EOF
 fi
 
 echo
 echo "=== Status ==="
-echo "Brain: BEHALTEN   Statistik: BEHALTEN   Karte: BEHALTEN   Curriculum: BEHALTEN   Reset: NEIN"
+if [ "$USE_TMUX" = true ]; then
+  echo "Fenster:  1x WATCHER separat  +  1x Sammelfenster (tmux '$SESSION')"
+  echo "  Tab wechseln:  Ctrl-b dann 0/1/2 …   |   Liste: Ctrl-b w   |   loesen (laeuft weiter): Ctrl-b d"
+  echo "  Erneut ansehen:  tmux attach -t $SESSION"
+else
+  echo "Fenster:  1x WATCHER separat  +  je 1 Fenster fuer Trainer/Web/Status"
+  echo "  (Fuer EIN Sammelfenster mit Tabs:  brew install tmux  und start_all.sh erneut)"
+fi
 echo
-echo "Öffentliche URL:"
-echo "  cloudflare -> steht im Fenster 'PKMAI CLOUDFLARE' (Zeile mit trycloudflare.com)"
-echo "  ngrok      -> steht im Fenster 'PKMAI NGROK' oder auf http://localhost:4040"
+echo "Zugriff (immer http://, NICHT https://):"
+echo "  lokal   -> http://localhost:8001"
+echo "  LAN     -> http://192.168.178.63:8001"
+echo "  extern  -> http://nwfrdrt6qiykkk7m.myfritz.net:8001   (FRITZ!Box-Portfreigabe 8001 noetig)"

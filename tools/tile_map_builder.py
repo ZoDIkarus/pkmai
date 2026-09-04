@@ -64,6 +64,69 @@ class TileMapBuilder:
         self.player_screen_x = 7
         self.player_screen_y = 5
 
+        # Ein eigener Mapper darf nach einem Neustart auf den bereits gebauten
+        # Bildern weiterarbeiten. Die gerenderten PNGs werden als einfache
+        # Ein-Stimmen-Basis geladen; neue Beobachtungen koennen sie anschliessend
+        # wie gewohnt durch Mehrheitsentscheid verbessern.
+        self._load_rendered_maps()
+
+    def reset_tracking(self):
+        """Vergisst nur Kamera-/Positionszustand, niemals gesammelte Tiles."""
+        self.last_player_by_map.clear()
+        self.camera_state.clear()
+        self.last_active_map_key = None
+
+    def _load_rendered_maps(self):
+        try:
+            names = os.listdir(self.maps_dir)
+        except OSError:
+            return
+
+        for name in names:
+            if not name.endswith(".json") or name == "index.json":
+                continue
+            meta_path = os.path.join(self.maps_dir, name)
+            image_path = os.path.join(self.maps_dir, name[:-5] + ".png")
+            try:
+                with open(meta_path, "r") as f:
+                    meta = json.load(f)
+                image = cv2.imread(image_path, cv2.IMREAD_COLOR)
+                if image is None or meta.get("invalid_extent"):
+                    continue
+                bank = int(meta["bank"])
+                map_id = int(meta["map_id"])
+                min_x = int(meta["min_x"])
+                min_y = int(meta["min_y"])
+                width = int(meta["width_tiles"])
+                height = int(meta["height_tiles"])
+                if width > self.max_render_span_tiles or height > self.max_render_span_tiles:
+                    continue
+                key = self._map_key(bank, map_id)
+                known = self.tiles[key]
+                for ty in range(height):
+                    for tx in range(width):
+                        tile = image[
+                            ty * self.tile_size:(ty + 1) * self.tile_size,
+                            tx * self.tile_size:(tx + 1) * self.tile_size,
+                        ]
+                        if tile.shape[:2] != (self.tile_size, self.tile_size):
+                            continue
+                        # Schwarzer/leer gerenderter Hintergrund ist kein
+                        # beobachtetes Spieltile.
+                        empty = np.empty_like(tile)
+                        empty[:] = (18, 20, 26)
+                        if (
+                            float(tile.mean()) < 3.0
+                            or float(cv2.absdiff(tile, empty).mean()) < 1.0
+                        ):
+                            continue
+                        coord = (min_x + tx, min_y + ty)
+                        known[coord] = {
+                            self._hash_tile(tile): [1, tile.copy()]
+                        }
+            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+                continue
+
     def _map_key(self, bank, map_id):
         return f"bank_{int(bank):03d}_map_{int(map_id):03d}"
 
@@ -283,13 +346,39 @@ class TileMapBuilder:
             if state is None:
                 origin_x = player_x - self.player_screen_x
                 origin_y = player_y - self.player_screen_y
-                registration_confident = True
+                # Noch NICHT aufnehmen: am Kartenrand steht der Spieler nicht
+                # zwingend in der Bildschirmmitte. Erst ein nachgewiesener
+                # Kameraschritt kalibriert den absoluten Screen-Ursprung.
+                self.camera_state[key] = {
+                    "origin_x": int(origin_x),
+                    "origin_y": int(origin_y),
+                    "frame": frame.copy(),
+                    "absolute_confident": False,
+                }
+                self.last_player_by_map[key] = (player_x, player_y)
+                self.last_active_map_key = key
+                return 0
             else:
                 origin_x = int(state["origin_x"])
                 origin_y = int(state["origin_y"])
+                absolute_confident = bool(
+                    state.get("absolute_confident", False)
+                )
                 registration_confident = True
 
-                if self.last_active_map_key == key and prev_player is not None:
+                if self.last_active_map_key != key or prev_player is None:
+                    # Wiedereintritt in eine Map: alte relative Kamera darf
+                    # nicht auf die neue Eintrittsposition uebertragen werden.
+                    self.camera_state[key] = {
+                        "origin_x": int(player_x - self.player_screen_x),
+                        "origin_y": int(player_y - self.player_screen_y),
+                        "frame": frame.copy(),
+                        "absolute_confident": False,
+                    }
+                    self.last_player_by_map[key] = (player_x, player_y)
+                    self.last_active_map_key = key
+                    return 0
+                else:
                     pdx = player_x - prev_player[0]
                     pdy = player_y - prev_player[1]
                     cam_delta, _score, registration_confident = (
@@ -297,8 +386,35 @@ class TileMapBuilder:
                             state["frame"], frame, (pdx, pdy)
                         )
                     )
-                    origin_x += cam_delta[0]
-                    origin_y += cam_delta[1]
+                    # Ein unsicher registrierter Bewegungsframe darf auch
+                    # bekannte Tiles nicht ueberschreiben. Vorher sammelte er
+                    # dort Varianten mit falschem Ursprung und verschob die
+                    # Karte schleichend. Kamera-/Player-Baseline unveraendert
+                    # lassen, damit der naechste ruhige Frame erneut prueft.
+                    if not registration_confident:
+                        return 0
+                    if not absolute_confident:
+                        if cam_delta == (0, 0):
+                            # Noch am geklemmten Kartenrand oder unbewegt.
+                            # Baseline aktualisieren, aber nichts raten.
+                            self.camera_state[key] = {
+                                "origin_x": int(origin_x),
+                                "origin_y": int(origin_y),
+                                "frame": frame.copy(),
+                                "absolute_confident": False,
+                            }
+                            self.last_player_by_map[key] = (player_x, player_y)
+                            self.last_active_map_key = key
+                            return 0
+                        # Wenn die Kamera wirklich mit dem Spieler scrollt,
+                        # sitzt dessen Fuss-Tile stabil bei (7,5). Damit ist
+                        # erstmals ein absoluter Ursprung belegbar.
+                        origin_x = player_x - self.player_screen_x
+                        origin_y = player_y - self.player_screen_y
+                        absolute_confident = True
+                    else:
+                        origin_x += cam_delta[0]
+                        origin_y += cam_delta[1]
 
             player_screen_x = player_x - origin_x
             player_screen_y = player_y - origin_y
@@ -307,6 +423,7 @@ class TileMapBuilder:
                 "origin_x": int(origin_x),
                 "origin_y": int(origin_y),
                 "frame": frame.copy(),
+                "absolute_confident": bool(absolute_confident),
             }
             self.last_player_by_map[key] = (player_x, player_y)
             self.last_active_map_key = key
@@ -472,7 +589,12 @@ class TileMapBuilder:
             "observations": int(sum(
                 sum(v[0] for v in variants.values())
                 for variants in known.values()
-            ))
+            )),
+            "alignment_confident": bool(
+                self.camera_state.get(key, {}).get(
+                    "absolute_confident", bank != self.overworld_bank
+                )
+            ),
         }
 
         return canvas, meta

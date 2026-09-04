@@ -5,9 +5,14 @@ import os
 import json
 import time
 import glob
+import signal
 
 from stable_baselines3 import PPO
-from firered_ram import read_player_location, read_player_party
+from firered_ram import (
+    read_battle_type_flags,
+    read_player_location,
+    read_player_party,
+)
 
 # Hinweis: Der Watcher startet BEWUSST immer vom Spielanfang - er ist die
 # End-to-End-Demo des aktuellen Hirns. Curriculum-Savestates sind nur fuer
@@ -31,13 +36,29 @@ FPS_TITLE_INTERVAL = 0.5
 
 # Action-Block: Taste halten + neutrale Frames
 # Exakt dieselbe Aktionsausfuehrung wie PokemonFireRedEnv.step().
-ACTION_HOLD_FRAMES = 4
-ACTION_RELEASE_FRAMES = 4
+# MUSS mit PokemonFireRedEnv.ACTION_HOLD_FRAMES/ACTION_RELEASE_FRAMES identisch
+# sein. 16 Halte-Frames = echter Kachel-Schritt statt nur Drehung.
+ACTION_HOLD_FRAMES = 12
+ACTION_RELEASE_FRAMES = 6
+
+# V15.3 BRAIN-MODUS: der sichtbare Watcher benutzt IMMER das aktuell trainierte
+# Netz (pokemon_model_resume.zip) end-to-end - keine alten, eingefrorenen
+# Skill-Snapshots und keine hartkodierte Skill-Umschaltung mehr. Was du siehst
+# ist exakt das Gehirn, das gerade lernt. Auf False -> altes Vault-Routing.
+WATCHER_BRAIN_MODE = True
 
 # Reload / RAM
 MODEL_CHECK_INTERVAL = 1.0
 RAM_DISCOVERY_INTERVAL = 0.75
 WATCHER_DEVICE = "cpu"
+
+# Voruebergehendes, gut lesbares Reward-Protokoll fuer den sichtbaren Watcher.
+# Bonus-/Strafereignisse werden sofort ausgegeben; reine Zeitkosten nur als
+# gelegentliches Lebenszeichen, damit das Terminal nicht mit 300 FPS volllaeuft.
+WATCHER_REWARD_DEBUG = os.environ.get(
+    "PKMAI_WATCHER_REWARD_DEBUG", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+WATCHER_REWARD_IDLE_LOG_INTERVAL = 100
 
 # Live Map Tiling (nur RAM-Koordinaten; keine Screenshots)
 MAPPING_GRID = True
@@ -61,30 +82,40 @@ BOTTOM_H = 74
 MODEL_DIR = os.path.join(RUNTIME_DIR, "checkpoints")
 LATEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_latest.zip")
 BEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_best.zip")
+RESUME_MODEL = os.path.join(MODEL_DIR, "pokemon_model_resume.zip")
 VERSION_FILE = os.path.join(RUNTIME_DIR, "model_version.json")
+CHAMPION_FILE = os.path.join(RUNTIME_DIR, "champion_score.json")
 SKILL_MODELS = {
     "intro": os.path.join(MODEL_DIR, "pokemon_skill_intro_best.zip"),
     "stairs": os.path.join(MODEL_DIR, "pokemon_skill_stairs_best.zip"),
     "exit": os.path.join(MODEL_DIR, "pokemon_skill_exit_best.zip"),
-    "starter": os.path.join(MODEL_DIR, "pokemon_skill_starter_best.zip"),
+    "starter": os.path.join(MODEL_DIR, "pokemon_skill_squirtle_best.zip"),
     "progress": os.path.join(MODEL_DIR, "pokemon_skill_progress_best.zip"),
 }
 
-# V10.28: Stage-Routing wiederhergestellt. Fuer intro/stairs/exit/starter
-# gibt es eigene Skill-Vault-Snapshots, die auf ihrer Stage deutlich
-# staerker sind als die geteilte Full-Policy (siehe AI_HANDOFF.md Tabelle).
-# "progress" (alles nach dem Starter) bleibt bewusst beim Champion, weil
-# der progress-Skill-Vault-Score aktuell noch deutlich schwaecher ist und
-# die Objective im Training ohnehin auf "full" aufloest.
-STAGE_SKILLS_USING_VAULT = {"intro", "stairs", "exit", "starter"}
+# Stage-Routing: Jede vorhandene Skill-Vault-Policy bedient ihren Abschnitt.
+# Solange fuer "progress" noch kein Vault existiert, nutzt der Watcher den
+# laufend gespeicherten Learner statt des frischen, weltunerfahrenen Champions.
+STAGE_SKILLS_USING_VAULT = {"intro", "stairs", "exit", "starter", "progress"}
 
 def get_watcher_model_path(skill=None):
+    if WATCHER_BRAIN_MODE:
+        # Immer das laufende Lern-Netz. Fallback nur, falls resume noch fehlt.
+        if os.path.exists(RESUME_MODEL):
+            return RESUME_MODEL
+        if os.path.exists(BEST_MODEL):
+            return BEST_MODEL
+        return LATEST_MODEL
+
     if skill in STAGE_SKILLS_USING_VAULT:
+        # Der sichtbare Lauf benutzt pro Abschnitt den besten bestaetigten
+        # Skill-Snapshot. Der rohe Resume-Learner wird alle 50k Steps
+        # ueberschrieben und kann zwischendurch fruehe Faehigkeiten vergessen.
         vault_path = SKILL_MODELS.get(skill)
         if vault_path and os.path.exists(vault_path):
             return vault_path
-        # Kein Vault-File fuer diese Stage vorhanden -> sicher auf
-        # Champion zurueckfallen statt zu crashen.
+        if os.path.exists(RESUME_MODEL):
+            return RESUME_MODEL
 
     if os.path.exists(BEST_MODEL):
         return BEST_MODEL
@@ -144,7 +175,16 @@ def get_latest_version():
             with open(VERSION_FILE, "r") as f:
                 return int(json.load(f).get("version", 0))
         except Exception:
-            return 0
+            pass
+    # Bei einem frischen Lauf existiert model_version.json erst nach der
+    # ersten echten Champion-Befoerderung. Die geschuetzte Baseline hat ihre
+    # Version bereits im Champion-Sidecar und soll nicht als v000000 erscheinen.
+    if os.path.exists(CHAMPION_FILE):
+        try:
+            with open(CHAMPION_FILE, "r") as f:
+                return int(json.load(f).get("version", 0))
+        except Exception:
+            pass
     return 0
 
 
@@ -206,7 +246,17 @@ def load_confirmed_story_warps(kind, min_agents=2):
             with open(os.path.join(base, name), "r") as f:
                 data = json.load(f)
             raw = data.get("transition", [])
-            if isinstance(raw, list) and len(raw) == 8:
+            maps = (
+                frozenset(((int(raw[0]), int(raw[1])),
+                           (int(raw[4]), int(raw[5]))))
+                if isinstance(raw, list) and len(raw) == 8
+                else frozenset()
+            )
+            expected = {
+                "stairs": frozenset(((4, 1), (4, 0))),
+                "exit": frozenset(((4, 0), (3, 0))),
+            }
+            if maps == expected.get(kind):
                 t = tuple(int(v) for v in raw)
                 votes[t] = votes.get(t, 0) + 1
         except Exception:
@@ -312,6 +362,7 @@ def build_v7_obs(
     known_transitions,
     party=None,
     story_flags=None,
+    image_frames=None,
 ):
     valid = bool(
         loc.get("valid", False)
@@ -404,6 +455,9 @@ def build_v7_obs(
     vec.extend([
         float(np.clip(p_lvl / 100.0, 0.0, 1.0)),
         float(np.clip(badges / 8.0, 0.0, 1.0)),
+        float(np.clip(int(loc.get("viridian_mart_scene", 0) or 0) / 2.0, 0.0, 1.0)),
+        float(np.clip(int(loc.get("pallet_oaks_lab_scene", 0) or 0) / 6.0, 0.0, 1.0)),
+        float(np.clip(int(loc.get("viridian_old_man_scene", 0) or 0) / 2.0, 0.0, 1.0)),
     ])
 
     levels = [int(m.get("level", 0)) for m in party if int(m.get("level", 0)) > 0]
@@ -424,11 +478,22 @@ def build_v7_obs(
     ])
 
     nav = np.asarray(vec, dtype=np.float32)
-    if nav.shape != (28,):
+    if nav.shape != (31,):
         raise RuntimeError(f"Watcher V8 nav shape invalid: {nav.shape}")
 
+    frame = process_image(screen)
+    if image_frames is None:
+        stacked_image = np.concatenate([frame] * 4, axis=0)
+    else:
+        if not image_frames:
+            image_frames.extend(frame.copy() for _ in range(4))
+        else:
+            image_frames.append(frame)
+            del image_frames[:-4]
+        stacked_image = np.concatenate(image_frames, axis=0)
+
     return {
-        "image": process_image(screen),
+        "image": stacked_image,
         "nav": nav,
     }
 
@@ -736,6 +801,17 @@ def make_team_click_handler(ui):
 
 
 def main():
+    stop_requested = False
+
+    def request_stop(_signum, _frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    # Nicht mitten im Schreiben abbrechen: die Hauptschleife verlaesst sich
+    # kontrolliert und speichert unten erst Mapping/States, bevor sie endet.
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
+
     retro.data.Integrations.add_custom_path(CUSTOM_DIR)
 
     # Stable-Retro remains headless; the composited OpenCV watcher below is
@@ -818,6 +894,8 @@ def main():
     loaded_model_name = "kein Modell"
     watcher_skill = "intro"
     loaded_skill = None
+    learner_steps_live = 0        # aktuelle Trainings-Steps (steigt = lernt weiter)
+    brain_reload_count = 0        # wie oft das Live-Netz in dieser Session nachgeladen wurde
 
     env.reset()
 
@@ -899,6 +977,10 @@ def main():
     # visualises the same style of exploration/progress reward live.
     watcher_step_reward = 0.0
     watcher_episode_reward = 0.0
+    watcher_reward_events = [
+        {"reason": "Noch kein Reward-Schritt", "amount": 0.0}
+    ]
+    watcher_has_reward_event = False
     watcher_seen_coords = set()
     watcher_visited_maps = set()
     watcher_last_level = 0
@@ -933,10 +1015,14 @@ def main():
     # (Rivalen-/Schwesterhaus) fuehrte sonst zu "Treppe" -> lief nach Norden
     # gegen die Wand -> kam nicht mehr raus. Nur der Anti-Loop-Reset loescht das.
     watcher_ever_outdoors = False
+    watcher_image_frames = []
 
     last_raw_screen = env.get_screen()
 
     while True:
+        if stop_requested:
+            print("\n🛑 Watcher speichert und beendet sich ...")
+            break
         frame_start = time.perf_counter()
 
         # Eine Agentenentscheidung alle 8 Emulatorframes.
@@ -985,8 +1071,13 @@ def main():
                 # Draussen, kein Starter -> zu Eichs Labor / Pokeball holen.
                 desired_skill = "starter"
             elif watcher_lab_room is not None and (bank, map_id) == watcher_lab_room:
-                # V12.6: genau DAS Gebaeude, das wir als Labor gemerkt haben.
-                desired_skill = "starter"
+                # Vor dem noerdlichen Oak-/Gras-Trigger ist das Labor eine
+                # Sackgasse: erst wieder raus, draussen sucht die Starter-
+                # Policy den Trigger. Danach darf sie im Labor den Starter
+                # waehlen. So bleibt der Watcher nicht bei Eich haengen.
+                desired_skill = (
+                    "starter" if watcher_north_grass_rewarded else "exit"
+                )
             elif watcher_ever_outdoors:
                 # V13.1: War schon draussen, jetzt wieder in IRGENDEINEM
                 # Gebaeude ohne Starter (Rivalen-/Schwesterhaus, Pokemart...).
@@ -1005,6 +1096,9 @@ def main():
                 desired_skill = "exit"
 
             watcher_skill = desired_skill
+            if WATCHER_BRAIN_MODE:
+                # Kein Skill-Routing mehr - ein Netz fuer den ganzen Lauf.
+                watcher_skill = "brain"
 
             if (
                 watcher_skill != loaded_skill
@@ -1012,6 +1106,12 @@ def main():
             ):
                 last_model_check_time = now_model
                 current_version = get_latest_version()
+
+                try:
+                    with open(os.path.join(RUNTIME_DIR, "trainer_status.json")) as _tf:
+                        learner_steps_live = int(json.load(_tf).get("learner_steps", 0) or 0)
+                except Exception:
+                    pass
 
                 wanted_model = get_watcher_model_path(watcher_skill)
                 wanted_signature = get_model_signature(wanted_model)
@@ -1031,16 +1131,21 @@ def main():
                         loaded_model_signature = wanted_signature
                         loaded_skill = watcher_skill
                         loaded_version = current_version
-                        loaded_model_name = (
-                            f"SKILL-{watcher_skill.upper()}"
-                            if os.path.abspath(wanted_model) in {
-                                os.path.abspath(p) for p in SKILL_MODELS.values()
-                            }
-                            else "CHAMPION"
-                            if os.path.abspath(wanted_model)
-                            == os.path.abspath(BEST_MODEL)
-                            else "LATEST"
-                        )
+                        brain_reload_count += 1
+                        _abs_wanted = os.path.abspath(wanted_model)
+                        if _abs_wanted == os.path.abspath(RESUME_MODEL):
+                            loaded_model_name = (
+                                "BRAIN (live)" if WATCHER_BRAIN_MODE
+                                else "LEARNER-RESUME"
+                            )
+                        elif _abs_wanted == os.path.abspath(BEST_MODEL):
+                            loaded_model_name = "CHAMPION"
+                        elif _abs_wanted in {
+                            os.path.abspath(p) for p in SKILL_MODELS.values()
+                        }:
+                            loaded_model_name = f"SKILL-{watcher_skill.upper()}"
+                        else:
+                            loaded_model_name = "LATEST"
 
                         print(
                             f"🏆 Watcher HOT-RELOAD: "
@@ -1080,6 +1185,7 @@ def main():
                     "stairs_done": watcher_stairs_done,
                     "house_left": watcher_left_house_rewarded,
                 },
+                watcher_image_frames,
             )
 
             if model is not None:
@@ -1176,8 +1282,12 @@ def main():
                 y = 0
 
         previous_battle_state = int(in_battle)
-        # V11.4: gBattleTypeFlags (Offset 143340) ODER altes Feld.
-        _btf = int(info.get("battle_flags", 0) or 0)
+        # Bestaetigtes uint32 direkt aus der deutschen FireRed-RAM-Map.
+        _btf = int(
+            read_battle_type_flags(env)
+            or info.get("battle_flags", 0)
+            or 0
+        )
         in_battle = 1 if (int(info.get("in_battle", 0) or 0) or _btf) else 0
         if previous_battle_state == 0 and in_battle == 1:
             watcher_battle_stats["started"] += 1
@@ -1368,6 +1478,11 @@ def main():
         # Ein Reward-Schritt entspricht einem kompletten 8-Frame-Aktionsblock.
         # -------------------------------------------------------------
         if phase == 7:
+            # Bis zur naechsten Reward-Auswertung sichtbar lassen. So zeigen
+            # GUI und Web-Telemetrie nicht zwischen zwei Auswertungen kurz
+            # eine leere Ursachenliste.
+            watcher_reward_events = []
+            watcher_has_reward_event = False
             gameplay_ready = bool(
                 trusted_loc and coord != (0, 0, 0, 0)
             )
@@ -1377,7 +1492,13 @@ def main():
             if gameplay_ready:
                 watcher_gameplay_ready = True
             watcher_in_battle = in_battle
-            watcher_step_reward = 0.01 if gameplay_ready else 0.0
+            # Nur Anzeige; der Watcher trainiert nicht. Spiegelbild der
+            # winzigen Zeitgebuehr aus PokemonFireRedEnv.
+            watcher_step_reward = -0.002
+            watcher_reward_events.append({
+                "reason": "Zeitkosten",
+                "amount": -0.002,
+            })
 
             # Intro-/Namensvergabe-Rewards nur fuer die Live-Anzeige.
             if not gameplay_ready:
@@ -1417,6 +1538,10 @@ def main():
                             25.0 - watcher_intro_novelty_reward_total
                         )
                         watcher_step_reward += intro_bonus
+                        watcher_reward_events.append({
+                            "reason": "Neuer Intro-Bildschirm",
+                            "amount": intro_bonus,
+                        })
                         watcher_intro_novelty_reward_total += intro_bonus
                         watcher_intro_seen_states.add(intro_key)
 
@@ -1424,12 +1549,24 @@ def main():
 
                     if watcher_intro_same_screen_steps >= 120:
                         watcher_step_reward -= 0.01
+                        watcher_reward_events.append({
+                            "reason": "Intro steht fest (120+)",
+                            "amount": -0.01,
+                        })
                     if watcher_intro_same_screen_steps >= 300:
                         watcher_step_reward -= 0.03
+                        watcher_reward_events.append({
+                            "reason": "Intro steht fest (300+)",
+                            "amount": -0.03,
+                        })
 
             elif not watcher_intro_complete_rewarded:
                 watcher_intro_complete_rewarded = True
                 watcher_step_reward += 35.0
+                watcher_reward_events.append({
+                    "reason": "Intro abgeschlossen",
+                    "amount": 35.0,
+                })
 
             if gameplay_ready and in_battle == 0:
                 if bank != 3:
@@ -1479,6 +1616,10 @@ def main():
                     watcher_first_outdoor_map = map_id
                     watcher_outdoor_entry_y = y
                     watcher_step_reward += 52.0
+                    watcher_reward_events.append({
+                        "reason": "Spielerhaus verlassen",
+                        "amount": 52.0,
+                    })
 
                 if bank == 3 and watcher_first_outdoor_map is None:
                     watcher_first_outdoor_map = map_id
@@ -1495,6 +1636,10 @@ def main():
                 ):
                     watcher_north_grass_rewarded = True
                     watcher_step_reward += 75.0
+                    watcher_reward_events.append({
+                        "reason": "Norden/Gras erreicht",
+                        "amount": 75.0,
+                    })
 
                 # Erste neue Aussenwelt-Map.
                 if (
@@ -1505,15 +1650,27 @@ def main():
                 ):
                     watcher_next_outdoor_map_rewarded = True
                     watcher_step_reward += 150.0
+                    watcher_reward_events.append({
+                        "reason": "Neue Aussenwelt-Map",
+                        "amount": 150.0,
+                    })
 
                 map_key = (bank, map_id)
                 if map_key not in watcher_visited_maps:
                     watcher_visited_maps.add(map_key)
                     watcher_step_reward += 10.0
+                    watcher_reward_events.append({
+                        "reason": f"Neue Map {bank}:{map_id}",
+                        "amount": 10.0,
+                    })
 
                 if coord not in watcher_seen_coords:
                     watcher_seen_coords.add(coord)
                     watcher_step_reward += 0.25
+                    watcher_reward_events.append({
+                        "reason": "Neue Koordinate",
+                        "amount": 0.25,
+                    })
 
             # Party-Reader und p1_level sind beide gueltige Starter-Signale.
             live_party_level = max(
@@ -1524,19 +1681,33 @@ def main():
             if not watcher_has_starter and effective_level >= 5:
                 watcher_has_starter = True
                 watcher_step_reward += 100.0
+                watcher_reward_events.append({
+                    "reason": "Starter erhalten",
+                    "amount": 100.0,
+                })
                 watcher_last_level = effective_level
             elif watcher_has_starter and effective_level > watcher_last_level:
-                watcher_step_reward += (
+                level_bonus = (
                     effective_level - watcher_last_level
                 ) * 25.0
+                watcher_step_reward += level_bonus
+                watcher_reward_events.append({
+                    "reason": f"Level {watcher_last_level}->{effective_level}",
+                    "amount": level_bonus,
+                })
                 watcher_last_level = effective_level
             elif watcher_last_level == 0 and effective_level > 0:
                 watcher_last_level = effective_level
 
             if badge_count > watcher_last_badges:
-                watcher_step_reward += (
+                badge_bonus = (
                     badge_count - watcher_last_badges
                 ) * 500.0
+                watcher_step_reward += badge_bonus
+                watcher_reward_events.append({
+                    "reason": f"Orden {watcher_last_badges}->{badge_count}",
+                    "amount": badge_bonus,
+                })
                 watcher_last_badges = badge_count
 
             if gameplay_ready:
@@ -1565,10 +1736,22 @@ def main():
 
                 if in_battle == 0 and watcher_stuck_counter >= 60:
                     watcher_step_reward -= 0.03
+                    watcher_reward_events.append({
+                        "reason": "Stillstand (60+)",
+                        "amount": -0.03,
+                    })
                 if in_battle == 0 and watcher_stuck_counter >= 180:
                     watcher_step_reward -= 0.12
+                    watcher_reward_events.append({
+                        "reason": "Stillstand (180+)",
+                        "amount": -0.12,
+                    })
                 if in_battle == 0 and watcher_stuck_counter >= 400:
                     watcher_step_reward -= 0.40
+                    watcher_reward_events.append({
+                        "reason": "Stillstand (400+)",
+                        "amount": -0.40,
+                    })
 
                 watcher_previous_valid_bank = bank
                 watcher_previous_valid_map = map_id
@@ -1577,6 +1760,28 @@ def main():
                 watcher_last_progress_signature = None
 
             watcher_episode_reward += watcher_step_reward
+            watcher_has_reward_event = any(
+                event["reason"] != "Zeitkosten"
+                for event in watcher_reward_events
+            )
+
+            if WATCHER_REWARD_DEBUG and (
+                watcher_has_reward_event
+                or total_steps % WATCHER_REWARD_IDLE_LOG_INTERVAL == 0
+            ):
+                reward_details = " | ".join(
+                    f"{event['reason']} {event['amount']:+.3f}"
+                    for event in watcher_reward_events
+                )
+                event_label = (
+                    "EREIGNIS" if watcher_has_reward_event else "nur Zeitkosten"
+                )
+                print(
+                    f"💰 WATCHER REWARD [{event_label}] "
+                    f"Step {total_steps:,} | Δ {watcher_step_reward:+.3f} | "
+                    f"Σ {watcher_episode_reward:+.2f} | {reward_details}",
+                    flush=True,
+                )
 
             # Watcher-Anti-Loop-Reset:
             # Neue Modellversionen uebernehmen sonst denselben festgefahrenen
@@ -1588,15 +1793,24 @@ def main():
             # nicht alle 1800 Schritte neu anfangen.
             _stuck_cap = 2500 if party_has_starter else 900
             _room_cap = 6000 if party_has_starter else 1800
+            # V15.3: Der Room-Cap allein greift nicht, wenn der Watcher zwischen
+            # 2-3 Raeumen pendelt (Labor <-> Flur <-> Labor) - watcher_room_steps
+            # wird dabei staendig auf 0 zurueckgesetzt, ohne dass je ein Starter
+            # geholt wird. Absolute Notbremse unabhaengig vom Raumwechsel.
+            _no_starter_hard_cap = (
+                not party_has_starter and total_steps >= 8000
+            )
             if (
                 gameplay_ready
                 and in_battle == 0
                 and (
                     watcher_stuck_counter >= _stuck_cap
                     or watcher_room_steps >= _room_cap
+                    or _no_starter_hard_cap
                 )
             ):
                 env.reset()
+                watcher_image_frames.clear()
                 print(
                     f"🔄 Watcher Anti-Loop Reset -> Spielanfang "
                     f"(still={watcher_stuck_counter}, room={watcher_room_steps}, "
@@ -1605,6 +1819,11 @@ def main():
 
                 watcher_step_reward = 0.0
                 watcher_episode_reward = 0.0
+                watcher_reward_events = [{
+                    "reason": "Anti-Loop Reset",
+                    "amount": 0.0,
+                }]
+                watcher_has_reward_event = True
                 watcher_seen_coords.clear()
                 watcher_visited_maps.clear()
                 watcher_last_level = 0
@@ -1693,12 +1912,17 @@ def main():
                     "steps": total_steps,
                     "reward": round(watcher_episode_reward, 2),
                     "step_reward": round(watcher_step_reward, 4),
+                    "reward_has_event": bool(watcher_has_reward_event),
+                    "reward_events": watcher_reward_events,
                     "stuck_counter": watcher_stuck_counter,
                     "level": p1_level,
                     "party": watcher_party,
                     "has_starter": bool(watcher_has_starter),
                     "active_skill": watcher_skill,
                     "loaded_model": loaded_model_name,
+                    "model_version": int(loaded_version),
+                    "learner_steps": int(learner_steps_live),
+                    "brain_reloads": int(brain_reload_count),
                     "story_flags": {
                         "stairs_done": bool(watcher_stairs_done),
                         "house_left": bool(watcher_left_house_rewarded),
@@ -1791,11 +2015,23 @@ def main():
             cv2.line(canvas, (MAP_X0, TOP_H),
                      (MAP_X0, TOP_H + CONTENT_H), (70, 78, 95), 2)
 
-            brain = (
-                f"{loaded_model_name} | PKMAI v{loaded_version:06d}"
-                if loaded_version >= 0
-                else "Random Policy"
-            )
+            if WATCHER_BRAIN_MODE:
+                _ls = learner_steps_live
+                _ls_txt = (
+                    f"{_ls/1_000_000:.2f}M" if _ls >= 1_000_000
+                    else f"{_ls/1_000:.0f}k" if _ls >= 1_000
+                    else str(_ls)
+                )
+                brain = (
+                    f"BRAIN (live) | Learner {_ls_txt} Steps | Champion v{loaded_version:06d} "
+                    f"| {brain_reload_count}x nachgeladen"
+                )
+            else:
+                brain = (
+                    f"{loaded_model_name} | PKMAI v{loaded_version:06d}"
+                    if loaded_version >= 0
+                    else "Random Policy"
+                )
 
             cv2.putText(
                 canvas,
@@ -1865,17 +2101,41 @@ def main():
 
             footer_y = TOP_H + CONTENT_H
 
+            reward_color = (
+                (40, 220, 80)
+                if watcher_step_reward > 0.0
+                else (60, 90, 255)
+                if watcher_step_reward < -0.0021
+                else (170, 175, 185)
+            )
+            reward_event_text = " | ".join(
+                f"{event['reason']} {event['amount']:+.3f}"
+                for event in watcher_reward_events
+            ) or "Noch kein Reward-Schritt"
+
             cv2.putText(
                 canvas,
                 (
                     f"Steps {total_steps}   Level {p1_level}   "
-                    f"Badges {badge_count}/8   "
-                    f"Mapping {len(watcher_known_tiles)} Felder / {len(watcher_known_edges)} Kanten"
+                    f"Badges {badge_count}/8   REWARD Δ {watcher_step_reward:+.3f}   "
+                    f"EPISODE Σ {watcher_episode_reward:+.2f}   "
+                    f"EVENT {'JA' if watcher_has_reward_event else 'NEIN'}"
                 ),
-                (16, footer_y + 30),
+                (16, footer_y + 21),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.50,
-                (255, 220, 0),
+                0.48,
+                reward_color,
+                1,
+                cv2.LINE_AA
+            )
+
+            cv2.putText(
+                canvas,
+                f"WARUM: {reward_event_text}",
+                (16, footer_y + 44),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.42,
+                reward_color,
                 1,
                 cv2.LINE_AA
             )
@@ -1884,9 +2144,9 @@ def main():
             cv2.putText(
                 canvas,
                 f"INPUT: {current_action_name}    LAST: {history_text}",
-                (16, footer_y + 58),
+                (16, footer_y + 66),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.48,
+                0.40,
                 (0, 230, 118),
                 1,
                 cv2.LINE_AA

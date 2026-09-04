@@ -24,6 +24,11 @@ HISTORY_LOCK = threading.Lock()
 EXPLORATION_MEMORY_DIR = os.path.join(RUNTIME_DIR, "exploration_memory")
 WATCHER_MAPPING_FILE = os.path.join(RUNTIME_DIR, "watcher_mapping.json")
 WATCHER_FRAME_FILE = os.path.join(RUNTIME_DIR, "watcher.jpg")
+MAPPER_FRAME_FILE = os.path.join(RUNTIME_DIR, "mapper.jpg")
+MAPPER_DIR = os.path.join(RUNTIME_DIR, "mapper")
+MAPPER_ATLAS_FILE = os.path.join(MAPPER_DIR, "kanto_map.png")
+MAPPER_STATUS_FILE = os.path.join(RUNTIME_DIR, "mapper_status.json")
+MAPPER_MAPS_DIR = os.path.join(MAPPER_DIR, "stitched_maps")
 TRAINER_STATUS_FILE = os.path.join(RUNTIME_DIR, "trainer_status.json")
 
 def _live_learner_steps(fallback=0):
@@ -34,6 +39,21 @@ def _live_learner_steps(fallback=0):
         return n if n > 0 else int(fallback or 0)
     except Exception:
         return int(fallback or 0)
+
+
+def _load_version_meta():
+    """Aktive Version; vor der ersten Promotion aus Champion-Baseline lesen."""
+    default = {"version": 0, "timesteps": 0}
+    for source in (VERSION_FILE, CHAMPION_FILE):
+        try:
+            with open(source, "r") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                default.update(loaded)
+                return default
+        except Exception:
+            continue
+    return default
 
 
 @app.get("/api/champion")
@@ -76,6 +96,111 @@ def get_watcher_jpeg():
         )
     except OSError:
         return Response(status_code=404)
+
+
+@app.get("/mapper.jpg")
+def get_mapper_jpeg():
+    if os.path.exists(MAPPER_FRAME_FILE):
+        return FileResponse(
+            MAPPER_FRAME_FILE, media_type="image/jpeg",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
+    return Response(status_code=404)
+
+
+@app.get("/mapper-atlas.png")
+def get_mapper_atlas():
+    if os.path.exists(MAPPER_ATLAS_FILE):
+        return FileResponse(
+            MAPPER_ATLAS_FILE, media_type="image/png",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
+    return Response(status_code=404)
+
+
+@app.get("/api/mapper")
+def get_mapper_status():
+    try:
+        with open(MAPPER_STATUS_FILE, "r") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {"running": False, "name": "Mapper"}
+
+
+@app.get("/api/mapper/maps")
+def get_mapper_maps():
+    """Metadaten der echten Screenshot-Karten fuer das Leaflet-Overlay."""
+    result = []
+    try:
+        names = sorted(os.listdir(MAPPER_MAPS_DIR))
+    except OSError:
+        names = []
+    for name in names:
+        if not name.startswith("bank_") or not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(MAPPER_MAPS_DIR, name), "r") as f:
+                meta = json.load(f) or {}
+            bank = int(meta["bank"])
+            map_id = int(meta["map_id"])
+            image_path = os.path.join(MAPPER_MAPS_DIR, name[:-5] + ".png")
+            if not os.path.isfile(image_path) or meta.get("invalid_extent"):
+                continue
+            stat = os.stat(image_path)
+            result.append({
+                "bank": bank,
+                "map_id": map_id,
+                "min_x": int(meta["min_x"]),
+                "max_x": int(meta["max_x"]),
+                "min_y": int(meta["min_y"]),
+                "max_y": int(meta["max_y"]),
+                "known_world_tiles": int(meta.get("known_world_tiles", 0)),
+                # Screenshot-Stitching bleibt bis zur automatischen
+                # Kalibrierung nur Vorschau. Falsche Bilder duerfen nicht mehr
+                # unter die exakten RAM-Marker gelegt werden.
+                "alignment_confident": bool(meta.get("alignment_confident", False)),
+                "revision": f"{stat.st_mtime_ns}-{stat.st_size}",
+                "url": f"/mapper-map/{bank}/{map_id}.png",
+            })
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            continue
+    return {"maps": result}
+
+
+@app.get("/api/mapper/tiles")
+def get_mapper_tiles():
+    """Exakte, animationsunabhaengige RAM-Tilemap des Frontier-Mappers."""
+    path = os.path.join(MAPPER_DIR, "exploration_memory.json")
+    try:
+        with open(path, "r") as f:
+            data = json.load(f) or {}
+        tiles = []
+        for item in data.get("positions", []):
+            if not isinstance(item, list) or len(item) != 4:
+                continue
+            bank, map_id, x, y = (int(v) for v in item)
+            if 0 <= x < 512 and 0 <= y < 512:
+                tiles.append([bank, map_id, x, y])
+        return {"tiles": tiles, "count": len(tiles)}
+    except Exception:
+        return {"tiles": [], "count": 0}
+
+
+@app.get("/mapper-map/{bank}/{map_id}.png")
+def get_mapper_map_image(bank: int, map_id: int):
+    if not (0 <= bank <= 999 and 0 <= map_id <= 999):
+        return Response(status_code=404)
+    path = os.path.join(
+        MAPPER_MAPS_DIR,
+        f"bank_{bank:03d}_map_{map_id:03d}.png",
+    )
+    if os.path.isfile(path):
+        return FileResponse(
+            path,
+            media_type="image/png",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
+    return Response(status_code=404)
 
 
 def _load_training_history():
@@ -562,15 +687,7 @@ def get_state():
     # Nach ID sortieren (Watcher id 120 landet damit natuerlich unten).
     instances.sort(key=lambda x: x.get("id", 0))
 
-    version_meta = {"version": 0, "timesteps": 0}
-    if os.path.exists(VERSION_FILE):
-        try:
-            with open(VERSION_FILE, "r") as vf:
-                loaded = json.load(vf)
-                if isinstance(loaded, dict):
-                    version_meta.update(loaded)
-        except Exception:
-            pass
+    version_meta = _load_version_meta()
 
     try:
         training_stats = _aggregate_training_stats(instances)
@@ -630,17 +747,17 @@ def get_state():
     _enemy_ko = int(training_stats["run_totals"].get("enemy_faints", 0))
     _enemy_dmg = int(training_stats["run_totals"].get("enemy_damage_hp", 0))
 
-    # V11.3: echte Welt-Tiefe (nur Aussen-Maps) + tiefster outdoor-Checkpoint.
+    # V15: explizite Welt-Stufe + tiefster validierter Stage-Checkpoint.
     world_depth = 0
     deepest_outdoor = 0
     try:
         with open(os.path.join(RUNTIME_DIR, "exploration_memory", "global_progress.json")) as _f:
-            world_depth = int((json.load(_f) or {}).get("max_episode_maps", 0))
+            world_depth = int((json.load(_f) or {}).get("max_world_stage", 0))
     except Exception:
         pass
     try:
         import glob as _glob
-        for _p in _glob.glob(os.path.join(RUNTIME_DIR, "curriculum_shared", "outdoor_*.state.gz")):
+        for _p in _glob.glob(os.path.join(RUNTIME_DIR, "curriculum_shared", "stage_*.state.gz")):
             try:
                 deepest_outdoor = max(deepest_outdoor,
                                       int(os.path.basename(_p).split("_")[1].split(".")[0]))
@@ -648,6 +765,9 @@ def get_state():
                 pass
     except Exception:
         pass
+
+    champion_snapshot = get_champion()
+    champion_metrics = champion_snapshot.get("metrics") or {}
 
     return {
         "trainer_name": trainer_name,
@@ -657,6 +777,13 @@ def get_state():
         "max_badges": max(max_badges, training_stats["max_badges"]),
         "world_depth": world_depth,
         "deepest_outdoor_checkpoint": deepest_outdoor,
+        "champion_speed": {
+            "version": int(champion_snapshot.get("version", 0) or 0),
+            "steps": int(champion_snapshot.get("timesteps", 0) or 0),
+            "best_stage_steps": int(
+                champion_metrics.get("full_best_stage_steps", 0) or 0
+            ),
+        },
         "fleet": {
             "count": len([i for i in instances if i.get("id") != 120]),
             "roles": _role_counts,
@@ -1034,7 +1161,8 @@ def index():
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
     <title>Pokemon FireRed AI Live Dashboard</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
         async function v8RefreshSelectedAgent() {
             try {
                 const r = await fetch('/api/state', {cache:'no-store'});
@@ -1443,10 +1571,80 @@ def index():
         .tab-btn.active { background: #00e676; color: #000; font-weight: 700; }
 
         #main-container { flex: 1; position: relative; overflow: hidden; }
-        #map-view, #rooms-view, #graphs-view, #watcher-view { width: 100%; height: 100%; position: absolute; top:0; left:0; }
+        #map-view, #rooms-view, #graphs-view, #watcher-view, #mapper-view, #status-view { width: 100%; height: 100%; position: absolute; top:0; left:0; }
         #rooms-view { display: none; overflow-y: auto; padding: 24px; }
         #graphs-view { display:none; overflow-y:auto; padding:18px 22px 30px; background:#0c0e14; }
         #watcher-view { display: none; overflow-y: auto; }
+        .watcher-page{padding:14px;max-width:1100px;margin:0 auto}
+        .watcher-page-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+        .watcher-page-head b{color:#00e676;font-size:14px}
+        .watcher-page-head span{display:block;color:#8f98ad;font-size:10px;margin-top:2px}
+        .watcher-page-head a{color:#7c8db5;font-size:10px;white-space:nowrap}
+        #watcher-stream{width:100%;max-width:600px;display:block;margin:0 auto 16px;border-radius:8px;border:1px solid #293148;image-rendering:pixelated}
+        .wt-picker-head{display:flex;justify-content:space-between;align-items:center;margin:2px 0 8px}
+        .wt-picker-head b{color:#fff;font-size:12px}
+        .wt-picker-head span{color:#7f879b;font-size:10px}
+        .wt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:6px;margin-bottom:14px}
+        .wt-chip{background:#151821;border:1px solid #293148;border-radius:8px;padding:7px 8px;cursor:pointer;transition:.12s;text-align:left}
+        .wt-chip:hover{border-color:#3d4a6b;background:#1a1f2b}
+        .wt-chip.sel{border-color:#00e676;background:rgba(0,230,118,.12)}
+        .wt-chip.watcher{border-color:#7c4dff}
+        .wt-chip .c-id{font-weight:800;font-size:11px;color:#dfe6f2}
+        .wt-chip .c-role{font-size:9px;color:#8f98ad;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .wt-chip .c-meta{font-size:10px;color:#9fb0d0;margin-top:3px}
+        .wt-detail{background:#12161f;border:1px solid #2b3346;border-radius:12px;padding:14px}
+        .wt-detail h4{margin:0 0 2px;color:#00e676;font-size:14px}
+        .wt-detail .wt-sub{color:#8f98ad;font-size:10px;margin:2px 0 12px;line-height:1.5}
+        .wt-dgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:8px;margin-bottom:12px}
+        .wt-cell{background:#0b0e14;border:1px solid #232738;border-radius:8px;padding:8px}
+        .wt-cell .v{font-size:15px;font-weight:800;color:#fff;word-break:break-word}
+        .wt-cell .k{font-size:9px;color:#8b93a7;margin-top:2px;text-transform:uppercase;letter-spacing:.3px}
+        .wt-events{background:#0b0e14;border:1px solid #232738;border-radius:8px;padding:9px;font-family:ui-monospace,Menlo,monospace;font-size:10px;line-height:1.75;color:#9fb0d0;max-height:170px;overflow:auto}
+        .wt-events .pos{color:#5fe08a}
+        .wt-events .neg{color:#ff7a7a}
+        .wt-close{float:right;background:#232738;border:none;color:#aaa;border-radius:6px;padding:3px 9px;cursor:pointer;font-size:11px}
+        @media(max-width:600px){
+          #watcher-view{padding:0}
+          .watcher-page{padding:10px}
+          .wt-grid{grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:5px}
+          .wt-dgrid{grid-template-columns:repeat(3,1fr)}
+          #watcher-stream{margin-bottom:12px}
+        }
+        #mapper-view { display:none; overflow-y:auto; padding:18px; box-sizing:border-box; }
+        .mapper-grid { display:grid; grid-template-columns:minmax(360px,1fr) minmax(360px,1fr); gap:16px; }
+        .mapper-card { background:#11151f; border:1px solid #273043; border-radius:12px; padding:12px; min-width:0; }
+        .mapper-card h3 { margin:0 0 5px; color:#63e6ad; font-size:14px; }
+        .mapper-card p { margin:0 0 10px; color:#8e99ad; font-size:11px; }
+        .mapper-card img { display:block; width:100%; height:auto; image-rendering:pixelated; border-radius:8px; background:#090c12; }
+        .path-toggle.active { background:#00e676 !important; color:#07120c !important; }
+        #status-view { display:none; overflow-y:auto; padding:18px 22px 32px; background:#0c0e14; }
+        .status-title { display:flex; justify-content:space-between; align-items:end; margin-bottom:14px; }
+        .status-title h2 { margin:0; color:#fff; font-size:20px; }
+        .status-title span { color:#7f879b; font-size:10px; }
+        .status-summary, .status-role-grid, .status-agent-grid { display:grid; gap:10px; }
+        .status-summary { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); margin-bottom:14px; }
+        .status-kpi, .status-watcher, .status-role, .status-agent { background:#151821; border:1px solid #293148; border-radius:11px; padding:12px; }
+        .status-kpi .big { color:#00e676; font-size:21px; font-weight:900; }
+        .status-kpi .small { color:#8b93a7; font-size:10px; margin-top:3px; }
+        .status-watcher { border-color:#7c4dff; margin-bottom:14px; }
+        .status-watcher h3, .status-section-title { margin:0 0 9px; color:#fff; font-size:13px; }
+        .status-watcher-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:7px; }
+        .status-pill { background:#0e1119; border-radius:7px; padding:7px 9px; color:#bac3d8; font-size:11px; }
+        .status-pill b { color:#fff; }
+        .status-role-grid { grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); margin-bottom:15px; }
+        .status-role-head { display:flex; justify-content:space-between; font-weight:800; color:#fff; margin-bottom:8px; }
+        .status-role-head b { color:#00e676; }
+        .status-role-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:5px; }
+        .status-role-stats span { background:#0e1119; padding:6px 4px; border-radius:6px; text-align:center; color:#929caf; font-size:9px; }
+        .status-role-stats strong { display:block; color:#fff; font-size:14px; margin-bottom:2px; }
+        .status-agent-grid { grid-template-columns:repeat(auto-fit,minmax(245px,1fr)); }
+        .status-agent { cursor:pointer; transition:border-color .12s, background .12s; }
+        .status-agent:hover { border-color:#3d4a6b; }
+        .status-agent.sel { border-color:#00e676; background:rgba(0,230,118,.10); }
+        .status-agent { padding:9px 10px; }
+        .status-agent-top { display:flex; justify-content:space-between; color:#fff; font-size:11px; font-weight:800; }
+        .status-agent-meta { color:#8d96aa; font-size:9px; margin-top:5px; line-height:1.5; }
+        .status-agent.fighting { border-color:#ff5252; box-shadow:inset 3px 0 #ff5252; }
         .fleet-panel { background:linear-gradient(180deg,#12161f,#0d1017); border:1px solid #2b3346; border-radius:12px; padding:14px 16px; margin-bottom:14px; }
         .fleet-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
         .fleet-head b { font-size:14px; color:#00e676; letter-spacing:.5px; }
@@ -1663,7 +1861,7 @@ def index():
 
   /* MAIN: kein 100vh-Kaefig mehr, alles im Fluss */
   #main-container{position:static!important;overflow:visible!important;flex:none!important;height:auto!important}
-  #rooms-view,#graphs-view{position:relative!important;display:none;height:auto!important;min-height:auto!important;overflow:visible!important;padding:10px 10px calc(72px + env(safe-area-inset-bottom))!important}
+  #rooms-view,#graphs-view,#status-view,#mapper-view{position:relative!important;display:none;height:auto!important;min-height:auto!important;overflow:visible!important;padding:10px 10px calc(72px + env(safe-area-inset-bottom))!important}
   /* Leaflet braucht feste Hoehe, sonst kollabiert die Karte / kein Zoom */
   #map-view{position:relative!important;height:72vh!important;min-height:360px!important;overflow:hidden!important}
 
@@ -1692,6 +1890,7 @@ def index():
   .graphs-kpis{grid-template-columns:repeat(2,1fr)!important}
   .journey-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
   .room-grid{grid-template-columns:1fr!important}
+  .mapper-grid{grid-template-columns:1fr!important}
   .agent-row,.agent-watcher{padding:11px 8px!important;font-size:12px!important}
   .step-list{max-height:220px!important}
 }
@@ -1700,6 +1899,14 @@ def index():
   .graph-card{min-height:320px!important}
   .tabs .tab-btn{font-size:9px!important;padding:8px 3px!important}
   .team-slot{width:21px!important;height:21px!important}
+}
+@media(max-width:820px){
+  /* Kein horizontales Scrollen der ganzen Seite auf dem Handy. */
+  html,body{overflow-x:hidden!important;max-width:100vw!important}
+  #map-view,#rooms-view,#graphs-view,#watcher-view,#mapper-view,#status-view{overflow-x:hidden!important}
+  .v81skills,.v8-skill-cards,.v84-grid{flex-wrap:wrap!important;overflow-x:auto!important;max-width:100%!important}
+  .v81card{flex:0 0 auto!important}
+  canvas{max-width:100%!important}
 }
 </style>
 <style id="learner-truth-style">
@@ -1764,7 +1971,9 @@ def index():
                 <button class="tab-btn active" onclick="showTab('map', event)">🗺️ Overworld Map</button>
                 <button class="tab-btn" onclick="showTab('rooms', event)">🏠 Indoor Mapping</button>
                 <button class="tab-btn" onclick="showTab('graphs', event)">📈 Graphs</button>
+                <button class="tab-btn" onclick="showTab('status', event)">📊 Status</button>
                 <button class="tab-btn" onclick="showTab('watcher', event)">👁️ Watcher</button>
+                <button class="tab-btn" onclick="showTab('mapper', event)">🧩 Mapper</button>
             </div>
         </div>
     </header>
@@ -1784,7 +1993,29 @@ def index():
             </div>
         </div>
         <div id="rooms-view"><div class="room-grid" id="room-grid"></div></div>
-        <div id="watcher-view"><section class="watcher-page"><div class="watcher-page-head"><div><b>● LIVE WATCHER</b><span>Aktueller Screenshot aus dem unabhängigen End-to-End-Run</span></div><a href="/watcher.jpg" target="_blank" rel="noopener">JPEG in neuem Tab öffnen ↗</a></div><img id="watcher-stream" src="/watcher.jpg" alt="Live-Bild des Watchers"></section></div>
+        <div id="watcher-view"><section class="watcher-page">
+            <div class="watcher-page-head"><div><b>● LIVE WATCHER</b><span>End-to-End-Screenshot + Live-Stats jedes Agenten</span></div><a href="/watcher.jpg" target="_blank" rel="noopener">JPEG ↗</a></div>
+            <img id="watcher-stream" src="/watcher.jpg" alt="Live-Bild des Watchers">
+            <div class="wt-picker-head"><b>Agenten – antippen für Live-Stats</b><span id="wt-count">–</span></div>
+            <div class="wt-grid" id="wt-grid"></div>
+            <div class="wt-detail" id="wt-detail" hidden></div>
+        </section></div>
+        <div id="mapper-view">
+            <div class="mapper-grid">
+                <section class="mapper-card"><h3>🧩 Mapper · Live</h3><p id="mapper-status">Frontier-Steuerung · eine Aktion alle 1,5 s · drei ruhige Aufnahmen</p><img id="mapper-stream" src="/mapper.jpg" alt="Live-Bild des Mappers"></section>
+                <section class="mapper-card"><h3>🗺️ Echte Bildkarte</h3><p>Mehrfach beobachtete 16×16-Tiles; Figur, NPCs und Animationen verschwinden per Mehrheitswahl.</p><img id="mapper-atlas" src="/mapper-atlas.png" alt="Vom Mapper zusammengesetzte Weltkarte"></section>
+            </div>
+        </div>
+        <div id="status-view">
+            <div class="status-title"><h2>📊 Flotten-Status</h2><span>Watcher · Kategorien · einzelne Runner</span></div>
+            <div class="status-summary" id="status-summary"></div>
+            <div class="status-watcher" id="status-watcher"></div>
+            <h3 class="status-section-title">🧩 Kategorien – aktuelle Episoden</h3>
+            <div class="status-role-grid" id="status-role-grid"></div>
+            <h3 class="status-section-title">🤖 Einzelne Agenten <span style="font-weight:400;color:#7f879b;font-size:11px">– anklicken für Live-Stats + Reward-Events</span></h3>
+            <div class="wt-detail" id="status-agent-detail" hidden style="margin-bottom:12px"></div>
+            <div class="status-agent-grid" id="status-agent-grid"></div>
+        </div>
         <div id="graphs-view"><div class="fleet-panel" id="fleet-panel">
             <div class="fleet-head">
                 <b>🧭 FLOTTEN-STATUS</b>
@@ -1846,7 +2077,7 @@ def index():
             </div>
             <div class="graphs-grid">
                 <div class="graph-card"><div class="graph-title">Lernkurve</div><div class="graph-sub">Ø Episode-Reward über echte PPO-Trainingsschritte.</div><div class="graph-canvas-wrap"><canvas id="graph-reward"></canvas></div></div>
-                <div class="graph-card"><div class="graph-title">V9.0 – Clean Night 120</div><div class="graph-sub">Kumulative Erfolgsquote aller Spezialisten + Full-Chain. Sinkende Linien = neue Runs sind aktuell schwächer als der bisherige Durchschnitt.</div><div class="graph-canvas-wrap"><canvas id="graph-success"></canvas></div></div>
+                <div class="graph-card"><div class="graph-title">V15 – Aktuelle Skill-Retention</div><div class="graph-sub">Kumulative Quote des laufenden Learners – sie darf sinken. Der Skill-Vault-Rekord bleibt geschützt; unter 65 % schaltet das Curriculum automatisch auf Reparatur, bis wieder 88 % erreicht sind.</div><div class="graph-canvas-wrap"><canvas id="graph-success"></canvas></div></div>
                 <div class="graph-card"><div class="graph-title">Spiel-Fortschritt</div><div class="graph-sub">Bestes Level, Orden und Maps je Modellstand.</div><div class="graph-canvas-wrap"><canvas id="graph-progress"></canvas></div></div>
                 <div class="graph-card"><div class="graph-title">Festfahren / Anti-Loop</div><div class="graph-sub">Loops pro 100 echte Beginning-Runs; Curriculum wird separat gezählt.</div><div class="graph-canvas-wrap"><canvas id="graph-loops"></canvas></div></div>
             </div>
@@ -1879,6 +2110,7 @@ def index():
                 <option value="level">Höchstes Level</option>
                 <option value="reward">Höchster Reward</option>
             </select>
+            <button id="path-toggle" class="af-reset path-toggle" onclick="toggleAgentPaths()" title="Zusätzliche echte Nachbarschritte der Savestate-Runner anzeigen">👣 Weitere Wege: aus</button>
             <button class="af-reset" onclick="resetAgentFilter()">×</button>
         </div>
         <div class="hud-overlay" id="hud">Lade 35 Agenten...</div>
@@ -1968,6 +2200,7 @@ def index():
         let maxVisibleAgents = 120;
         let selectedAgentId = null; // null = alle Agenten sichtbar.
         let latestInstances = [];
+        let showAgentPaths = false;
         const historyByAgent = {};
 
         function setFilter(n) {
@@ -1977,6 +2210,36 @@ def index():
 
         function updateFilter(val) {
             maxVisibleAgents = parseInt(val) || 0;
+        }
+
+        function clearAgentPaths() {
+            Object.keys(agentPolylines).forEach(id => {
+                map.removeLayer(agentPolylines[id]);
+                delete agentPolylines[id];
+            });
+            Object.keys(agentStepDots).forEach(id => {
+                agentStepDots[id].forEach(dot => map.removeLayer(dot));
+                delete agentStepDots[id];
+            });
+            Object.keys(persistentEdgeLayers).forEach(key => {
+                map.removeLayer(persistentEdgeLayers[key]);
+                delete persistentEdgeLayers[key];
+            });
+            Object.keys(persistentTransitionLayers).forEach(key => {
+                map.removeLayer(persistentTransitionLayers[key]);
+                delete persistentTransitionLayers[key];
+            });
+        }
+
+        function toggleAgentPaths() {
+            showAgentPaths = !showAgentPaths;
+            const button = document.getElementById('path-toggle');
+            if (button) {
+                button.textContent = showAgentPaths ? '👣 Weitere Wege: an' : '👣 Weitere Wege: aus';
+                button.classList.toggle('active', showAgentPaths);
+            }
+            if (!showAgentPaths) clearAgentPaths();
+            updateDashboard();
         }
 
         // ---------- Agenten-Filter ----------
@@ -2106,6 +2369,7 @@ def index():
             '3,1': [1500, 1350],
             '3,20': [1500, 950],
             '3,2': [1500, 480],
+            '1,0': [1500, 700],
             '4,0': [1410, 2320],
             '4,1': [1410, 2320],
             '4,2': [1580, 2490],
@@ -2116,6 +2380,10 @@ def index():
 
         let agentMarkers = {};
         let agentPolylines = {};
+        let mapperMapLayers = {};
+        let mapperMapSignatures = {};
+        let mapperCoverageLayer = L.layerGroup().addTo(map);
+        let mapperCoverageSignature = '';
         let persistentExplorationLayers = {};
         let persistentExplorationSignatures = {};
         let persistentEdgeLayers = {};
@@ -2148,14 +2416,185 @@ def index():
             return [3000 - py, px];
         }
 
+        async function updateMapperMapOverlays(force=false) {
+            try {
+                const response = await fetch('/api/mapper/maps?t=' + Date.now());
+                const payload = await response.json();
+                const seen = new Set();
+                (payload.maps || []).forEach(item => {
+                    const key = `${Number(item.bank)},${Number(item.map_id)}`;
+                    // Eine unbekannte Map niemals mit dem Alabastia-Fallback
+                    // an eine falsche Position malen.
+                    if (!MAP_OFFSETS[key] || !item.alignment_confident) return;
+                    seen.add(key);
+                    const signature = String(item.revision || '');
+                    if (!force && mapperMapSignatures[key] === signature) return;
+                    if (mapperMapLayers[key]) map.removeLayer(mapperMapLayers[key]);
+
+                    const a = getLeafletCoords(
+                        item.bank, item.map_id, item.min_x, item.min_y
+                    );
+                    const b = getLeafletCoords(
+                        item.bank, item.map_id,
+                        Number(item.max_x) + 1, Number(item.max_y) + 1
+                    );
+                    const imageBounds = [
+                        [Math.min(a[0], b[0]), Math.min(a[1], b[1])],
+                        [Math.max(a[0], b[0]), Math.max(a[1], b[1])]
+                    ];
+                    mapperMapLayers[key] = L.imageOverlay(
+                        `${item.url}?rev=${encodeURIComponent(signature)}`,
+                        imageBounds,
+                        {opacity:1.0, interactive:false}
+                    ).addTo(map);
+                    mapperMapSignatures[key] = signature;
+                });
+                Object.keys(mapperMapLayers).forEach(key => {
+                    if (!seen.has(key)) {
+                        map.removeLayer(mapperMapLayers[key]);
+                        delete mapperMapLayers[key];
+                        delete mapperMapSignatures[key];
+                    }
+                });
+            } catch (error) {
+                console.error('Mapper map overlay failed', error);
+            }
+        }
+
+        async function updateMapperTileCoverage(force=false) {
+            try {
+                const response = await fetch('/api/mapper/tiles?t=' + Date.now());
+                const payload = await response.json();
+                const tiles = Array.isArray(payload.tiles) ? payload.tiles : [];
+                const signature = `${tiles.length}:` + (
+                    tiles.length ? tiles[tiles.length - 1].join(',') : '-'
+                );
+                if (!force && signature === mapperCoverageSignature) return;
+                mapperCoverageSignature = signature;
+                mapperCoverageLayer.clearLayers();
+                tiles.forEach(tile => {
+                    const key = `${Number(tile[0])},${Number(tile[1])}`;
+                    if (!MAP_OFFSETS[key]) return;
+                    const a = getLeafletCoords(tile[0], tile[1], tile[2], tile[3]);
+                    const b = getLeafletCoords(
+                        tile[0], tile[1], Number(tile[2]) + 1, Number(tile[3]) + 1
+                    );
+                    L.rectangle([
+                        [Math.min(a[0], b[0]), Math.min(a[1], b[1])],
+                        [Math.max(a[0], b[0]), Math.max(a[1], b[1])]
+                    ], {
+                        stroke:false,
+                        fill:true,
+                        fillColor:'#26c6da',
+                        fillOpacity:0.28,
+                        interactive:false
+                    }).addTo(mapperCoverageLayer);
+                });
+            } catch (error) {
+                console.error('Mapper tile coverage failed', error);
+            }
+        }
+
         let currentTab = 'map';
 
         function refreshWatcherStream() {
             const img = document.getElementById('watcher-stream');
             if (img) img.src = '/watcher.jpg?ts=' + Date.now();
         }
+
+        // --- klickbare Agenten-Liste + Live-Stats (Watcher- UND Status-Tab) ---
+        let wtSelected = null;
+        function wtPick(id) {
+            wtSelected = (wtSelected === id) ? null : id;
+            renderWatcherTab();
+            renderAgentDetail('status-agent-detail');
+            document.querySelectorAll('.status-agent').forEach(el => {
+                el.classList.toggle('sel', Number(el.dataset.aid) === wtSelected);
+            });
+        }
+        function renderWatcherTab() {
+            const grid = document.getElementById('wt-grid');
+            if (!grid) return;
+            const list = (latestInstances || []).slice().sort((a, b) => {
+                if (Number(a.id) === 120) return -1;
+                if (Number(b.id) === 120) return 1;
+                return Number(a.id) - Number(b.id);
+            });
+            const cnt = document.getElementById('wt-count');
+            if (cnt) cnt.textContent = list.length + ' aktiv';
+            grid.innerHTML = list.map(d => {
+                const id = Number(d.id);
+                const isW = id === 120;
+                const role = isW ? 'watcher' : (d.training_objective || d.agent_role || '?');
+                const rew = Number(d.reward || 0);
+                const lvl = Number(d.level || 0);
+                const stage = Number(d.world_stage || 0);
+                const cls = 'wt-chip' + (wtSelected === id ? ' sel' : '') + (isW ? ' watcher' : '');
+                const battle = Number(d.in_battle || 0) ? ' ⚔' : '';
+                return '<div class="' + cls + '" onclick="wtPick(' + id + ')">'
+                    + '<div class="c-id">' + (isW ? '👁 Watcher' : 'A' + String(id).padStart(2, '0')) + battle + '</div>'
+                    + '<div class="c-role">' + role + '</div>'
+                    + '<div class="c-meta">S' + stage + ' · L' + lvl + ' · <b style="color:' + (rew >= 0 ? '#5fe08a' : '#ff7a7a') + '">' + (rew >= 0 ? '+' : '') + rew.toFixed(0) + '</b></div>'
+                    + '</div>';
+            }).join('');
+            renderAgentDetail('wt-detail');
+        }
+        function renderAgentDetail(boxId) {
+            const box = document.getElementById(boxId);
+            if (!box) return;
+            const d = (latestInstances || []).find(x => Number(x.id) === wtSelected);
+            if (wtSelected === null || !d) { box.hidden = true; return; }
+            box.hidden = false;
+            const isW = wtSelected === 120;
+            const sp = d.story_progress || {};
+            const bs = d.battle_stats || {};
+            const evs = Array.isArray(d.reward_events) ? d.reward_events : [];
+            const evHtml = evs.slice(-16).reverse().map(e => {
+                const s = (typeof e === 'string') ? e : (e && (e.type || e.name) ? (e.type || e.name) : JSON.stringify(e));
+                const neg = /:-|(-\d)/.test(s);
+                return '<div class="' + (neg ? 'neg' : 'pos') + '">' + s + '</div>';
+            }).join('') || '<div>–</div>';
+            const rew = Number(d.reward || 0);
+            const starter = d.has_target_starter ? '✅ Schiggi' : (d.has_starter ? '≈ (falsch?)' : '—');
+            box.innerHTML =
+                '<button class="wt-close" onclick="wtPick(' + wtSelected + ')">✕</button>'
+                + '<h4>' + (isW ? '👁 Watcher' : 'Agent ' + String(wtSelected).padStart(2, '0')) + (d.name ? ' · ' + d.name : '') + '</h4>'
+                + '<div class="wt-sub">' + (d.training_objective || d.agent_role || '?') + ' · ' + (d.room || ('Bank ' + d.bank + ' / Map ' + d.map)) + ' @ ' + d.x + ',' + d.y + ' · Start: ' + (d.episode_start || '?') + '</div>'
+                + '<div class="wt-dgrid">'
+                + cell(rew.toFixed(1), 'Episode-Reward', rew >= 0 ? '#5fe08a' : '#ff7a7a')
+                + cell(Number(d.steps || 0).toLocaleString(), 'Steps')
+                + cell(Number(d.world_stage || 0), 'Welt-Stufe')
+                + cell(Number(d.level || 0), 'Level')
+                + cell(Number(d.badges || 0), 'Orden')
+                + cell(starter, 'Starter')
+                + cell((sp.pallet_oaks_lab_scene || 0) + '/6', 'Eich-Szene')
+                + cell(Number(bs.started || 0) + '/' + Number(bs.completed || 0), 'Kämpfe s/f')
+                + cell(String(d.input || d.effective_action || '–'), 'Taste')
+                + '</div>'
+                + (d.last_stage_timeout ? '<div class="wt-sub">⏱ letzter Abbruch: <b>' + d.last_stage_timeout + '</b></div>' : '')
+                + '<div class="wt-events">' + evHtml + '</div>';
+            function cell(v, k, color) {
+                return '<div class="wt-cell"><div class="v"' + (color ? ' style="color:' + color + '"' : '') + '>' + v + '</div><div class="k">' + k + '</div></div>';
+            }
+        }
+        async function refreshMapperStream() {
+            const stamp = Date.now();
+            const live = document.getElementById('mapper-stream');
+            const atlas = document.getElementById('mapper-atlas');
+            if (live) live.src = '/mapper.jpg?ts=' + stamp;
+            if (atlas) atlas.src = '/mapper-atlas.png?ts=' + stamp;
+            try {
+                const response = await fetch('/api/mapper?ts=' + stamp);
+                const s = await response.json();
+                const label = document.getElementById('mapper-status');
+                if (label) label.textContent = s.running
+                    ? `${s.map || 'Map unbekannt'} · ${Number(s.new_positions || 0).toLocaleString()} neue Felder · ${Number(s.new_visual_tiles || 0).toLocaleString()} Bild-Tiles · ${s.last_event || ''}`
+                    : 'Mapper ist angehalten oder startet gerade.';
+            } catch (_) {}
+        }
         setInterval(() => {
             if (currentTab === 'watcher') refreshWatcherStream();
+            if (currentTab === 'mapper') refreshMapperStream();
         }, 500);
 
         function showTab(t, e) {
@@ -2166,13 +2605,24 @@ def index():
             document.getElementById('map-view').style.display = t === 'map' ? 'block' : 'none';
             document.getElementById('rooms-view').style.display = t === 'rooms' ? 'block' : 'none';
             document.getElementById('graphs-view').style.display = t === 'graphs' ? 'block' : 'none';
+            document.getElementById('status-view').style.display = t === 'status' ? 'block' : 'none';
             document.getElementById('watcher-view').style.display = t === 'watcher' ? 'block' : 'none';
+            document.getElementById('mapper-view').style.display = t === 'mapper' ? 'block' : 'none';
 
             const showOverlays = t === 'map';
             document.getElementById('hud').style.display = showOverlays ? 'block' : 'none';
             document.getElementById('detail-panel').style.display = showOverlays ? 'block' : 'none';
             const afb = document.getElementById('agent-filter-bar');
             if (afb) afb.style.display = showOverlays ? 'flex' : 'none';
+            // Mobile: .live-global/.v81skills werden aus #map-view raus- und als
+            // feste Kacheln in #main-container gehaengt (pkmai-mobile-relayout).
+            // Dadurch haengen sie an KEINER Tab-View mehr und ueberlagerten bisher
+            // jeden anderen Tab (das "GLOBAL AI"-Ueberlappungsproblem am Handy).
+            // Inline !important noetig, um die CSS-Regel .pkmai-mobile-tile{display:
+            // block!important} zu schlagen.
+            document.querySelectorAll('.pkmai-mobile-tile').forEach(el => {
+                el.style.setProperty('display', showOverlays ? 'block' : 'none', 'important');
+            });
             // Live-Brain- und Champion-Karten gehoeren nur auf die Map. Auf der
             // Graphs-Seite stehen dieselben Zahlen jetzt in der KPI-Zeile.
             ['learner-truth-hud', 'champion-night-card'].forEach(id => {
@@ -2184,9 +2634,12 @@ def index():
                 updateGlobalMapping(true);
             }
             if (t === 'graphs') loadTrainingGraphs();
-            if (t === 'watcher') refreshWatcherStream();
+            if (t === 'watcher') { refreshWatcherStream(); renderWatcherTab(); }
+            if (t === 'mapper') refreshMapperStream();
             if (t === 'map') {
                 updateGlobalMapping(true);
+                updateMapperMapOverlays(true);
+                updateMapperTileCoverage(true);
                 setTimeout(() => map.invalidateSize(), 50);
                 setTimeout(() => map.invalidateSize(), 350);
             }
@@ -2454,11 +2907,9 @@ def index():
 
             const isW = Number(inst.id) === 120;
 
-            // Kopfzeile (Team-Leiste + Orden + Label) zeigt IMMER den Watcher,
-            // egal welcher Agent gerade auf der Karte fokussiert ist. Nur das
-            // Detail-Panel unten wechselt mit der Auswahl. So "verschwinden"
-            // beim Anklicken keine Stats mehr.
-            const headInst = latestInstances.find(i => Number(i.id) === 120) || inst;
+            // Team, Orden und Name gehoeren zum ausgewaehlten Client. Daten
+            // des Watchers duerfen nicht bei einem Trainingsagenten erscheinen.
+            const headInst = inst;
             document.getElementById('hud-trainer').innerText =
                 (headInst.name || 'Alex').replace(' (Watcher)', '') + ' (Live)';
 
@@ -2570,14 +3021,109 @@ def index():
         }
         const FLEET_DEPTH_NAMES = {
             0:'Spielanfang / Alabastia-Innen', 1:'Alabastia (außen)', 2:'Route 1',
-            3:'Vertania City', 4:'Route 2', 5:'Vertania-Wald', 6:'Route 2 Nord / Marmoria-Umgebung',
-            7:'Marmoria City'
+            3:'Vertania City', 4:'Eichs Paket', 5:'Pokédex / Paket abgegeben',
+            6:'Route 2', 7:'Vertania-Wald', 8:'Marmoria City', 9:'Erster Orden'
         };
         const FLEET_ROLE_LABELS = {
             intro:'Intro', stairs:'Treppe', exit:'Haus-Exit', starter:'Starter',
             starter_rush:'Starter', battle:'Kampf', level:'Level', progress:'Progress',
             full:'Full Journey', badge:'Orden'
         };
+        const STATUS_ROLE_ICONS = {
+            intro:'🎬', stairs:'🪜', exit:'🚪', starter:'🐣', battle:'⚔️',
+            level:'⬆️', progress:'🧭', full:'🏁', badge:'🪨'
+        };
+        function statusEsc(value){
+            return String(value ?? '–').replace(/[&<>"']/g, c=>({
+                '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+            })[c]);
+        }
+        function renderStatusDashboard(state){
+            const instances=(state.instances||[]).slice();
+            const watcher=instances.find(i=>Number(i.id)===120);
+            const runners=instances.filter(i=>Number(i.id)>=0&&Number(i.id)<32)
+                .sort((a,b)=>Number(a.id)-Number(b.id));
+            const rt=((state.training_stats||{}).run_totals)||{};
+            const battle=state.battle_stats||{};
+            const summary=document.getElementById('status-summary');
+            if(summary) summary.innerHTML=[
+                ['🧠',Number(state.training_timesteps||0).toLocaleString('de-DE'),'Learner Steps'],
+                ['🏆','v'+String(state.version||0).padStart(6,'0'),'Champion'],
+                ['🗺️',Number(state.world_depth||0),FLEET_DEPTH_NAMES[Number(state.world_depth||0)]||'Weltstufe'],
+                ['⚔️',Number(battle.started||0).toLocaleString('de-DE'),'Kämpfe gesamt'],
+                ['💥',Number(rt.enemy_faints||0).toLocaleString('de-DE'),'Gegner-K.O.'],
+                ['🩸',Number(rt.enemy_damage_hp||0).toLocaleString('de-DE'),'Schaden-HP'],
+                ['🏁',Number((state.champion_speed||{}).best_stage_steps||0)>0
+                    ? Number(state.champion_speed.best_stage_steps).toLocaleString('de-DE')
+                    : '–','Champion: beste Full-Steps']
+            ].map(x=>`<div class="status-kpi"><div class="big">${x[0]} ${x[1]}</div><div class="small">${x[2]}</div></div>`).join('');
+
+            const watcherEl=document.getElementById('status-watcher');
+            if(watcherEl){
+                const wb=(watcher&&watcher.battle_stats)||{};
+                const we=(watcher&&watcher.exp_stats)||{};
+                watcherEl.innerHTML=watcher ? `
+                    <h3>👁️ Watcher separat</h3>
+                    <div class="status-watcher-grid">
+                      <div class="status-pill">🧠 Modell <b>${statusEsc(watcher.loaded_model)}</b></div>
+                      <div class="status-pill">📈 Learner <b>${Number(watcher.learner_steps||0).toLocaleString('de-DE')}</b> Steps</div>
+                      <div class="status-pill">🔄 Netz nachgeladen <b>${Number(watcher.brain_reloads||0)}×</b></div>
+                      <div class="status-pill">🏆 Champion <b>v${String(watcher.model_version||0).padStart(6,'0')}</b></div>
+                      <div class="status-pill">👣 Lauf-Steps <b>${Number(watcher.steps||0).toLocaleString('de-DE')}</b></div>
+                      <div class="status-pill">📍 Ort <b>${statusEsc(watcher.bank)}/${statusEsc(watcher.map)} @ ${statusEsc(watcher.x)},${statusEsc(watcher.y)}</b></div>
+                      <div class="status-pill">⭐ Level <b>${Number(watcher.level||0)}</b></div>
+                      <div class="status-pill">⚔️ Kämpfe <b>${Number(wb.started||0)} / ${Number(wb.completed||0)}</b></div>
+                      <div class="status-pill">✨ EP <b>+${Number(we.gained_total||0)}</b></div>
+                      <div class="status-pill">🎁 Reward <b>${Number(watcher.reward||0).toFixed(1)}</b></div>
+                    </div>` : '<h3>👁️ Watcher separat</h3><div class="status-pill">Noch keine Telemetrie</div>';
+            }
+
+            const groups={};
+            runners.forEach(i=>{
+                const role=String(i.training_objective||i.agent_role||'?');
+                const g=groups[role]||(groups[role]={n:0,active:0,started:0,done:0,ko:0,damage:0,level:0,stage:0,steps:0});
+                const bs=i.battle_stats||{};
+                g.n++; g.active+=Number(!!i.in_battle);
+                g.started+=Number(bs.episode_started||0); g.done+=Number(bs.episode_completed||0);
+                g.ko+=Number(bs.enemy_faints||0); g.damage+=Number(bs.enemy_damage_hp||0);
+                g.level=Math.max(g.level,Number(i.level||0)); g.stage=Math.max(g.stage,Number(i.world_stage||0));
+                g.steps+=Number(i.steps||0);
+            });
+            const runKeys={
+                intro:['v2_intro_episodes','v2_intro_success'],stairs:['v2_stairs_episodes','v2_stairs_success'],
+                exit:['v2_exit_episodes','v2_exit_success'],starter:['v8_starter_episodes','v8_starter_success'],
+                battle:['v8_battle_episodes','v8_battle_success'],level:['v8_level_episodes','v8_level_success'],
+                badge:['v8_badge_episodes','v8_badge_success'],progress:['v7_progress_episodes','v7_progress_badge1'],
+                full:['v2_full_episodes','v7_full_badge1']
+            };
+            const order=['full','progress','battle','level','badge','starter','exit','stairs','intro'];
+            const roleGrid=document.getElementById('status-role-grid');
+            if(roleGrid) roleGrid.innerHTML=Object.keys(groups).sort((a,b)=>order.indexOf(a)-order.indexOf(b)).map(role=>{
+                const g=groups[role], keys=runKeys[role]||[];
+                return `<div class="status-role"><div class="status-role-head"><span>${STATUS_ROLE_ICONS[role]||'🤖'} ${statusEsc(FLEET_ROLE_LABELS[role]||role)}</span><b>${g.n} Agenten</b></div>
+                  <div class="status-role-stats">
+                    <span><strong>${g.active}</strong>im Kampf</span><span><strong>${g.started}/${g.done}</strong>Kämpfe</span>
+                    <span><strong>${g.ko}</strong>K.O.</span><span><strong>${g.damage}</strong>Schaden</span>
+                    <span><strong>${g.level}</strong>max Level</span><span><strong>${g.stage}</strong>Welt</span>
+                    <span><strong>${g.n?Math.round(g.steps/g.n).toLocaleString('de-DE'):0}</strong>Ø Ep-Steps</span>
+                    <span><strong>${Number(rt[keys[0]]||0)}</strong>Runs</span><span><strong>${Number(rt[keys[1]]||0)}</strong>Erfolg</span>
+                  </div></div>`;
+            }).join('');
+
+            const agentGrid=document.getElementById('status-agent-grid');
+            if(agentGrid) agentGrid.innerHTML=runners.map(i=>{
+                const role=String(i.training_objective||i.agent_role||'?'), bs=i.battle_stats||{};
+                const rew=Number(i.reward||0);
+                const sel=Number(i.id)===wtSelected?' sel':'';
+                return `<div class="status-agent ${i.in_battle?'fighting':''}${sel}" data-aid="${Number(i.id)}" onclick="wtPick(${Number(i.id)})">
+                  <div class="status-agent-top"><span>${STATUS_ROLE_ICONS[role]||'🤖'} A${String(i.id).padStart(2,'0')} · ${statusEsc(FLEET_ROLE_LABELS[role]||role)}</span><span style="color:${rew>=0?'#5fe08a':'#ff7a7a'}">${rew>=0?'+':''}${rew.toFixed(0)}</span></div>
+                  <div class="status-agent-meta">👣 ${Number(i.steps||0).toLocaleString('de-DE')} Ep-Steps · 🎬 ${statusEsc(i.story_stage)} · 🐣 ${i.has_target_starter?'Schiggi':(i.has_starter?'falsch?':'nein')}<br>
+                  📍 ${statusEsc(i.bank)}/${statusEsc(i.map)} @ ${statusEsc(i.x)},${statusEsc(i.y)} · 🌍 Welt ${Number(i.world_stage||0)} · ⭐ Lv ${Number(i.level||0)}<br>
+                  🥊 ${Number(bs.episode_started||0)}/${Number(bs.episode_completed||0)} · 💥 ${Number(bs.enemy_faints||0)} · 🩸 ${Number(bs.enemy_damage_hp||0)} · 💾 ${statusEsc(i.episode_start)}</div>
+                </div>`;
+            }).join('');
+            renderAgentDetail('status-agent-detail');
+        }
         function updateFleetPanel(state){
             const f = state.fleet || {};
             const loc = f.location || {};
@@ -2586,7 +3132,7 @@ def index():
             const setTxt = (id,v)=>{ const e=document.getElementById(id); if(e) e.innerText=v; };
             setTxt('fleet-depth-num', wd);
             setTxt('fleet-depth-name', FLEET_DEPTH_NAMES[wd] || ('Tiefe '+wd));
-            setTxt('fleet-cp', 'outdoor_'+cp);
+            setTxt('fleet-cp', 'stage_'+cp);
             setTxt('fleet-outdoor', loc.outdoor||0);
             setTxt('fleet-indoor', loc.indoor||0);
             setTxt('fleet-battle', loc.battle||0);
@@ -2795,6 +3341,19 @@ def index():
 
         async function updatePersistentExploration(force=false) {
             try {
+                // Historische Trainingskanten sind optisch Agenten-Wege und
+                // bleiben deshalb bis zum ausdruecklichen Schalter unsichtbar.
+                if (!showAgentPaths) {
+                    Object.keys(persistentEdgeLayers).forEach(key => {
+                        map.removeLayer(persistentEdgeLayers[key]);
+                        delete persistentEdgeLayers[key];
+                    });
+                    Object.keys(persistentTransitionLayers).forEach(key => {
+                        map.removeLayer(persistentTransitionLayers[key]);
+                        delete persistentTransitionLayers[key];
+                    });
+                    return;
+                }
                 const res = await fetch('/api/explorations?t=' + Date.now());
                 const all = await res.json();
 
@@ -2902,6 +3461,8 @@ def index():
         setInterval(() => {
             if (currentTab === 'map') {
                 updatePersistentExploration(false);
+                updateMapperMapOverlays(false);
+                updateMapperTileCoverage(false);
             }
         }, 2000);
 
@@ -3193,17 +3754,21 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                 window.__trainerName = state.trainer_name || 'Alex';
                 const instances = state.instances || [];
                 latestInstances = instances;
+                if (currentTab === 'watcher') renderWatcherTab();
+                renderStatusDashboard(state);
                 instances.forEach(pushHistory);
                 syncAgentFilterOptions(instances);
 
-                // Watcher wird NICHT mehr forciert - sortiert normal mit den
-                // anderen (nach ID, oder nach aktivem Sortier-Filter).
-                let workInstances = instances.slice();
+                // Der sichtbare End-to-End-Watcher ist immer der erste Eintrag.
+                // Die gewaehlte Sortierung gilt danach fuer alle Runner.
+                const watcherFirst = instances.filter(i => Number(i.id) === 120);
+                let workInstances = instances.filter(i => Number(i.id) !== 120);
                 if (agentFilter.sort) {
                     workInstances.sort((a, b) => agentSortKey(b) - agentSortKey(a));
                 } else {
                     workInstances.sort((a, b) => Number(a.id) - Number(b.id));
                 }
+                workInstances = watcherFirst.concat(workInstances);
 
                 // Falls Watcher noch kein party-Feld in seiner Instanz hat,
                 // die alte API-Fallback-Party nur dem Watcher zuordnen.
@@ -3237,7 +3802,7 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                 workInstances.forEach(inst => {
                     const isWatcher = Number(inst.id) === 120;
                     const isSelected = Number(inst.id) === Number(selectedAgentId);
-                    const keep = isSelected || agentPassesFilter(inst);
+                    const keep = isWatcher || isSelected || agentPassesFilter(inst);
 
                     const shouldRender = keep && isAgentVisible(
                         inst.id, isWatcher, renderedTrainCount
@@ -3307,7 +3872,12 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                             delete agentStepDots[inst.id];
                         }
 
-                        const path = Array.isArray(inst.path) ? inst.path : [];
+                        const isNaturalFull = (
+                            String(inst.training_objective || inst.agent_role || '') === 'full'
+                            && String(inst.episode_start || '') === 'beginning'
+                        );
+                        const renderPath = isWatcher || isNaturalFull || showAgentPaths;
+                        const path = renderPath && Array.isArray(inst.path) ? inst.path : [];
                         const segs = [];
                         let curSeg = [];
                         let last = null;
@@ -3357,10 +3927,9 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                         });
                         if (curSeg.length > 1) segs.push(curSeg);
 
-                        if (segs.length > 0 && isWatcher) {
-                            // Trainingsagenten werden NICHT mehr aus recent_path
-                            // gezeichnet. Ihre Karte kommt ausschliesslich aus dem
-                            // persistenten Exploration-Memory und verschwindet nie.
+                        if (renderPath && segs.length > 0) {
+                            // Standard: Watcher + echte Full-Runs ab Spielstart.
+                            // Savestate-Rollen erscheinen nur nach dem Schalter.
                             agentPolylines[inst.id] = L.polyline(segs, {
                                 color: markerColor,
                                 weight: 2.5,
@@ -3480,6 +4049,9 @@ setInterval(refreshChampionNight,2000);refreshChampionNight();
     document.querySelectorAll('#map-view > .live-global, #map-view > .v81skills').forEach(el=>{
       el.classList.add('pkmai-mobile-tile');
       mc.insertBefore(el, hud);
+      // Nur auf dem Map-Tab sichtbar - sonst ueberlagert die Kachel jeden
+      // anderen Tab (sie haengt jetzt ausserhalb jeder Tab-View).
+      el.style.setProperty('display', (typeof currentTab!=='undefined' && currentTab==='map') ? 'block' : 'none', 'important');
     });
   }
   relayout();
@@ -3494,4 +4066,18 @@ setInterval(refreshChampionNight,2000);refreshChampionNight();
     """
 
 if __name__ == '__main__':
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning")
+    # Echtes Dual-Stack: EIN IPv6-Socket mit IPV6_V6ONLY=0 nimmt IPv6 UND
+    # (per IPv4-mapped) IPv4 auf demselben Port an. Noetig, weil das
+    # Mobilfunknetz die myfritz-Adresse per IPv6 aufloest, das LAN aber per
+    # IPv4 zugreift. macOS bindet "::" sonst IPv6-only.
+    import socket as _socket
+
+    _sock = _socket.socket(_socket.AF_INET6, _socket.SOCK_STREAM)
+    try:
+        _sock.setsockopt(_socket.IPPROTO_IPV6, _socket.IPV6_V6ONLY, 0)
+    except OSError:
+        pass
+    _sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+    _sock.bind(("::", 8001))
+    _sock.listen(256)
+    uvicorn.Server(uvicorn.Config(app, log_level="warning")).run(sockets=[_sock])

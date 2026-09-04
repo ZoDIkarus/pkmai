@@ -16,6 +16,12 @@ because those can stay static and break live mapping.
 EWRAM_BUS_BASE = 0x02000000
 IWRAM_BUS_BASE = 0x03000000
 EWRAM_SIZE = 0x40000
+SAVEBLOCK1_VARS_OFFSET = 0x1000
+VARS_START = 0x4000
+
+VAR_PALLET_OAKS_LAB = 0x4055
+VAR_VIRIDIAN_OLD_MAN = 0x4051
+VAR_VIRIDIAN_MART = 0x4057
 
 GSAVEBLOCK1PTR_BUS = 0x03005008
 
@@ -49,6 +55,20 @@ def _ewram_to_offset(ptr):
     if EWRAM_BUS_BASE <= ptr < EWRAM_BUS_BASE + EWRAM_SIZE:
         return ptr - EWRAM_BUS_BASE
     return None
+
+
+def _save_var(ram, base, var_id):
+    """Read a FireRed u16 SaveBlock1 variable by its 0x4xxx id."""
+    idx = int(var_id) - VARS_START
+    if base is None or idx < 0:
+        return 0
+    return _u16(ram, base + SAVEBLOCK1_VARS_OFFSET + idx * 2)
+
+
+def _scene_var(ram, base, var_id):
+    """Reject implausible values if a language build/layout ever differs."""
+    value = _save_var(ram, base, var_id)
+    return value if 0 <= value <= 16 else 0
 
 
 def _valid_location(ram, base):
@@ -175,6 +195,11 @@ def read_player_location(env, allow_scan=True):
         "map_id": int(_u8(ram, base + 5)),
         "x_pos": int(_u16(ram, base + 0)),
         "y_pos": int(_u16(ram, base + 2)),
+        # Source-backed early-story state. These distinguish real progress
+        # from arbitrary indoor warps.
+        "viridian_mart_scene": int(_scene_var(ram, base, VAR_VIRIDIAN_MART)),
+        "viridian_old_man_scene": int(_scene_var(ram, base, VAR_VIRIDIAN_OLD_MAN)),
+        "pallet_oaks_lab_scene": int(_scene_var(ram, base, VAR_PALLET_OAKS_LAB)),
     }
 
 
@@ -188,6 +213,7 @@ def read_player_location(env, allow_scan=True):
 # struct Pokemon size = 100 bytes.
 PLAYER_PARTY_OFFSET = 0x24284
 ENEMY_PARTY_OFFSET = 0x2402C
+BATTLE_TYPE_FLAGS_OFFSET = 0x22FEC
 POKEMON_STRUCT_SIZE = 100
 MAX_PARTY_SIZE = 6
 
@@ -384,7 +410,15 @@ def read_player_party(env):
     for slot in range(MAX_PARTY_SIZE):
         base = PLAYER_PARTY_OFFSET + slot * POKEMON_STRUCT_SIZE
         mon = _decode_party_mon(ram, base, slot)
-        if mon is not None:
+        if mon is None or not mon.get("checksum_ok", False):
+            continue
+        cur_hp = int(mon.get("cur_hp", 0))
+        max_hp = int(mon.get("max_hp", 0))
+        level = int(mon.get("level", 0))
+        # Uninitialisierte/verschobene RAM-Daten koennen zufaellig wie eine
+        # bekannte Species aussehen (haeufig #1/Bisasam). Nur strukturell
+        # plausible, per Gen-III-Checksum bestaetigte Eintraege anzeigen.
+        if 1 <= level <= 100 and 0 < max_hp <= 999 and 0 <= cur_hp <= max_hp:
             party.append(mon)
     return party
 
@@ -410,3 +444,14 @@ def read_enemy_party(env):
         if 0 < max_hp <= 999 and 0 <= cur_hp <= max_hp:
             party.append(mon)
     return party
+
+
+def read_battle_type_flags(env):
+    """Read the confirmed FireRed ``gBattleTypeFlags`` uint32 directly."""
+    try:
+        ram = env.get_ram()
+    except Exception:
+        return 0
+    if ram is None or len(ram) < BATTLE_TYPE_FLAGS_OFFSET + 4:
+        return 0
+    return _u32(ram, BATTLE_TYPE_FLAGS_OFFSET)

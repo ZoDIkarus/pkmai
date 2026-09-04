@@ -6,6 +6,110 @@ PKMAI is an experimental reinforcement-learning project that trains a PPO agent 
 
 ## Current release
 
+**V16 — Clean Full-Brain Generations** (2026-09-04)
+
+V16 beginnt nach einem vollständigen, gesicherten Reset aller alten Modelle,
+Statistiken, Karten- und Curriculum-Daten. Der Stand unmittelbar vor dem Reset
+wird als datiertes Backup erhalten. ROM, Quellcode und lokale Konfiguration
+werden niemals gelöscht.
+
+### Ziel und Grundprinzip
+
+- Es existiert genau **ein gemeinsames PPO-Brain**. Keine Skill-Modelle, keine
+  Progress-Agenten und keine gemischten Savestate-Starts.
+- Alle **50 Trainings-Clients** beginnen jede Episode am echten Spielanfang und
+  lernen die vollständige Kette Intro → Name → Haus → Labor → Schiggi → Welt.
+- Die Clients laufen headless und ungebremst. Sie werden nicht auf 60 FPS
+  reduziert und schreiben keine Screenshot-Karten.
+- Der Mapper bleibt vollständig ausgeschaltet. Ein visueller Mapper kann später
+  separat entworfen werden, beeinflusst aber weder Reward noch Champion.
+- PPO sammelt pro Client 512 zusammenhängende Entscheidungen. Das ergibt
+  25.600 Samples pro synchronem PPO-Update (`50 × 512`).
+- `gamma=0,995` und `gae_lambda=0,98` lassen einen Erfolg weiter auf die
+  vorherigen Entscheidungen zurückwirken als im alten 128er-Setup.
+- Eine Episode hat zunächst höchstens 12.000 **Weg-Schritte**. Eindeutiger
+  Stillstand beendet sie früher. Kampfentscheidungen werden separat gezählt:
+  Sie gehören weiterhin zum PPO-Lernen, verbrauchen aber weder Intro- noch
+  Routen-Horizont. Ein einzelner Kampf endet spätestens nach 2.000, alle Kämpfe
+  einer Episode zusammen nach 6.000 Kampfentscheidungen als Sicherheitsgrenze.
+- Stable-Retro erhält beim Erzeugen jedes Clients einen unveränderlichen
+  Kaltstart-Snapshot. Jeder Episodenreset stellt genau diesen Snapshot wieder
+  her. Damit können Party, Starter, Karte oder Story-RAM aus einem beendeten
+  Lauf niemals in die nächste Episode durchsickern.
+
+### V16 Reward-Vertrag
+
+Normale Bewegung, einzelne Tiles und Tür-/Warp-Wechsel geben keinen Reward.
+Alle positiven Ereignisse sind pro Episode oder projektweit einmalig geschützt.
+
+| Ereignis | Reward |
+| --- | ---: |
+| normaler Schritt / bekanntes Tile | 0 |
+| deutlich neuer Intro-/Dialogbildschirm | +2, insgesamt höchstens +20 |
+| Intro abgeschlossen | +100 |
+| Treppe erreicht | +150 |
+| Haus bestätigt verlassen | +300 |
+| bekannte Map erstmals in dieser Episode | +25 |
+| projektweit wirklich neue Map | +500 |
+| Warp / Tür / bekannte Transition | 0 |
+| neue Weltstufe in dieser Episode | +1000 je Stufe |
+| Schiggi gewählt | +1000 |
+| Bisasam oder Glumanda gewählt | -500 und sofortiges Episodenende |
+| Labor mit Schiggi verlassen | +500 |
+| Gegner verliert neue HP | +0,5 je HP |
+| Gegner K.O. | +30 |
+| Kampf gewonnen / Erfahrung erhalten | +50 |
+| Levelaufstieg | +25 je Level |
+| eigene HP verloren | -0,1 je HP |
+| Flucht aus einem begonnenen Kampf | -25 |
+| komplette Party besiegt | -100 und Episodenende |
+| Orden | +2500 |
+| Heilung / Pokémon-Center | 0 |
+
+Screenshot-Unterschiede geben außerhalb des Intros bewusst keinen Reward:
+Menüs, Kampfanimationen, NPCs und Bildschirmeffekte wären leicht farmbar. Maps,
+Positionen, Gegner-HP, Party und Story werden stattdessen aus bestätigten
+RAM-Daten gelesen. Begegnungen sollen Gegner, eigenes Pokémon, gewählte Attacke,
+Schaden, PP und Ergebnis als Telemetrie erfassen; proportionaler echter
+HP-Schaden lehrt die Policy wirksame Attacken, ohne eine Kampftabelle
+hartzukodieren.
+
+Die Paket-Story wird nicht aus einem einzelnen RAM-Wert abgeleitet. „Paket
+erhalten“ und „Paket abgegeben“ brauchen Schiggi, die jeweils richtige Karte,
+die richtige Reihenfolge und drei aufeinanderfolgende bestätigende RAM-Lesungen.
+Route 2, Wald, Marmoria und Orden dürfen die Weltstufe erst nach dieser
+bestätigten Paketkette erhöhen. So kann ein kurzzeitig falsch gelesener Wert den
+Webstatus und die Champion-Bewertung nicht mehr vorspulen.
+
+### Brain-Pflege und Generationen
+
+Alle Clients besitzen innerhalb eines Trainingsblocks dieselbe Policy. Ein
+einzelner Agent besitzt daher kein eigenes Brain, das kopiert werden könnte.
+Aus den synchron gesammelten Rollouts erzeugt PPO gemeinsam einen Candidate.
+
+1. Alle 50 Clients sammeln mit derselben Ausgangspolicy Rollouts.
+2. PPO aktualisiert daraus den Candidate in synchronen 25.600-Sample-Schritten.
+3. Nach einem festen Trainingsblock wird der Candidate eingefroren.
+4. Der Candidate wird in vollständigen Episoden vom Spielanfang ohne Lernen
+   bewertet.
+5. Vergleichsreihenfolge: Orden, Weltstufe, bestätigte Storykette, Schiggi plus
+   Laborausgang, Maps, Reproduzierbarkeit und erst danach Reward/Tempo.
+6. Nur ein nachweislich besserer Candidate wird neuer Champion und gemeinsame
+   Basis der nächsten Generation. Alte und neue Messwerte dürfen niemals zu
+   einer künstlichen Champion-Metrik vermischt werden.
+7. Eine neue Tiefe darf das Intro nicht verdecken. Bei einem etablierten
+   Champion muss der Candidate mindestens 85–90 % Intro-Retention halten.
+8. Ein nicht besserer, aber stabiler Candidate darf begrenzt weiterlernen; bei
+   klarer Regression wird wieder vom unveränderten Champion begonnen.
+
+PPO kann Vergessen nicht mathematisch ausschließen. V16 verhindert das praktisch
+durch wiederkehrende, gedeckelte Intro-Rewards, lange zusammenhängende Rollouts,
+Full-from-Beginning-Episoden und eine unabhängige Retention-Prüfung vor jeder
+Champion-Beförderung. Der Watcher zeigt ausschließlich den bestätigten
+vollständigen Champion und verwendet keinerlei Skill-Snapshot.
+
+### Vorheriger Stand
+
 **V15.3 — All-Full, radikal vereinfachter Reward, kein Champion-Gate**
 (2026-09-04). Aktueller Arbeitsstand und offene Punkte stehen in
 `docs/AI_STATUS.md` (zuerst lesen). Laufende Zahlen aus

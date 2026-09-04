@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import torch
 import multiprocessing as mp
 import shutil
@@ -18,11 +19,11 @@ from pokemon_env import PokemonFireRedEnv
 # ================================================================
 # Die wichtigsten Werte stehen absichtlich hier oben.
 
-# V15: 32 headless Envs auf dem M4 Max. Der Rollout bleibt bei 4096 Samples,
-# aber jede Umgebung liefert 128 zusammenhaengende Schritte statt nur 32.
-# Das reduziert Emulator/IPC-Overhead und verbessert das Credit-Assignment.
+# V16: 50 headless Envs; jeder liefert 512 zusammenhaengende Entscheidungen.
+# Das ergibt 25.600 Samples pro PPO-Update und laesst Rewards innerhalb langer
+# Intro-/Navigationsfolgen wesentlich weiter zurueckwirken.
 # Sichtbar gerendert wird nur der unabhaengige Watcher; Rendering trainiert nicht.
-NUM_ENVS = 32
+NUM_ENVS = 50
 
 # Endlos-Training: laeuft in Bloecken weiter, bis du Ctrl+C drueckst.
 # TRAIN_CHUNK_TIMESTEPS ist nur die Groesse eines learn()-Blocks.
@@ -32,17 +33,18 @@ TRAIN_CHUNK_TIMESTEPS = 1_000_000
 # Nur benutzt, wenn TRAIN_FOREVER = False.
 TOTAL_TIMESTEPS = 100_000_000
 
-SAVE_EVERY_TIMESTEPS = 25_000
+# Kandidaten nur in ausreichend grossen Generationen bewerten.
+SAVE_EVERY_TIMESTEPS = 250_000
 
 # PPO
 LEARNING_RATE = 7.5e-05
-# 128 x 32 Envs = 4096 Rollout-Buffer, teilt sauber durch batch_size 256
-# (16 Minibatches).
-PPO_N_STEPS = 128
+# 512 x 50 Envs = 25.600 Rollout-Samples, exakt 100 Minibatches à 256.
+PPO_N_STEPS = 512
 PPO_BATCH_SIZE = 256
 PPO_N_EPOCHS = 4
 PPO_GAMMA = 0.995
-# 32 parallele Agenten liefern bereits viel Exploration. Eine niedrigere
+PPO_GAE_LAMBDA = 0.98
+# 50 parallele Agenten liefern bereits viel Exploration. Eine niedrigere
 # Entropie laesst erfolgreiche Wege und Kampfsequenzen sauberer wiederholen,
 # ohne die Suche im Wald abzuwuergen.
 PPO_ENT_COEF = 0.02
@@ -185,7 +187,7 @@ def make_env(
 
 
 class MilestoneCheckpointCallback(BaseCallback):
-    """V10.27: sequential protected-skill bootcamp."""
+    """V16: promote measured full-run candidates and protect the champion."""
 
     def __init__(self, check_freq=15_000, verbose=1):
         super().__init__(verbose)
@@ -197,16 +199,15 @@ class MilestoneCheckpointCallback(BaseCallback):
         self.recent = deque(maxlen=600)
         self.recent_full = deque(maxlen=256)
         self.full_live = {}
-        self.min_eval_episodes = 12
-        # V15.3: All-Full-Flotte -> Full-Episoden kommen jetzt schnell rein.
-        # Schwelle runter auf 4, damit der Champion regelmaessig neu bewertet
-        # wird statt stundenlang eingefroren zu bleiben.
-        self.min_full_episodes = 4
+        self.min_eval_episodes = 32
+        self.min_full_episodes = 32
         self.champion_score = None
         self.champion_metrics = {}
         self.rollback_count = 0
         self.regression_strikes = 0
         self.last_eval_metrics = {}
+        self.last_eval_result = ""
+        self.last_eval_at_step = 0
         self.skill_scores = {}
         # Nur Telemetrie. V10.28.1: der zeitbasierte Stale-Champion-Fallback
         # wurde entfernt - er konnte einen funktionierenden Champion durch
@@ -250,11 +251,49 @@ class MilestoneCheckpointCallback(BaseCallback):
             except Exception:
                 pass
 
+        # Den letzten ausgewerteten Candidate nach einem sauberen Prozess-
+        # Neustart weiter im Status zeigen. Bei einem echten Runtime-Reset ist
+        # die Datei nicht vorhanden und es wird folgerichtig nichts geerbt.
+        if os.path.exists(TRAINER_STATUS_FILE):
+            try:
+                with open(TRAINER_STATUS_FILE, "r") as f:
+                    previous_status = json.load(f) or {}
+                self.last_eval_metrics = dict(
+                    previous_status.get("last_eval_metrics") or {}
+                )
+                self.last_eval_result = str(
+                    previous_status.get("last_eval_result", "") or ""
+                )
+                self.last_eval_at_step = int(
+                    previous_status.get("last_eval_at_step", 0) or 0
+                )
+                # Migration vom alten Statusformat: Die Metriken wurden schon
+                # gespeichert, aber das Ergebnis noch nicht benannt. Liegt der
+                # Candidate unter dem bestaetigten Champion, war er eindeutig
+                # nicht uebernommen worden.
+                if (
+                    self.last_eval_metrics
+                    and not self.last_eval_result
+                    and self.champion_score is not None
+                    and self._score(self.last_eval_metrics)
+                        <= self.champion_score
+                ):
+                    self.last_eval_result = "rejected"
+            except Exception:
+                pass
+
         if self.champion_score is None:
             self._seed_baseline_from_training_stats()
 
-        self._load_skill_scores()
-        self.skill_health_seed = self._load_skill_health_seed()
+        if PokemonFireRedEnv.FULL_ONLY_MODE:
+            # V16 kennt weder Skill-Brains noch Skill-Phasen. Insbesondere
+            # keine leere Legacy-Datei erzeugen, die im Dashboard den Eindruck
+            # erweckt, ein Progress-/Skill-Agent koenne noch eingreifen.
+            self.skill_scores = {}
+            self.skill_health_seed = {}
+        else:
+            self._load_skill_scores()
+            self.skill_health_seed = self._load_skill_health_seed()
 
     def _load_skill_health_seed(self):
         """Erfolgszaehler vor diesem Trainerstart fuer Retention beibehalten."""
@@ -330,7 +369,14 @@ class MilestoneCheckpointCallback(BaseCallback):
             "max_stage": 0,
         }
         self.champion_score = self._score(self.champion_metrics)
-        self._write_champion_score(self.champion_score, self.champion_metrics)
+
+        # Bei einem echten Clean-Start ist dies nur die interne Nullbasis,
+        # noch kein bestaetigter Champion. Erst eine ausgewertete Generation
+        # darf Champion-Datei und Bestmodell gemeinsam veroeffentlichen.
+        if full_ep > 0 or os.path.exists(BEST_MODEL):
+            self._write_champion_score(
+                self.champion_score, self.champion_metrics
+            )
 
         print(
             "🛡️ Champion-Baseline: "
@@ -498,18 +544,39 @@ class MilestoneCheckpointCallback(BaseCallback):
 
     @staticmethod
     def _score(m):
-        # V15.3: reine Tiefe + Tempo. Die fragilen permille-Endpositions-Raten
-        # (full_stairs/exit/... - strukturell nahe 0 sobald ein Run frueher
-        # scheitert ODER weiter kommt) sind raus. "Bester = tiefste/hoechste
-        # Front, bei Gleichstand der schnellste Full-Run."
+        # Tiefe zuerst, danach die reproduzierbare komplette Storykette.
         return (
             int(m.get("max_badges", 0)),
             int(m.get("max_stage", 0)),
+            int(m.get("full_starter_permille", 0)),
+            int(m.get("full_exit_permille", 0)),
+            int(m.get("full_stairs_permille", 0)),
+            int(m.get("full_intro_permille", 0)),
             int(m.get("max_level", 0)),
             int(m.get("max_maps", 0)),
             -int(m.get("full_best_stage_steps", 1_000_000) or 1_000_000),
-            int(m.get("full_starter_permille", 0)),
         )
+
+    # Ein einzelner Glueckslauf unter vielen darf keine neue Weltstufe fuers
+    # Champion-Ranking freigeben - sonst koennte ein Candidate befoerdert
+    # werden, der die Tiefe nur einmal erreicht hat, obwohl alle anderen
+    # Full-Laeufe dort nie hinkamen. Mindestens dieser Anteil der Full-Laeufe
+    # muss die Stufe reproduzierbar schaffen.
+    STAGE_RELIABILITY_FRACTION = 0.12
+
+    def _reliable_max_stage(self, full):
+        if not full:
+            return 0
+        n = len(full)
+        min_count = max(1, math.ceil(n * self.STAGE_RELIABILITY_FRACTION))
+        stages = sorted({int(r.get("stage", 0)) for r in full}, reverse=True)
+        for s in stages:
+            if s <= 0:
+                break
+            reached = sum(1 for r in full if int(r.get("stage", 0)) >= s)
+            if reached >= min_count:
+                return s
+        return 0
 
     def _metrics(self):
         rows = list(self.recent)
@@ -526,7 +593,7 @@ class MilestoneCheckpointCallback(BaseCallback):
                 return 0
             return round(1000 * sum(r[key] for r in g) / len(g))
 
-        max_stage = max((r.get("stage", 0) for r in full), default=0)
+        max_stage = self._reliable_max_stage(full)
         stage_steps = [
             int(r.get("steps", 0)) for r in full
             if int(r.get("stage", 0)) == int(max_stage)
@@ -619,16 +686,18 @@ class MilestoneCheckpointCallback(BaseCallback):
                     champion_version = int(c.get("version", 0) or 0)
                 except Exception:
                     pass
-            live_skill_health = self._live_skill_health()
-            effective_scores = dict(self.skill_scores)
-            for skill in ("intro", "stairs", "exit", "starter"):
-                h = live_skill_health.get(skill, {})
-                if (
-                    int(effective_scores.get(skill, 0)) >= 880
-                    and int(h.get("episodes", 0)) >= 16
-                    and int(h.get("score", 0)) < 650
-                ):
-                    effective_scores[skill] = int(h.get("score", 0))
+            full_only = bool(PokemonFireRedEnv.FULL_ONLY_MODE)
+            live_skill_health = {} if full_only else self._live_skill_health()
+            effective_scores = {} if full_only else dict(self.skill_scores)
+            if not full_only:
+                for skill in ("intro", "stairs", "exit", "starter"):
+                    h = live_skill_health.get(skill, {})
+                    if (
+                        int(effective_scores.get(skill, 0)) >= 880
+                        and int(h.get("episodes", 0)) >= 16
+                        and int(h.get("score", 0)) < 650
+                    ):
+                        effective_scores[skill] = int(h.get("score", 0))
 
             payload = {
                 "trainer_pid": int(os.getpid()),
@@ -637,14 +706,16 @@ class MilestoneCheckpointCallback(BaseCallback):
                 "champion_version": champion_version,
                 "delta_steps": int(self.num_timesteps) - champion_steps,
                 "recent_full_done": len(getattr(self, "recent_full", [])),
-                "mode": "v15_stage_curriculum",
+                "mode": "v16_clean_full_brain",
                 "rollback_count": int(self.rollback_count),
                 "regression_strikes": int(self.regression_strikes),
                 "skill_scores": dict(self.skill_scores),
                 "live_skill_health": live_skill_health,
                 "effective_skill_scores": effective_scores,
                 "last_eval_metrics": dict(self.last_eval_metrics),
-                "training_phase": (
+                "last_eval_result": str(self.last_eval_result),
+                "last_eval_at_step": int(self.last_eval_at_step),
+                "training_phase": "full_brain" if full_only else (
                     "1_intro" if int(effective_scores.get("intro", 1000)) < 880
                     else "2_stairs" if int(effective_scores.get("stairs", 1000)) < 880
                     else "3_exit" if int(effective_scores.get("exit", 1000)) < 880
@@ -703,27 +774,14 @@ class MilestoneCheckpointCallback(BaseCallback):
         self.full_live.clear()
 
     def _protected_regression(self, candidate):
-        # V15.3: Kein Champion-Gate mehr. "Bester Score gewinnt, weiter geht's"
-        # (PWhiddy-Modell). Die Promotion ist ohnehin durch `score >=
-        # champion_score` abgesichert - ein schlechterer Kandidat wird gar nicht
-        # erst befoerdert. Der zusaetzliche Schutzwall hat den Champion 23 Mio
-        # Steps eingefroren.
-        return False
-
+        # Ein schlechter Kandidat wird zwar nicht Champion, konnte bisher aber
+        # unbegrenzt als Learner weitertrainieren und dabei den Anfang komplett
+        # vergessen. Tieferer echter Fortschritt darf passieren; bei gleicher
+        # Tiefe muessen zentrale Full-Faehigkeiten erhalten bleiben.
         old = self.champion_metrics or {}
 
-        # V14: echte neue Tiefe (world_stage / Orden / Level) hebt jeden Schutz
-        # auf. max_maps (Raumanzahl) NICHT mehr - eine Haus-Tour ist kein
-        # Fortschritt.
-        if int(candidate.get("max_badges", 0)) > int(old.get("max_badges", 0)):
-            return False
-        if int(candidate.get("max_stage", 0)) > int(old.get("max_stage", 0)):
-            return False
-        if int(candidate.get("max_level", 0)) > int(old.get("max_level", 0)):
-            return False
-
         n = int(candidate.get("full_episodes", 0))
-        if n < 8:
+        if n < self.min_full_episodes:
             # Zu wenig abgeschlossene Full-Runs -> nicht befoerdern, aber auch
             # nicht als harte Regression zaehlen.
             return True
@@ -745,7 +803,8 @@ class MilestoneCheckpointCallback(BaseCallback):
 
         old_intro = int(old.get("full_intro_permille", 0))
         new_intro = int(candidate.get("full_intro_permille", 0))
-        if old_intro >= 300 and new_intro < old_intro - 250:
+        intro_floor = min(900, max(850, old_intro - 100))
+        if old_intro >= 850 and new_intro < intro_floor:
             print(
                 f"🛡️ Champion geschuetzt: Full-Intro "
                 f"{old_intro/10:.1f}% -> {new_intro/10:.1f}%"
@@ -754,28 +813,54 @@ class MilestoneCheckpointCallback(BaseCallback):
 
         return False
 
+    def _rollback_to_champion(self):
+        """Restore policy + optimizer and make the safe state restartable."""
+        if not os.path.exists(BEST_MODEL):
+            return False
+        try:
+            self.model.set_parameters(BEST_MODEL, exact_match=True)
+            self.model.save(RESUME_MODEL)
+            self.rollback_count += 1
+            self.regression_strikes = 0
+            self.recent.clear()
+            self.recent_full.clear()
+            self.full_live.clear()
+            print(
+                "🔄 AUTO-ROLLBACK: Learner auf bestätigten Champion "
+                f"zurückgesetzt (Rollback {self.rollback_count})."
+            )
+            return True
+        except Exception as exc:
+            print(f"⚠️ Auto-Rollback fehlgeschlagen: {exc}")
+            return False
+
     def _evaluate(self):
         metrics = self._metrics()
         if metrics["episodes"] < self.min_eval_episodes or metrics["full_episodes"] < self.min_full_episodes:
             return False
 
         self.last_eval_metrics = dict(metrics)
+        self.last_eval_at_step = int(self.num_timesteps)
         score = self._score(metrics)
         self.model.save(CANDIDATE_MODEL)
 
         if self._protected_regression(metrics):
+            self.last_eval_result = "regression"
             self.regression_strikes += 1
             self.steps_since_champion_update += int(metrics["full_episodes"])
             print(
                 f"⚠️ Full-Regression erkannt "
                 f"(Messung {self.regression_strikes}). "
-                "Champion und Skill Vault bleiben erhalten; "
-                "Learner lernt ohne Gewichtsverlust weiter."
+                "Champion bleibt erhalten."
             )
-        elif self.champion_score is None or score >= self.champion_score:
+            if self.regression_strikes >= 3:
+                self._rollback_to_champion()
+        elif self.champion_score is None or score > self.champion_score:
+            self.last_eval_result = "champion"
             self.regression_strikes = 0
             self._publish_champion(score, metrics, "Recent-Eval")
         else:
+            self.last_eval_result = "rejected"
             self.regression_strikes = 0
             self.steps_since_champion_update += int(metrics["full_episodes"])
             print(
@@ -816,6 +901,10 @@ class MilestoneCheckpointCallback(BaseCallback):
 
         for info in infos:
             if not isinstance(info, dict):
+                continue
+            if PokemonFireRedEnv.FULL_ONLY_MODE:
+                # V16-Champions entstehen nur aus einer abgeschlossenen
+                # Generation, niemals aus einem einzelnen Live-Meilenstein.
                 continue
             policy_obj = str(info.get("policy_objective", info.get("training_objective", "")))
             if policy_obj != "full":
@@ -868,6 +957,8 @@ class MilestoneCheckpointCallback(BaseCallback):
 
         for info in infos:
             if not isinstance(info, dict):
+                continue
+            if PokemonFireRedEnv.FULL_ONLY_MODE:
                 continue
             rank = self._full_stage_rank(info)
             if rank > current_best_stage:
@@ -941,22 +1032,6 @@ class MilestoneCheckpointCallback(BaseCallback):
                             terminal_info = dict(cached_info)
 
                 if isinstance(terminal_info, dict):
-
-                    # DEBUG: bei jedem Full-Slot exakt zeigen, was SB3
-                    # beim Episode-Ende an den Callback liefert.
-                    if str(terminal_info.get("training_objective", "")) == "full":
-                        print(
-                            "🔬 FULL-SLOT DONE "
-                            f"slot={i} | "
-                            f"role={terminal_info.get('training_objective')!r} | "
-                            f"start={terminal_info.get('episode_start')!r} | "
-                            f"stage={terminal_info.get('story_stage')!r} | "
-                            f"steps={terminal_info.get('episode_steps')!r} | "
-                            f"level={terminal_info.get('level', terminal_info.get('p1_level'))!r} | "
-                            f"terminated={terminal_info.get('terminated')!r} | "
-                            f"truncated={terminal_info.get('TimeLimit.truncated')!r}"
-                        )
-
                     record = self._episode_record(
                         terminal_info
                     )
@@ -968,21 +1043,12 @@ class MilestoneCheckpointCallback(BaseCallback):
                     ):
                         self.recent_full.append(record)
 
-                    if record["role"] == "full":
-                        print(
-                            "🧬 FULL EPISODE: "
-                            f"start={record['start']} | "
-                            f"intro={record['intro']} | "
-                            f"stairs={record['stairs']} | "
-                            f"exit={record['exit']} | "
-                            f"starter={record['starter']} | "
-                            f"badge={record['badge']}"
-                        )
-
                 self.last_episode_info.pop(i, None)
 
         for info in infos:
             if not isinstance(info, dict):
+                continue
+            if PokemonFireRedEnv.FULL_ONLY_MODE:
                 continue
             badges = self._badge_count(info)
             if badges > int(self.champion_metrics.get("max_badges", 0)):
@@ -995,7 +1061,8 @@ class MilestoneCheckpointCallback(BaseCallback):
 
         if self.num_timesteps - self.last_check_step >= self.check_freq:
             self.last_check_step = int(self.num_timesteps)
-            self._update_skill_vault()
+            if not PokemonFireRedEnv.FULL_ONLY_MODE:
+                self._update_skill_vault()
             if not self._evaluate():
                 full_done_n = len(self.recent_full)
                 print(
@@ -1046,10 +1113,7 @@ def main():
         f"{device.upper()}"
     )
 
-    print(
-        "🧭 Curriculum: 65% der Episoden starten von vorne; "
-        "35% duerfen spaeter von selbst erreichten Zwischenstaenden starten."
-    )
+    print("🧬 V16 Full-Brain: alle 50 Episoden starten am Spielanfang.")
 
     print(
         f"⏱️ Episodenlaenge: "
@@ -1099,15 +1163,12 @@ def main():
         f"{len(seed_transitions)} Warps"
     )
     print(
-        f"🎯 V15 STAGE-CURRICULUM @ {NUM_ENVS} Envs: 4er-Bildgedaechtnis, "
-        "lange 128er Rollouts, validierte Stufen-Savestates und keine "
-        "Belohnung fuer beliebige Warps/Gebaeude. Ziel: Route 1 -> Vertania "
-        "-> Route 2 -> Wald -> Marmoria -> erster Orden."
+        f"🎯 V16: {NUM_ENVS} Envs × {PPO_N_STEPS} Schritte = "
+        f"{NUM_ENVS * PPO_N_STEPS:,} Samples/Update | "
+        "keine Bewegungs-, Tile- oder Warp-Punkte"
     )
-
-    print("🎮 V7.7 Actions: A | B | START | UP | DOWN | LEFT | RIGHT")
-    print("🧭 V15 Observation: 4x 64x64 Bildfolge + 31 RAM/Nav/Story Features")
-    print("🌲 V10.27B Fokus: Vertania City erreichen, Markt/Paket erkunden und zu Professor Eich zurueckkehren.\n⚡ V7.5 Speed Cache: adjacency/frontier/distance caching aktiv")
+    print("🎮 Aktionen: A | B | START | HOCH | RUNTER | LINKS | RECHTS")
+    print("🧭 Beobachtung: 4 Bilder + RAM-, Navigation- und Storywerte")
 
     vec_env = SubprocVecEnv(
         [
@@ -1124,10 +1185,12 @@ def main():
         ]
     , start_method="spawn")
 
-    if os.path.exists(RESUME_MODEL):
-        load_model = RESUME_MODEL
-    elif os.path.exists(BEST_MODEL):
+    # Jeder neue Trainingsprozess beginnt an der letzten bestaetigten Basis.
+    # Ein unbewerteter Resume-Zwischenstand darf keine Regression konservieren.
+    if os.path.exists(BEST_MODEL):
         load_model = BEST_MODEL
+    elif os.path.exists(RESUME_MODEL):
+        load_model = RESUME_MODEL
     else:
         load_model = LATEST_MODEL
 
@@ -1147,11 +1210,13 @@ def main():
                 "batch_size": PPO_BATCH_SIZE,
                 "n_epochs": PPO_N_EPOCHS,
                 "gamma": PPO_GAMMA,
+                "gae_lambda": PPO_GAE_LAMBDA,
                 "ent_coef": PPO_ENT_COEF,
             },
         )
-        if not os.path.exists(BEST_MODEL):
-            shutil.copy2(load_model, BEST_MODEL)
+        # Ein Resume ist nur ein fortsetzbarer Learner-Zwischenstand. Er darf
+        # bei einem Neustart vor der ersten Evaluation nicht stillschweigend
+        # zum bestaetigten Champion werden.
 
         # V11: nach einem Reset ist RESUME eine neu geseedete Skill-Policy.
         # Ihr eingebauter Step-Zaehler (~11 Mio) ist irrefuehrend - es ist ein
@@ -1163,7 +1228,7 @@ def main():
                 model._num_timesteps_at_start = 0
             except Exception:
                 pass
-            print("🔄 V11-Reset erkannt -> Step-Zaehler auf 0")
+            print("🔄 Clean-Reset erkannt -> Step-Zaehler auf 0")
 
     else:
         print("🌱 Initialisiere neues PPO-Modell...")
@@ -1176,38 +1241,22 @@ def main():
             batch_size=PPO_BATCH_SIZE,
             n_epochs=PPO_N_EPOCHS,
             gamma=PPO_GAMMA,
+            gae_lambda=PPO_GAE_LAMBDA,
             ent_coef=PPO_ENT_COEF,
             verbose=1,
             device=device
         )
 
     print(
-        "⚡ V10.6 EFFECTIVE PPO: "
-        f"n_steps={model.n_steps} | "
-        f"rollout={model.n_steps * model.n_envs} | "
-        f"lr={LEARNING_RATE} | "
-        f"batch={model.batch_size} | "
-        f"epochs={model.n_epochs}"
-    )
-
-    print(
-        "🌙 V10.7 EFFECTIVE PPO: "
-        f"agents={NUM_ENVS} | n_steps={model.n_steps} | "
-        f"rollout={model.n_steps * model.n_envs} | lr={LEARNING_RATE}"
+        "⚡ PPO: "
+        f"n_steps={model.n_steps} | rollout={model.n_steps * model.n_envs} | "
+        f"lr={LEARNING_RATE} | batch={model.batch_size} | "
+        f"epochs={model.n_epochs} | gae_lambda={model.gae_lambda}"
     )
     print(
-        "🏆 Frontier Champion: neue Full-from-start Tiefe wird sofort geschützt; "
-        "24 Episoden + 8 abgeschlossene Full-Runs für same-depth Optimierung."
+        "🏆 Champion-Regel: mindestens 32 abgeschlossene Full-Runs; "
+        "nur bessere Kandidaten werden übernommen, Regression wird zurückgerollt."
     )
-
-    print("🧬 V10.9.2 FULL BUFFER ACTIVE: Full-Runs bleiben separat erhalten.")
-
-    print("🧬 V10.9.4 LIVE FULL + RESUME ACTIVE")
-
-    print("🧰 V10.27 ECHTES BOOTCAMP: jede fehlende Stufe wird nacheinander gelernt und sofort im Vault eingefroren.")
-    print("🛡️ V10.27 Keine Auto-Rollbacks; Phasenwechsel nur durch geschuetzte Skill-Scores.")
-
-    print("🧠 V10.13 FULL-POLICY UNIFIED ACTIVE: Story-Spezialisten trainieren jetzt dasselbe Full-Brain wie der Watcher.")
 
     # V10.27: geladene PPO-Modelle behalten sonst ihre alte LR.
     # Daher LR auch effektiv im geladenen Optimizer erzwingen.
@@ -1217,12 +1266,13 @@ def main():
     # sonst den alten, zu niedrigen gespeicherten Wert (0.008) und das
     # Entropy-Re-Heat greift nicht.
     model.ent_coef = PPO_ENT_COEF
+    model.gae_lambda = PPO_GAE_LAMBDA
     try:
         for group in model.policy.optimizer.param_groups:
             group["lr"] = LEARNING_RATE
     except Exception:
         pass
-    print(f"🚀 V10.27 Effective LR: {LEARNING_RATE:.8f}")
+    print(f"🚀 Effektive Lernrate: {LEARNING_RATE:.8f}")
 
     callback = MilestoneCheckpointCallback(
         check_freq=SAVE_EVERY_TIMESTEPS
@@ -1233,8 +1283,10 @@ def main():
     try:
         if TRAIN_FOREVER:
             print(
-                f"♾️ Endlos-Training aktiv: "
-                f"{TRAIN_CHUNK_TIMESTEPS:,} Steps pro Block | Stop mit Ctrl+C"
+                "♾️ Training läuft fortlaufend | "
+                f"interner Speicherblock {TRAIN_CHUNK_TIMESTEPS:,} Gesamtsteps | "
+                f"Episode max. {PokemonFireRedEnv.MAX_EPISODE_STEPS:,} Steps | "
+                "Stop mit Ctrl+C"
             )
             while True:
                 model.learn(

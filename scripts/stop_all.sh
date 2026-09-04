@@ -66,9 +66,9 @@ if [[ "$KEEP_CLOUDFLARE" != true ]]; then
   graceful_stop "Cloudflare" "cloudflared tunnel" 100
 fi
 graceful_stop "ngrok" "ngrok http 8000" 50
-# verwaiste SubprocVecEnv-Worker vom Trainer
-pkill -f "multiprocessing-fork" || true
-pkill -f "multiprocessing.resource_tracker" || true
+# Keine globalen multiprocessing-Prozesse abschiessen: Auf dem Rechner koennen
+# gleichzeitig andere Python-Jobs laufen. Die PKMAI-Worker sind Kinder des oben
+# gezielt beendeten Trainers und werden von SubprocVecEnv mitgeschlossen.
 
 # TERM ist asynchron: insbesondere uvicorn kann den Listener noch einen
 # Augenblick halten. Erst weitergehen, wenn der alte Webprozess und Port 8001

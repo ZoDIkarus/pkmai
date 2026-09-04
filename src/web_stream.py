@@ -448,7 +448,14 @@ def _maybe_record_history(version_meta, instances):
         # One live history point every 25k learner steps.
         bucket = (timesteps // 25000) * 25000
         history = _load_training_history()
-        if history and int(history[-1].get("timesteps", -1)) >= bucket:
+        last_ts = int(history[-1].get("timesteps", -1)) if history else -1
+        # V15.3: nach einem Learner-Reset (z.B. Reset auf den Champion) faellt
+        # timesteps zurueck unter den letzten aufgezeichneten Wert. Die alte
+        # Wächter-Bedingung ">= bucket" blieb dann fuer immer wahr (der alte
+        # Spitzenwert wird nie wieder erreicht) -> die Historie fror auf dem
+        # Vor-Reset-Stand ein und zeigte nie wieder echte, aktuelle Werte.
+        # Ein Rueckwaertssprung heisst "neuer Lauf" -> immer neu aufzeichnen.
+        if history and last_ts >= bucket and timesteps >= last_ts:
             return
 
         stats = _aggregate_training_stats(instances)
@@ -1158,7 +1165,7 @@ def index():
 <html>
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Pokemon FireRed AI Live Dashboard</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -1580,7 +1587,8 @@ def index():
         .watcher-page-head b{color:#00e676;font-size:14px}
         .watcher-page-head span{display:block;color:#8f98ad;font-size:10px;margin-top:2px}
         .watcher-page-head a{color:#7c8db5;font-size:10px;white-space:nowrap}
-        #watcher-stream{width:100%;max-width:600px;display:block;margin:0 auto 16px;border-radius:8px;border:1px solid #293148;image-rendering:pixelated}
+        .wt-stream-wrap{width:100%;max-width:600px;margin:0 auto 16px;overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:8px;border:1px solid #293148}
+        #watcher-stream{width:100%;display:block;image-rendering:pixelated}
         .wt-picker-head{display:flex;justify-content:space-between;align-items:center;margin:2px 0 8px}
         .wt-picker-head b{color:#fff;font-size:12px}
         .wt-picker-head span{color:#7f879b;font-size:10px}
@@ -1603,12 +1611,17 @@ def index():
         .wt-events .pos{color:#5fe08a}
         .wt-events .neg{color:#ff7a7a}
         .wt-close{float:right;background:#232738;border:none;color:#aaa;border-radius:6px;padding:3px 9px;cursor:pointer;font-size:11px}
+        .wt-starter-sprite{float:right;width:56px;height:56px;margin:0 8px 6px 10px;image-rendering:pixelated;background:#0b0e14;border:1px solid #232738;border-radius:8px}
         @media(max-width:600px){
-          #watcher-view{padding:0}
           .watcher-page{padding:10px}
           .wt-grid{grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:5px}
           .wt-dgrid{grid-template-columns:repeat(3,1fr)}
-          #watcher-stream{margin-bottom:12px}
+          .wt-stream-wrap{margin-bottom:12px}
+          /* Das Composite-Bild (Spiel+Team+Map) ist sehr breit/flach - bei
+             voller Breite auf dem Handy wird alles unleserlich klein. Statt
+             stur zu quetschen: feste Mindestbreite, seitlich scrollbar, dazu
+             per Meta-Viewport jetzt auch Pinch-Zoom erlaubt. */
+          #watcher-stream{min-width:700px;width:700px}
         }
         #mapper-view { display:none; overflow-y:auto; padding:18px; box-sizing:border-box; }
         .mapper-grid { display:grid; grid-template-columns:minmax(360px,1fr) minmax(360px,1fr); gap:16px; }
@@ -1626,6 +1639,16 @@ def index():
         .status-kpi, .status-watcher, .status-role, .status-agent { background:#151821; border:1px solid #293148; border-radius:11px; padding:12px; }
         .status-kpi .big { color:#00e676; font-size:21px; font-weight:900; }
         .status-kpi .small { color:#8b93a7; font-size:10px; margin-top:3px; }
+        .status-kpi.bp-up { border-color:#1f6b3f; }
+        .status-kpi.bp-up .big { color:#5fe08a; }
+        .status-kpi.bp-down { border-color:#7a2f2f; }
+        .status-kpi.bp-down .big { color:#ff7a7a; }
+        .status-kpi .bp-delta { font-size:11px; font-weight:700; margin-top:2px; }
+        .bp-versions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:10px 0 14px; }
+        .bp-ver-chip { background:#151821; border:1px solid #293148; border-radius:9px; padding:8px 12px; font-size:12px; }
+        .bp-ver-chip b { color:#00e676; display:block; font-size:13px; }
+        .bp-ver-chip span { color:#c3cadb; }
+        .bp-ver-sep { color:#4a5266; font-size:14px; }
         .status-watcher { border-color:#7c4dff; margin-bottom:14px; }
         .status-watcher h3, .status-section-title { margin:0 0 9px; color:#fff; font-size:13px; }
         .status-watcher-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:7px; }
@@ -1808,7 +1831,8 @@ def index():
         .agent-filter-bar.filtered { border-color:#00e676; }
     </style>
 <style id="champion-night-style">
-#champion-night-card{position:fixed;right:390px;top:72px;z-index:4800;width:285px;padding:10px 12px;border-radius:14px;background:linear-gradient(145deg,rgba(8,17,28,.96),rgba(15,27,41,.93));border:1px solid rgba(68,214,255,.28);box-shadow:0 14px 42px rgba(0,0,0,.34);backdrop-filter:blur(12px);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+#brain-summary-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;padding:8px 12px;background:#0c0e14;border-bottom:1px solid #232738;flex:none}
+#champion-night-card{position:static;width:auto;padding:10px 12px;border-radius:14px;background:linear-gradient(145deg,rgba(8,17,28,.96),rgba(15,27,41,.93));border:1px solid rgba(68,214,255,.28);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 #champion-night-card.minimized{width:185px}
 #champion-night-card.minimized .cn-grid,#champion-night-card.minimized .cn-foot{display:none}
 .cn-title{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;font-weight:900;letter-spacing:.65px;color:#55e4a3}
@@ -1817,7 +1841,6 @@ def index():
 .cn-grid div{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.065);border-radius:9px;padding:7px 3px;text-align:center}
 .cn-grid b{display:block;font-size:13px;color:#f4f8ff}.cn-grid small{font-size:7px;color:#8191a7;text-transform:uppercase}
 .cn-foot{margin-top:7px;font-size:7px;color:#74879d}
-@media(max-width:1200px) and (min-width:821px){#champion-night-card{right:18px;top:145px}}
 </style>
 <style id="pkmai-window-tools-style">
 .pkmai-float-tools{position:absolute;right:8px;top:7px;display:flex;gap:4px;z-index:30}
@@ -1841,9 +1864,8 @@ def index():
 
   /* Reihenfolge: Header zuerst, dann die Info-Kacheln, dann der Inhalt */
   header{order:1!important}
-  #learner-truth-hud{order:2!important}
-  #champion-night-card{order:3!important}
-  #main-container{order:4!important}
+  #brain-summary-row{order:2!important}
+  #main-container{order:3!important}
 
   /* HEADER: klebt oben, Tabs zuerst und immer sichtbar */
   header{position:sticky!important;top:0!important;z-index:300!important;flex-direction:column!important;align-items:stretch!important;gap:6px!important;padding:6px 8px!important}
@@ -1861,18 +1883,20 @@ def index():
 
   /* MAIN: kein 100vh-Kaefig mehr, alles im Fluss */
   #main-container{position:static!important;overflow:visible!important;flex:none!important;height:auto!important}
-  #rooms-view,#graphs-view,#status-view,#mapper-view{position:relative!important;display:none;height:auto!important;min-height:auto!important;overflow:visible!important;padding:10px 10px calc(72px + env(safe-area-inset-bottom))!important}
+  #rooms-view,#graphs-view,#status-view,#watcher-view{position:relative!important;display:none;height:auto!important;min-height:auto!important;overflow:visible!important;padding:10px 10px calc(72px + env(safe-area-inset-bottom))!important}
   /* Leaflet braucht feste Hoehe, sonst kollabiert die Karte / kein Zoom */
   #map-view{position:relative!important;height:72vh!important;min-height:360px!important;overflow:hidden!important}
 
   /* ALLE Panels: feste Kacheln - nicht schwebend, nicht verschiebbar,
      nicht minimierbar */
-  #learner-truth-hud,#champion-night-card,.pkmai-movable,.hud-overlay,.detail-panel,
+  #brain-summary-row,#learner-truth-hud,#champion-night-card,.pkmai-movable,.hud-overlay,.detail-panel,
   .agent-filter-bar,.pkmai-mobile-tile,.live-global,.v81skills{
     position:static!important;inset:auto!important;left:auto!important;right:auto!important;top:auto!important;bottom:auto!important;
     transform:none!important;width:auto!important;max-width:none!important;max-height:none!important;
-    margin:8px!important;z-index:auto!important;box-shadow:none!important;backdrop-filter:none!important;
+    z-index:auto!important;box-shadow:none!important;backdrop-filter:none!important;
   }
+  #brain-summary-row{grid-template-columns:1fr!important;gap:8px!important;margin:0!important;padding:8px!important}
+  #brain-summary-row #learner-truth-hud,#brain-summary-row #champion-night-card{margin:0!important}
   .pkmai-mobile-tile{display:block!important}
   .agent-filter-bar select{flex:1 1 42%!important;max-width:none!important;font-size:12px!important;padding:8px 6px!important}
   /* Verschiebe- / Minimier- / Ausblende-Knoepfe komplett weg */
@@ -1913,21 +1937,11 @@ def index():
 #learner-truth-hud{position:fixed;left:16px;bottom:16px;z-index:4900;width:300px;padding:10px 12px;border-radius:13px;background:rgba(7,14,23,.96);border:1px solid rgba(82,222,172,.30);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 #learner-truth-hud.minimized .lth-body{display:none}.lth-head{display:flex;justify-content:space-between;align-items:center;color:#58e3a5;font-size:10px;font-weight:900}.lth-head button{border:0;background:rgba(255,255,255,.08);color:#b7c7d8;border-radius:7px;padding:2px 7px}
 .lth-body{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}.lth-cell{background:rgba(255,255,255,.045);border-radius:8px;padding:7px 5px;text-align:center}.lth-cell b{display:block;font-size:13px;color:#f5f8fc}.lth-cell small{font-size:7px;color:#8393a8;text-transform:uppercase}
-@media(max-width:820px){#learner-truth-hud{position:static!important;left:auto!important;right:auto!important;top:auto!important;bottom:auto!important;transform:none!important;width:auto!important;margin:8px 8px 0!important;z-index:auto!important;order:2!important}}
+@media(min-width:821px){#learner-truth-hud{position:static;inset:auto;width:auto;z-index:auto}}
+@media(max-width:820px){#learner-truth-hud{position:static!important;left:auto!important;right:auto!important;top:auto!important;bottom:auto!important;transform:none!important;width:auto!important;z-index:auto!important}}
 </style>
 </head>
 <body>
-<div id="learner-truth-hud"><div class="lth-head"><span>🧠 TRAINER · LIVE</span><button onclick="document.getElementById('learner-truth-hud').classList.toggle('minimized')">−</button></div><div class="lth-body"><div class="lth-cell"><b id="lth-learner">0</b><small>Learner Steps</small></div><div class="lth-cell"><b id="lth-champion">0</b><small>Champion Steps</small></div><div class="lth-cell"><b id="lth-delta">0</b><small>Seit Champion</small></div></div></div>
-<div id="champion-night-card">
-  <div class="cn-title"><span>🏆 FRONTIER CHAMPION</span><span class="cn-title-right"><span id="cn-ver">v0</span><button class="cn-toggle" onclick="document.getElementById('champion-night-card').classList.toggle('minimized')">−</button></span></div>
-  <div class="cn-grid">
-    <div><b id="cn-steps">0</b><small>Steps</small></div>
-    <div><b id="cn-full">0%</b><small>Full Exit</small></div>
-    <div><b id="cn-starter">0%</b><small>Full Starter</small></div>
-    <div><b id="cn-badge">0</b><small>Badge</small></div>
-  </div>
-  <div class="cn-foot">30 Episoden + 4 Full · neue Full-Meilensteine sofort</div>
-</div>
     <header>
         <div class="header-left">
             <div class="logo-title">⚡ PKMAI <span id="model-ver" style="color:#2979ff;">v000001</span></div>
@@ -1958,11 +1972,11 @@ def index():
             <!-- AGENTEN FILTER INPUT -->
             <div class="filter-control">
                 <span>Zeige Agenten:</span>
-                <input type="number" id="agent-limit" class="filter-input" value="130" min="0" max="130" onchange="updateFilter(this.value)">
+                <input type="number" id="agent-limit" class="filter-input" value="9999" min="0" max="9999" onchange="updateFilter(this.value)">
                 <button class="filter-btn" onclick="setFilter(5)">5</button>
                 <button class="filter-btn" onclick="setFilter(10)">10</button>
                 <button class="filter-btn" onclick="setFilter(20)">20</button>
-                <button class="filter-btn" onclick="setFilter(120)">Alle 120</button>
+                <button class="filter-btn" onclick="setFilter(9999)">Alle</button>
             </div>
         </div>
 
@@ -1973,13 +1987,25 @@ def index():
                 <button class="tab-btn" onclick="showTab('graphs', event)">📈 Graphs</button>
                 <button class="tab-btn" onclick="showTab('status', event)">📊 Status</button>
                 <button class="tab-btn" onclick="showTab('watcher', event)">👁️ Watcher</button>
-                <button class="tab-btn" onclick="showTab('mapper', event)">🧩 Mapper</button>
             </div>
         </div>
     </header>
+<div id="brain-summary-row">
+<div id="learner-truth-hud"><div class="lth-head"><span>🧠 TRAINER · LIVE</span></div><div class="lth-body"><div class="lth-cell"><b id="lth-learner">0</b><small>Learner Steps</small></div><div class="lth-cell"><b id="lth-champion">0</b><small>Champion Steps</small></div><div class="lth-cell"><b id="lth-delta">0</b><small>Seit Champion</small></div></div></div>
+<div id="champion-night-card">
+  <div class="cn-title"><span>🏆 FRONTIER CHAMPION</span><span class="cn-title-right"><span id="cn-ver">v0</span></span></div>
+  <div class="cn-grid">
+    <div><b id="cn-steps">0</b><small>Steps</small></div>
+    <div><b id="cn-full">0%</b><small>Full Exit</small></div>
+    <div><b id="cn-starter">0%</b><small>Full Starter</small></div>
+    <div><b id="cn-badge">0</b><small>Badge</small></div>
+  </div>
+  <div class="cn-foot">32 abgeschlossene Full-Runs · nur bessere Candidates werden Champion</div>
+</div>
+</div>
 
     <div id="main-container">
-        <div id="map-view"><div class="v81skills"><div style="font-size:11px;font-weight:800;margin-bottom:6px">V8.4 TRAINING SKILLS · 120 AGENTS</div><div class="v81grid" id="v81skills"></div></div>
+        <div id="map-view"><div class="v81skills" hidden><div id="v81skills"></div><span id="v81-agent-count"></span></div>
             <div class="live-global">
                 <div class="live-global-title"><span><span class="live-dot"></span>GLOBAL AI</span><span id="live-model">v0</span></div>
                 <div class="live-global-grid">
@@ -1995,20 +2021,19 @@ def index():
         <div id="rooms-view"><div class="room-grid" id="room-grid"></div></div>
         <div id="watcher-view"><section class="watcher-page">
             <div class="watcher-page-head"><div><b>● LIVE WATCHER</b><span>End-to-End-Screenshot + Live-Stats jedes Agenten</span></div><a href="/watcher.jpg" target="_blank" rel="noopener">JPEG ↗</a></div>
-            <img id="watcher-stream" src="/watcher.jpg" alt="Live-Bild des Watchers">
+            <div class="wt-stream-wrap"><img id="watcher-stream" src="/watcher.jpg" alt="Live-Bild des Watchers"></div>
+            <div class="wt-detail" id="wt-detail" hidden></div>
             <div class="wt-picker-head"><b>Agenten – antippen für Live-Stats</b><span id="wt-count">–</span></div>
             <div class="wt-grid" id="wt-grid"></div>
-            <div class="wt-detail" id="wt-detail" hidden></div>
         </section></div>
-        <div id="mapper-view">
-            <div class="mapper-grid">
-                <section class="mapper-card"><h3>🧩 Mapper · Live</h3><p id="mapper-status">Frontier-Steuerung · eine Aktion alle 1,5 s · drei ruhige Aufnahmen</p><img id="mapper-stream" src="/mapper.jpg" alt="Live-Bild des Mappers"></section>
-                <section class="mapper-card"><h3>🗺️ Echte Bildkarte</h3><p>Mehrfach beobachtete 16×16-Tiles; Figur, NPCs und Animationen verschwinden per Mehrheitswahl.</p><img id="mapper-atlas" src="/mapper-atlas.png" alt="Vom Mapper zusammengesetzte Weltkarte"></section>
-            </div>
-        </div>
+        <!-- Mapper-Tab entfernt: der Mapper laeuft standardmaessig nicht
+             (start_all.sh --no-mapper), eine dauerleere Ansicht verwirrt nur. -->
         <div id="status-view">
             <div class="status-title"><h2>📊 Flotten-Status</h2><span>Watcher · Kategorien · einzelne Runner</span></div>
             <div class="status-summary" id="status-summary"></div>
+            <h3 class="status-section-title">🧠 Brain Progress <span style="font-weight:400;color:#7f879b;font-size:11px">– wird das Netz wirklich besser?</span></h3>
+            <div class="status-summary" id="brain-progress"></div>
+            <div class="bp-versions" id="brain-progress-versions"></div>
             <div class="status-watcher" id="status-watcher"></div>
             <h3 class="status-section-title">🧩 Kategorien – aktuelle Episoden</h3>
             <div class="status-role-grid" id="status-role-grid"></div>
@@ -2019,7 +2044,7 @@ def index():
         <div id="graphs-view"><div class="fleet-panel" id="fleet-panel">
             <div class="fleet-head">
                 <b>🧭 FLOTTEN-STATUS</b>
-                <span id="fleet-sub">Live aus den Agenten · V13.3</span>
+                <span id="fleet-sub">Live aus den Agenten</span>
             </div>
             <div class="fleet-depth">
                 <div class="fleet-depth-num" id="fleet-depth-num">0</div>
@@ -2041,27 +2066,12 @@ def index():
             <div class="fleet-roles" id="fleet-roles"></div>
             <div class="fleet-events" id="fleet-events"></div>
         </div>
-        <div class="v84-skill-panel" id="v84-skill-panel">
-            <div class="v84-head"><b>V8.4 – Trainings-Skills</b><span>direkt aus den Training-Stats</span></div>
-            <div class="v84-grid" id="v84-skill-grid"></div>
-            <div class="v84-meta" id="v84-meta"></div>
-            <div class="v84-canvas-wrap"><canvas id="v84-skill-canvas" width="1500" height="300"></canvas></div>
-        </div><div class="graph-card" style="min-height:390px;margin-bottom:12px">
-            <div class="graph-title">V8.3 – Vollständige Skill-Statistik</div>
-            <div class="graph-sub">Intro → Treppe → Exit → Erstes Pokémon → Battle → Level → Gym + Full Chain</div>
-            <div id="v83-skill-table" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:12px 0"></div>
-            <canvas id="v83-skill-canvas" width="1200" height="250" style="width:100%;height:250px"></canvas>
-        </div><div class="graph-card" style="min-height:350px;margin-bottom:12px"><div class="graph-title">V8.1 – Alle Skill-Raten</div><div class="graph-sub">Spezialisten + Full-Chain</div><div class="graph-canvas-wrap" style="height:300px"><canvas id="v81skillschart"></canvas></div></div><div class="v8-skill-panel"><div class="v8-skill-title"><b>V8 Skill Matrix</b><span>direkt aus Training-Stats · nicht Watcher</span></div><div class="v8-skill-cards" id="v8-skill-cards"></div><div class="v8-skill-chart-wrap"><canvas id="v8-skill-chart"></canvas></div></div>
             <div class="journey-wrap">
-                <div class="journey-title"><h3>🚀 Journey Skills</h3><span>Early Game → Vertania → Wald → Orden 1</span></div>
+                <div class="journey-title"><h3>🗺️ Fortschritt</h3><span>Maps, Level, Orden</span></div>
                 <div class="journey-grid">
-                    <div class="journey-card" id="journey-starter"><div class="journey-value" id="jv-starter">0%</div><div class="journey-icon">🐣</div><div class="journey-name">Starter</div><div class="journey-sub">Starter zuverlässig erhalten</div><div class="journey-bar"><div class="journey-fill" id="jf-starter"></div></div></div>
-                    <div class="journey-card" id="journey-battle"><div class="journey-value" id="jv-battle">0%</div><div class="journey-icon">⚔️</div><div class="journey-name">Battles</div><div class="journey-sub">Kämpfe starten & beenden</div><div class="journey-bar"><div class="journey-fill" id="jf-battle"></div></div></div>
-                    <div class="journey-card" id="journey-map5"><div class="journey-value" id="jv-map5">0/5</div><div class="journey-icon">🗺️</div><div class="journey-name">5 Maps</div><div class="journey-sub">Global erkannte Maps</div><div class="journey-bar"><div class="journey-fill" id="jf-map5"></div></div></div>
-                    <div class="journey-card" id="journey-warps"><div class="journey-value" id="jv-warps">0/5</div><div class="journey-icon">🚪</div><div class="journey-name">Warps</div><div class="journey-sub">Übergänge entdeckt</div><div class="journey-bar"><div class="journey-fill" id="jf-warps"></div></div></div>
-                    <div class="journey-card" id="journey-progress"><div class="journey-value" id="jv-progress">0</div><div class="journey-icon">🌉</div><div class="journey-name">Progress Bridge</div><div class="journey-sub">Fortschritt-Checkpoints</div><div class="journey-bar"><div class="journey-fill" id="jf-progress"></div></div></div>
-                    <div class="journey-card" id="journey-map10"><div class="journey-value" id="jv-map10">0/10</div><div class="journey-icon">🌲</div><div class="journey-name">Forest Push</div><div class="journey-sub">Über die ersten Maps hinaus</div><div class="journey-bar"><div class="journey-fill" id="jf-map10"></div></div></div>
-                    <div class="journey-card locked" id="journey-badge1"><div class="journey-value" id="jv-badge1">LOCKED</div><div class="journey-icon">🪨</div><div class="journey-name">Orden 1</div><div class="journey-sub">Felsorden</div><div class="journey-bar"><div class="journey-fill" id="jf-badge1"></div></div></div>
+                    <div class="journey-card" id="journey-maps"><div class="journey-value" id="jv-maps">0</div><div class="journey-icon">🗺️</div><div class="journey-name">Maps</div><div class="journey-sub">Global entdeckt</div></div>
+                    <div class="journey-card" id="journey-level"><div class="journey-value" id="jv-level">0</div><div class="journey-icon">⬆️</div><div class="journey-name">Level</div><div class="journey-sub">Bestes Party-Level</div></div>
+                    <div class="journey-card" id="journey-badges"><div class="journey-value" id="jv-badges">0/8</div><div class="journey-icon">🪨</div><div class="journey-name">Orden</div><div class="journey-sub">Gesammelte Orden</div><div class="journey-bar"><div class="journey-fill" id="jf-badges"></div></div></div>
                 </div>
             </div>
             <div class="graphs-kpis">
@@ -2077,20 +2087,14 @@ def index():
             </div>
             <div class="graphs-grid">
                 <div class="graph-card"><div class="graph-title">Lernkurve</div><div class="graph-sub">Ø Episode-Reward über echte PPO-Trainingsschritte.</div><div class="graph-canvas-wrap"><canvas id="graph-reward"></canvas></div></div>
-                <div class="graph-card"><div class="graph-title">V15 – Aktuelle Skill-Retention</div><div class="graph-sub">Kumulative Quote des laufenden Learners – sie darf sinken. Der Skill-Vault-Rekord bleibt geschützt; unter 65 % schaltet das Curriculum automatisch auf Reparatur, bis wieder 88 % erreicht sind.</div><div class="graph-canvas-wrap"><canvas id="graph-success"></canvas></div></div>
+                <div class="graph-card"><div class="graph-title">Full-Brain Retention</div><div class="graph-sub">Nur vollständige Runs vom echten Spielanfang: Intro, Treppe, Hausausgang, Schiggi und Orden.</div><div class="graph-canvas-wrap"><canvas id="graph-success"></canvas></div></div>
                 <div class="graph-card"><div class="graph-title">Spiel-Fortschritt</div><div class="graph-sub">Bestes Level, Orden und Maps je Modellstand.</div><div class="graph-canvas-wrap"><canvas id="graph-progress"></canvas></div></div>
                 <div class="graph-card"><div class="graph-title">Festfahren / Anti-Loop</div><div class="graph-sub">Loops pro 100 echte Beginning-Runs; Curriculum wird separat gezählt.</div><div class="graph-canvas-wrap"><canvas id="graph-loops"></canvas></div></div>
             </div>
         </div>
         <div class="agent-filter-bar" id="agent-filter-bar">
             <select id="af-role" onchange="setAgentFilter('role',this.value)">
-                <option value="">Alle Rollen</option>
-                <option value="intro">Intro</option>
-                <option value="stairs">Treppe</option>
-                <option value="exit">Haus-Exit</option>
-                <option value="starter">Starter</option>
-                <option value="progress">Progress</option>
-                <option value="full">Full Journey</option>
+                <option value="">Full Journey</option>
             </select>
             <select id="af-map" onchange="setAgentFilter('map',this.value)">
                 <option value="">Alle Maps</option>
@@ -2197,7 +2201,7 @@ def index():
     </div>
 
     <script>
-        let maxVisibleAgents = 120;
+        let maxVisibleAgents = 9999; // "Alle" - kein fest verdrahtetes Envs-Limit mehr
         let selectedAgentId = null; // null = alle Agenten sichtbar.
         let latestInstances = [];
         let showAgentPaths = false;
@@ -2505,12 +2509,23 @@ def index():
         // --- klickbare Agenten-Liste + Live-Stats (Watcher- UND Status-Tab) ---
         let wtSelected = null;
         function wtPick(id) {
-            wtSelected = (wtSelected === id) ? null : id;
+            const opening = wtSelected !== id;
+            wtSelected = opening ? id : null;
             renderWatcherTab();
             renderAgentDetail('status-agent-detail');
             document.querySelectorAll('.status-agent').forEach(el => {
                 el.classList.toggle('sel', Number(el.dataset.aid) === wtSelected);
             });
+            // Beim Oeffnen das Stats-Fenster ins Bild scrollen, statt dass es
+            // unten am Ende der langen Liste unsichtbar bleibt.
+            if (opening) {
+                setTimeout(() => {
+                    const box = currentTab === 'status'
+                        ? document.getElementById('status-agent-detail')
+                        : document.getElementById('wt-detail');
+                    if (box && !box.hidden) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }, 30);
+            }
         }
         function renderWatcherTab() {
             const grid = document.getElementById('wt-grid');
@@ -2556,8 +2571,16 @@ def index():
             }).join('') || '<div>–</div>';
             const rew = Number(d.reward || 0);
             const starter = d.has_target_starter ? '✅ Schiggi' : (d.has_starter ? '≈ (falsch?)' : '—');
+            const starterSpeciesId = Number(
+                d.starter_species_id || (d.party && d.party[0] && d.party[0].species_id) || 0
+            );
+            const starterSpriteHtml = starterSpeciesId > 0
+                ? '<img class="wt-starter-sprite" alt="Starter" src="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/versions/generation-iii/firered-leafgreen/'
+                    + starterSpeciesId + '.png" onerror="this.style.display=&quot;none&quot;">'
+                : '';
             box.innerHTML =
                 '<button class="wt-close" onclick="wtPick(' + wtSelected + ')">✕</button>'
+                + starterSpriteHtml
                 + '<h4>' + (isW ? '👁 Watcher' : 'Agent ' + String(wtSelected).padStart(2, '0')) + (d.name ? ' · ' + d.name : '') + '</h4>'
                 + '<div class="wt-sub">' + (d.training_objective || d.agent_role || '?') + ' · ' + (d.room || ('Bank ' + d.bank + ' / Map ' + d.map)) + ' @ ' + d.x + ',' + d.y + ' · Start: ' + (d.episode_start || '?') + '</div>'
                 + '<div class="wt-dgrid">'
@@ -2607,7 +2630,6 @@ def index():
             document.getElementById('graphs-view').style.display = t === 'graphs' ? 'block' : 'none';
             document.getElementById('status-view').style.display = t === 'status' ? 'block' : 'none';
             document.getElementById('watcher-view').style.display = t === 'watcher' ? 'block' : 'none';
-            document.getElementById('mapper-view').style.display = t === 'mapper' ? 'block' : 'none';
 
             const showOverlays = t === 'map';
             document.getElementById('hud').style.display = showOverlays ? 'block' : 'none';
@@ -2625,10 +2647,8 @@ def index():
             });
             // Live-Brain- und Champion-Karten gehoeren nur auf die Map. Auf der
             // Graphs-Seite stehen dieselben Zahlen jetzt in der KPI-Zeile.
-            ['learner-truth-hud', 'champion-night-card'].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) el.style.display = showOverlays ? '' : 'none';
-            });
+            const brainRow = document.getElementById('brain-summary-row');
+            if (brainRow) brainRow.style.display = showOverlays ? 'grid' : 'none';
 
             if (t === 'rooms') {
                 updateGlobalMapping(true);
@@ -3013,12 +3033,6 @@ def index():
             }
         }
 
-        function setJourneyCard(id,text,pct,done=false){
-            const card=document.getElementById('journey-'+id), val=document.getElementById('jv-'+id), fill=document.getElementById('jf-'+id);
-            if(val) val.innerText=text;
-            if(fill) fill.style.width=`${Math.max(0,Math.min(100,pct))}%`;
-            if(card){card.classList.toggle('done',!!done);if(done)card.classList.remove('locked');}
-        }
         const FLEET_DEPTH_NAMES = {
             0:'Spielanfang / Alabastia-Innen', 1:'Alabastia (außen)', 2:'Route 1',
             3:'Vertania City', 4:'Eichs Paket', 5:'Pokédex / Paket abgegeben',
@@ -3041,7 +3055,9 @@ def index():
         function renderStatusDashboard(state){
             const instances=(state.instances||[]).slice();
             const watcher=instances.find(i=>Number(i.id)===120);
-            const runners=instances.filter(i=>Number(i.id)>=0&&Number(i.id)<32)
+            // Kein festes Envs-Limit mehr - NUM_ENVS aendert sich (32/50/...),
+            // nur die Watcher-ID 120 ist reserviert und wird ausgeschlossen.
+            const runners=instances.filter(i=>Number(i.id)>=0&&Number(i.id)!==120)
                 .sort((a,b)=>Number(a.id)-Number(b.id));
             const rt=((state.training_stats||{}).run_totals)||{};
             const battle=state.battle_stats||{};
@@ -3123,6 +3139,94 @@ def index():
                 </div>`;
             }).join('');
             renderAgentDetail('status-agent-detail');
+            renderBrainProgress(state);
+        }
+
+        // --- Brain Progress: wird das Netz wirklich besser? Fest in die
+        // Status-Kacheln eingebaut (kein schwebendes Extra-Fenster). Zeigt
+        // Champion (letzte bestaetigte Bestmarke) + Live-Brain jetzt vs. vor
+        // einer Weile, farbig nach Richtung. /api/history ist klein und
+        // aendert sich nur alle 25k Steps - eigenes, selten laufendes Fetch.
+        let _bpHistCache = null, _bpHistFetchedAt = 0;
+        async function renderBrainProgress(state) {
+            const box = document.getElementById('brain-progress');
+            if (!box) return;
+            const now = Date.now();
+            if (!_bpHistCache || now - _bpHistFetchedAt > 5000) {
+                try {
+                    const r = await fetch('/api/history?t=' + now);
+                    _bpHistCache = (await r.json()).history || [];
+                    _bpHistFetchedAt = now;
+                } catch (e) { /* alte Daten weiterverwenden */ }
+            }
+            const hist = _bpHistCache || [];
+            if (!hist.length) { box.innerHTML = ''; return; }
+            const nowPoint = hist[hist.length - 1];
+            // Letzter Learner-Reset = letzter Rueckwaertssprung der Steps.
+            // Davor liegt ein anderer Trainingslauf - fuer "wird's besser"
+            // zaehlt nur die Zeit seit dem aktuellen Lauf.
+            let baseIdx = 0;
+            for (let i = hist.length - 1; i > 0; i--) {
+                if (Number(hist[i].timesteps) < Number(hist[i - 1].timesteps)) { baseIdx = i; break; }
+            }
+            // Innerhalb des aktuellen Laufs: ein Punkt von vor einer Weile
+            // (bis zu 40 Eintraege = ~1 Mio Steps zurueck), nie vor dem Reset.
+            const cmpIdx = Math.max(baseIdx, hist.length - 1 - 40);
+            const oldPoint = hist[cmpIdx];
+            const tile = (icon, big, small, deltaTxt, dir) => {
+                const cls = dir > 0 ? ' bp-up' : (dir < 0 ? ' bp-down' : '');
+                const deltaHtml = deltaTxt
+                    ? '<div class="bp-delta" style="color:' + (dir > 0 ? '#5fe08a' : dir < 0 ? '#ff7a7a' : '#8b93a7') + '">' + deltaTxt + '</div>'
+                    : '';
+                return '<div class="status-kpi' + cls + '"><div class="big">' + icon + ' ' + big + '</div><div class="small">' + small + '</div>' + deltaHtml + '</div>';
+            };
+            const bestNow = Number(nowPoint.best_episode_reward || 0);
+            const bestOld = Number((oldPoint || nowPoint).best_episode_reward || 0);
+            const bestDelta = bestNow - bestOld;
+            const avgNow = Number(nowPoint.avg_episode_reward || 0);
+            const avgOld = Number((oldPoint || nowPoint).avg_episode_reward || 0);
+            const avgDelta = avgNow - avgOld;
+            const lvlNow = Number(nowPoint.max_level || 0);
+            const lvlOld = Number((oldPoint || nowPoint).max_level || 0);
+            const champVer = 'v' + String(state.version || 0).padStart(6, '0');
+            const champSteps = Number((state.champion_speed || {}).steps || 0);
+            box.innerHTML =
+                tile('🏆', champVer, 'Champion (bestätigt, Steps ' + champSteps.toLocaleString('de-DE') + ')', '', 0)
+                + tile(
+                    '🧠', bestNow.toFixed(0), 'Bester Live-Reward jetzt',
+                    (bestDelta >= 0 ? '+' : '') + bestDelta.toFixed(0) + ' seit vorhin', Math.sign(bestDelta)
+                )
+                + tile(
+                    '📊', avgNow.toFixed(0), 'Ø Live-Reward jetzt',
+                    (avgDelta >= 0 ? '+' : '') + avgDelta.toFixed(0) + ' seit vorhin', Math.sign(avgDelta)
+                )
+                + tile(
+                    '⭐', lvlNow, 'Höchstes Level jetzt',
+                    lvlNow === lvlOld ? '' : ((lvlNow > lvlOld ? '+' : '') + (lvlNow - lvlOld) + ' seit vorhin'),
+                    Math.sign(lvlNow - lvlOld)
+                );
+
+            // Letzte 2-3 Brain-Versionen im Vergleich: pro Version der letzte
+            // (reifste) beobachtete beste Reward-Wert, chronologisch.
+            const byVersion = [];
+            for (const p of hist) {
+                const v = Number(p.version || 0);
+                if (byVersion.length && byVersion[byVersion.length - 1].v === v) {
+                    byVersion[byVersion.length - 1].p = p;
+                } else {
+                    byVersion.push({ v, p });
+                }
+            }
+            const lastVersions = byVersion.slice(-3);
+            const vEl = document.getElementById('brain-progress-versions');
+            if (vEl && lastVersions.length) {
+                vEl.innerHTML = lastVersions.map((entry, i) => {
+                    const r = Number(entry.p.best_episode_reward || 0);
+                    const prev = i > 0 ? Number(lastVersions[i - 1].p.best_episode_reward || 0) : null;
+                    const arrow = prev === null ? '' : (r > prev ? ' <span style="color:#5fe08a">▲</span>' : r < prev ? ' <span style="color:#ff7a7a">▼</span>' : ' <span style="color:#8b93a7">▬</span>');
+                    return '<div class="bp-ver-chip"><b>v' + String(entry.v).padStart(6, '0') + '</b><span>' + r.toFixed(0) + ' Reward' + arrow + '</span></div>';
+                }).join('<span class="bp-ver-sep">→</span>');
+            }
         }
         function updateFleetPanel(state){
             const f = state.fleet || {};
@@ -3172,20 +3276,16 @@ def index():
             }
         }
         function updateJourneySkills(state){
-            const st=state.training_stats||{}, rt=st.run_totals||{}, gx=state.global_exploration||{}, bs=state.battle_stats||{}, jr=state.journey_stats||{};
-            const fullRuns=Number(rt.v2_full_episodes||0), fullStarter=Number(rt.v2_full_starter||0);
-            const starterPct=fullRuns>0?100*fullStarter/fullRuns:0;
-            const battles=Number(bs.started||0), completed=Number(bs.completed||0);
-            const battlePct=battles>0?100*completed/battles:0;
-            const maps=Number(gx.known_maps||0), warps=Number(gx.known_transitions||0), progress=Number(jr.progress||0);
-            const badge1=Number(state.max_badges||0)>=1||Number(jr.badge1||0)>0;
-            setJourneyCard('starter',`${starterPct.toFixed(1)}%`,starterPct,starterPct>=90);
-            setJourneyCard('battle',`${battlePct.toFixed(1)}%`,battlePct,battles>=3&&battlePct>=70);
-            setJourneyCard('map5',`${maps}/5`,100*maps/5,maps>=5);
-            setJourneyCard('warps',`${warps}/5`,100*warps/5,warps>=5);
-            setJourneyCard('progress',`${progress}`,Math.min(100,progress*12.5),progress>=3);
-            setJourneyCard('map10',`${maps}/10`,100*maps/10,maps>=10);
-            setJourneyCard('badge1',badge1?'DONE':'LOCKED',badge1?100:0,badge1);
+            const setTxt=(id,v)=>{ const e=document.getElementById(id); if(e) e.innerText=v; };
+            const st=state.training_stats||{}, gx=state.global_exploration||{};
+            const maps=Number(gx.known_maps||0);
+            const level=Number(st.max_level||state.max_level||0);
+            const badges=Number(state.max_badges||0);
+            setTxt('jv-maps', maps);
+            setTxt('jv-level', level);
+            setTxt('jv-badges', `${badges}/8`);
+            const badgeFill=document.getElementById('jf-badges');
+            if(badgeFill) badgeFill.style.width=`${Math.min(100,100*badges/8)}%`;
         }
 
         async function loadTrainingGraphs() {
@@ -3211,12 +3311,9 @@ def index():
                 if(goc) goc.innerText='outdoor_'+Number(state.deepest_outdoor_checkpoint||0);
                 try { updateFleetPanel(state); } catch(e) {}
                 const rt=st.run_totals||{};
-                const skillRuns =
-                    Number(rt.v2_intro_episodes||0) +
-                    Number(rt.v2_stairs_episodes||0) +
-                    Number(rt.v2_exit_episodes||0);
+                const fullRuns = Number(rt.v2_full_episodes||0);
                 document.getElementById('g-episodes').innerText=
-                    `${skillRuns.toLocaleString()} / ${Number(rt.all_episodes||0).toLocaleString()}`;
+                    `${fullRuns.toLocaleString()} / ${Number(rt.all_episodes||0).toLocaleString()}`;
                 document.getElementById('g-avgreward').innerText=Number(st.avg_episode_reward||0).toFixed(1);
                 try {
                     const [tsr, cr] = await Promise.all([
@@ -3246,17 +3343,10 @@ def index():
                 const cleanLabels=cleanHist.map(p=>Number(p.timesteps||0).toLocaleString());
 
                 upsertTrainingChart('graph-success',cleanLabels,[
-                    {label:'Intro Skill',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).intro||0)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Treppen Skill',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).stairs||0)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Exit Skill',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).exit||0)),borderWidth:2,pointRadius:1,tension:.2},
                     {label:'Full Intro',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).full_intro||0)),borderWidth:2,pointRadius:1,tension:.2},
                     {label:'Full Treppe',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).full_stairs||0)),borderWidth:2,pointRadius:1,tension:.2},
                     {label:'Full Haus raus',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).full_exit||0)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Erstes Pokémon',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).starter||0)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Battle KO',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).battle||0)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Level-Up',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).level||0)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Gym / Badge',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).badge||0)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Full Pokémon',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).full_starter||0)),borderWidth:2,pointRadius:1,tension:.2},
+                    {label:'Full Schiggi',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).full_starter||0)),borderWidth:2,pointRadius:1,tension:.2},
                     {label:'Full Badge 1',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).full_badge1||0)),borderWidth:2,pointRadius:1,tension:.2}
                 ],true);
 
@@ -3754,6 +3844,8 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                 window.__trainerName = state.trainer_name || 'Alex';
                 const instances = state.instances || [];
                 latestInstances = instances;
+                const _v81cnt = document.getElementById('v81-agent-count');
+                if (_v81cnt) _v81cnt.textContent = instances.filter(i => Number(i.id) !== 120).length;
                 if (currentTab === 'watcher') renderWatcherTab();
                 renderStatusDashboard(state);
                 instances.forEach(pushHistory);
@@ -4000,6 +4092,9 @@ setInterval(refreshChampionNight,2000);refreshChampionNight();
   function restoreButton(el,label){const b=document.createElement('button');b.textContent='↩ '+label;b.onclick=()=>{el.classList.remove('pkmai-hidden');b.remove();};tray.appendChild(b);}
   function addTools(el){
     if(!el||el.dataset.pkmaiTools==='1')return;
+    // Trainer-Live und Frontier-Champion sind jetzt feste Kacheln (siehe
+    // Status-Tab "Brain Progress") - nie mehr verschieb-/minimier-/ausblendbar.
+    if(el.id==='learner-truth-hud'||el.id==='champion-night-card')return;
     el.dataset.pkmaiTools='1';el.classList.add('pkmai-movable');
     if(getComputedStyle(el).position==='static')el.style.position='relative';
     const tools=document.createElement('div');tools.className='pkmai-float-tools';

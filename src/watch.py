@@ -41,10 +41,11 @@ FPS_TITLE_INTERVAL = 0.5
 ACTION_HOLD_FRAMES = 12
 ACTION_RELEASE_FRAMES = 6
 
-# V15.3 BRAIN-MODUS: der sichtbare Watcher benutzt IMMER das aktuell trainierte
-# Netz (pokemon_model_resume.zip) end-to-end - keine alten, eingefrorenen
-# Skill-Snapshots und keine hartkodierte Skill-Umschaltung mehr. Was du siehst
-# ist exakt das Gehirn, das gerade lernt. Auf False -> altes Vault-Routing.
+# V15.3 BRAIN-MODUS: der sichtbare Watcher benutzt EIN vollstaendiges Netz
+# end-to-end, ohne Skill-Snapshots oder hartkodierte Skill-Umschaltung. Er zeigt
+# den bestaetigten Champion: der rohe Learner kann waehrend eines PPO-Blocks
+# bereits gelernte Intro-Faehigkeiten zeitweise vergessen. Nach jeder echten
+# Champion-Befoerderung wird das neue Gesamt-Brain automatisch nachgeladen.
 WATCHER_BRAIN_MODE = True
 
 # Reload / RAM
@@ -60,11 +61,36 @@ WATCHER_REWARD_DEBUG = os.environ.get(
 ).strip().lower() not in {"0", "false", "no", "off"}
 WATCHER_REWARD_IDLE_LOG_INTERVAL = 100
 
-# Live Map Tiling (nur RAM-Koordinaten; keine Screenshots)
+TARGET_STARTER_SPECIES = 7
+STARTER_SPECIES = {1, 4, 7}
+INTERACTION_SPAM_PENALTY_AFTER = 24
+INTERACTION_SPAM_RESET_AT = 64
+INTERACTION_SPAM_PENALTY = -0.5
+
+
+def detect_starter_species(party):
+    """Return only a validated Kanto starter species from party telemetry."""
+    for mon in party or []:
+        species = int(mon.get("species_id", 0) or 0)
+        if (
+            species in STARTER_SPECIES
+            and int(mon.get("level", 0) or 0) >= 5
+            and int(mon.get("max_hp", 0) or 0) > 0
+        ):
+            return species
+    return 0
+
+
+def watcher_starter_reward(species):
+    if int(species) == TARGET_STARTER_SPECIES:
+        return 1000.0
+    if int(species) in STARTER_SPECIES:
+        return -500.0
+    return 0.0
+
+# Live Map Tiling zeichnet ausschliesslich. Entdeckungen veraendern weder den
+# Watcher-Reward noch den PPO-Reward.
 MAPPING_GRID = True
-MAPPING_EDGE_REWARD = 0.35
-MAPPING_MAP_REWARD = 20.0
-MAPPING_TRANSITION_REWARD = 30.0
 WATCHER_MAPPING_FILE = os.path.join(RUNTIME_DIR, "watcher_mapping.json")
 WATCHER_FRAME_FILE = os.path.join(RUNTIME_DIR, "watcher.jpg")
 
@@ -100,11 +126,11 @@ STAGE_SKILLS_USING_VAULT = {"intro", "stairs", "exit", "starter", "progress"}
 
 def get_watcher_model_path(skill=None):
     if WATCHER_BRAIN_MODE:
-        # Immer das laufende Lern-Netz. Fallback nur, falls resume noch fehlt.
-        if os.path.exists(RESUME_MODEL):
-            return RESUME_MODEL
+        # Ein einziges, vollstaendiges Champion-Netz fuer den gesamten Lauf.
         if os.path.exists(BEST_MODEL):
             return BEST_MODEL
+        if os.path.exists(RESUME_MODEL):
+            return RESUME_MODEL
         return LATEST_MODEL
 
     if skill in STAGE_SKILLS_USING_VAULT:
@@ -616,29 +642,26 @@ def build_mapping_preview(
 
     xs = [p[0] for p in map_tiles]
     ys = [p[1] for p in map_tiles]
-    min_x, max_x = min(xs), max(xs)
-    min_y, max_y = min(ys), max(ys)
 
-    pad_tiles = 2
-    min_x -= pad_tiles
-    min_y -= pad_tiles
-    max_x += pad_tiles
-    max_y += pad_tiles
-
-    span_x = max(1, max_x - min_x)
-    span_y = max(1, max_y - min_y)
-    margin = 34
-    sx = (width - margin * 2) / span_x
-    sy = (height - margin * 2) / span_y
-    scale = max(3.0, min(28.0, min(sx, sy)))
-
-    cx = (min_x + max_x) / 2.0
-    cy = (min_y + max_y) / 2.0
+    # V15.3: stabile Kamera statt Auto-Fit. Vorher wurden cx/cy/scale JEDEN
+    # Frame neu aus der Bounding-Box ALLER bekannten Tiles berechnet - sobald
+    # der Agent eine noch unbekannte Kachel betrat, aenderte sich die Box und
+    # die GESAMTE Karte sprang (neues Zentrum, neuer Zoom). Jede gruene Kachel
+    # "wanderte" bei jedem Schritt durch unerkundetes Gebiet. Jetzt: feste
+    # Kachelgroesse, Kamera zentriert immer auf die aktuelle Spielerposition -
+    # wie ein mitlaufender Minimap-Ausschnitt, kein Springen mehr.
+    scale = 20.0
+    cx, cy = float(x), float(y)
 
     def screen_pos(px, py):
         vx = int(width / 2 + (px - cx) * scale)
         vy = int(height / 2 + (py - cy) * scale)
         return vx, vy
+
+    half_tiles_x = int(width / 2 / scale) + 1
+    half_tiles_y = int(height / 2 / scale) + 1
+    min_x, max_x = int(cx) - half_tiles_x, int(cx) + half_tiles_x
+    min_y, max_y = int(cy) - half_tiles_y, int(cy) + half_tiles_y
 
     if MAPPING_GRID and scale >= 8:
         grid_color = (31, 36, 49)
@@ -822,6 +845,12 @@ def main():
         inttype=retro.data.Integrations.CUSTOM_ONLY,
         render_mode=None,
     )
+    # Wie im Trainer: State.NONE besitzt keinen Reset-Anker. Einen echten
+    # Kaltstart einmal sichern, damit jeder Watcher-Reset garantiert wieder
+    # vor Intro und Namensvergabe beginnt.
+    env.reset()
+    env.initial_state = bytes(env.em.get_state())
+    env.statename = "v16_beginning.state"
     env.auto_render = False
     if hasattr(env, "viewer"):
         env.viewer = None
@@ -904,6 +933,11 @@ def main():
     current_action = no_action
     frame_counter = 0
     total_steps = 0
+    route_steps = 0
+    battle_steps = 0
+    # PPO zaehlt jede Entscheidung; route_steps pausiert im Kampf. Die
+    # Episode-Notbremsen verwenden deshalb einen Route-Bezugspunkt.
+    watcher_episode_start_route_step = 0
 
     bank = 0
     map_id = 0
@@ -937,7 +971,7 @@ def main():
     last_global_nav_reload = 0.0
 
     watcher_mapping_last_coord = None
-    watcher_mapping_reward = 0.0
+    watcher_mapping_changed = False
     watcher_mapping_event = "-"
 
     # Screenshot-Tile-Mapping ist deaktiviert. Der Watcher zeichnet nur noch
@@ -986,8 +1020,13 @@ def main():
     watcher_last_level = 0
     watcher_last_badges = 0
     watcher_has_starter = False
+    watcher_has_target_starter = False
+    watcher_starter_species = 0
+    watcher_starter_obtained_step = None
     watcher_stuck_counter = 0
     watcher_last_progress_signature = None
+    watcher_interaction_anchor = None
+    watcher_interaction_count = 0
     watcher_room_steps = 0
     watcher_last_room = None
 
@@ -1029,13 +1068,13 @@ def main():
         action_cycle_frames = ACTION_HOLD_FRAMES + ACTION_RELEASE_FRAMES
         if frame_counter % action_cycle_frames == 0:
             total_steps += 1
+            if watcher_in_battle:
+                battle_steps += 1
+            else:
+                route_steps += 1
 
             now_model = time.perf_counter()
-            party_has_starter = any(
-                int(mon.get("level", 0) or 0) >= 5
-                and int(mon.get("max_hp", 0) or 0) > 0
-                for mon in (watcher_party or [])
-            )
+            party_has_starter = bool(detect_starter_species(watcher_party))
 
             # V10.32: RAUM-basiertes Routing statt monotoner Flags.
             # Problem vorher: Treppen-Skill bringt den Watcher 2F->1F, dann exit;
@@ -1097,7 +1136,8 @@ def main():
 
             watcher_skill = desired_skill
             if WATCHER_BRAIN_MODE:
-                # Kein Skill-Routing mehr - ein Netz fuer den ganzen Lauf.
+                # Ein gemeinsames Netz fuer den kompletten Lauf; der Watcher
+                # verwendet keinerlei Skill-Snapshots.
                 watcher_skill = "brain"
 
             if (
@@ -1408,7 +1448,7 @@ def main():
         # -------------------------------------------------------------
         # LIVE MAP TILING / MAPPING EVENT
         # -------------------------------------------------------------
-        watcher_mapping_reward = 0.0
+        watcher_mapping_changed = False
         watcher_mapping_event = "-"
 
         if (
@@ -1424,10 +1464,8 @@ def main():
 
             if map_key not in watcher_known_maps:
                 watcher_known_maps.add(map_key)
-                watcher_mapping_reward += MAPPING_MAP_REWARD
-                watcher_mapping_event = (
-                    f"NEW MAP +{MAPPING_MAP_REWARD:.2f}"
-                )
+                watcher_mapping_changed = True
+                watcher_mapping_event = "NEW MAP"
 
             if watcher_mapping_last_coord is not None:
                 pb, pm, px, py = watcher_mapping_last_coord
@@ -1439,10 +1477,8 @@ def main():
                         )
                         if edge_key not in watcher_known_edges:
                             watcher_known_edges.add(edge_key)
-                            watcher_mapping_reward += MAPPING_EDGE_REWARD
-                            watcher_mapping_event = (
-                                f"NEW EDGE +{MAPPING_EDGE_REWARD:.2f}"
-                            )
+                            watcher_mapping_changed = True
+                            watcher_mapping_event = "NEW EDGE"
                 else:
                     transition_key = _transition_key(
                         pb, pm, px, py,
@@ -1455,17 +1491,12 @@ def main():
                         watcher_known_transitions.add(
                             transition_key
                         )
-                        watcher_mapping_reward += (
-                            MAPPING_TRANSITION_REWARD
-                        )
-                        watcher_mapping_event = (
-                            "NEW TRANSITION "
-                            f"+{MAPPING_TRANSITION_REWARD:.2f}"
-                        )
+                        watcher_mapping_changed = True
+                        watcher_mapping_event = "NEW TRANSITION"
 
             watcher_mapping_last_coord = coord
 
-            if watcher_mapping_reward > 0.0:
+            if watcher_mapping_changed:
                 save_watcher_mapping(
                     watcher_known_tiles,
                     watcher_known_edges,
@@ -1492,13 +1523,8 @@ def main():
             if gameplay_ready:
                 watcher_gameplay_ready = True
             watcher_in_battle = in_battle
-            # Nur Anzeige; der Watcher trainiert nicht. Spiegelbild der
-            # winzigen Zeitgebuehr aus PokemonFireRedEnv.
-            watcher_step_reward = -0.002
-            watcher_reward_events.append({
-                "reason": "Zeitkosten",
-                "amount": -0.002,
-            })
+            # Nur Anzeige; normale Aktionen sind wie im V16-Training neutral.
+            watcher_step_reward = 0.0
 
             # Intro-/Namensvergabe-Rewards nur fuer die Live-Anzeige.
             if not gameplay_ready:
@@ -1530,12 +1556,12 @@ def main():
                     if (
                         intro_diff >= 10.0
                         and intro_key not in watcher_intro_seen_states
-                        and watcher_intro_novelty_reward_total < 25.0
+                        and watcher_intro_novelty_reward_total < 20.0
                     ):
-                        intro_bonus = 1.0 if intro_diff >= 28.0 else 0.5
+                        intro_bonus = 2.0
                         intro_bonus = min(
                             intro_bonus,
-                            25.0 - watcher_intro_novelty_reward_total
+                            20.0 - watcher_intro_novelty_reward_total
                         )
                         watcher_step_reward += intro_bonus
                         watcher_reward_events.append({
@@ -1560,12 +1586,37 @@ def main():
                             "amount": -0.03,
                         })
 
+                # V15.3: Bisher gab es fuers Intro nur wachsende Mini-Strafen,
+                # nie einen Reset - der Watcher konnte theoretisch endlos in
+                # der Namensvergabe haengen bleiben, waehrend Reward immer
+                # weiter ins Minus lief. Der Trainer hat dafuer laengst einen
+                # harten Cap (900 Steps exakt derselbe Screen) - dieselbe
+                # Notbremse jetzt auch hier. NICHT total_steps verwenden: das
+                # ist ein Lebenszeit-Zaehler seit Watcher-Start, kein Steps-
+                # in-diesem-Intro-Zaehler - wuerde sonst eine Reset-Schleife
+                # ausloesen sobald die Session einmal 1800 Steps ueberschritt.
+                if watcher_intro_same_screen_steps >= 900:
+                    env.reset()
+                    watcher_image_frames.clear()
+                    print(
+                        "🔄 Watcher Intro-Reset -> Spielanfang "
+                        f"(gleicher Screen={watcher_intro_same_screen_steps}, "
+                        f"Steps={total_steps})"
+                    )
+                    watcher_intro_same_screen_steps = 0
+                    watcher_intro_last_thumb = None
+                    watcher_intro_seen_states = set()
+                    watcher_intro_novelty_reward_total = 0.0
+                    watcher_episode_reward = 0.0
+                    watcher_step_reward = 0.0
+                    watcher_episode_start_route_step = route_steps
+
             elif not watcher_intro_complete_rewarded:
                 watcher_intro_complete_rewarded = True
-                watcher_step_reward += 35.0
+                watcher_step_reward += 100.0
                 watcher_reward_events.append({
                     "reason": "Intro abgeschlossen",
-                    "amount": 35.0,
+                    "amount": 100.0,
                 })
 
             if gameplay_ready and in_battle == 0:
@@ -1601,8 +1652,16 @@ def main():
                                 _start_room_stable = 1
                             if _start_room_stable >= 3:
                                 watcher_initial_indoor_room = current_indoor_room
-                    elif current_indoor_room != watcher_initial_indoor_room:
+                    elif (
+                        current_indoor_room != watcher_initial_indoor_room
+                        and not watcher_stairs_done
+                    ):
                         watcher_stairs_done = True
+                        watcher_step_reward += 150.0
+                        watcher_reward_events.append({
+                            "reason": "Treppe erreicht",
+                            "amount": 150.0,
+                        })
 
                 # Haus verlassen: Indoor -> FireRed Overworld Bank 3.
                 if (
@@ -1615,10 +1674,10 @@ def main():
                     watcher_stairs_done = True
                     watcher_first_outdoor_map = map_id
                     watcher_outdoor_entry_y = y
-                    watcher_step_reward += 52.0
+                    watcher_step_reward += 300.0
                     watcher_reward_events.append({
                         "reason": "Spielerhaus verlassen",
-                        "amount": 52.0,
+                        "amount": 300.0,
                     })
 
                 if bank == 3 and watcher_first_outdoor_map is None:
@@ -1635,11 +1694,6 @@ def main():
                     and y <= watcher_outdoor_entry_y - 5
                 ):
                     watcher_north_grass_rewarded = True
-                    watcher_step_reward += 75.0
-                    watcher_reward_events.append({
-                        "reason": "Norden/Gras erreicht",
-                        "amount": 75.0,
-                    })
 
                 # Erste neue Aussenwelt-Map.
                 if (
@@ -1649,42 +1703,56 @@ def main():
                     and map_id != watcher_first_outdoor_map
                 ):
                     watcher_next_outdoor_map_rewarded = True
-                    watcher_step_reward += 150.0
-                    watcher_reward_events.append({
-                        "reason": "Neue Aussenwelt-Map",
-                        "amount": 150.0,
-                    })
 
                 map_key = (bank, map_id)
                 if map_key not in watcher_visited_maps:
                     watcher_visited_maps.add(map_key)
-                    watcher_step_reward += 10.0
+                    # V16: einmal pro Episode fuer eine neue Map. Einzelne
+                    # Koordinaten/Felder bleiben immer reward-neutral.
+                    watcher_step_reward += 25.0
                     watcher_reward_events.append({
                         "reason": f"Neue Map {bank}:{map_id}",
-                        "amount": 10.0,
+                        "amount": 25.0,
                     })
 
                 if coord not in watcher_seen_coords:
                     watcher_seen_coords.add(coord)
-                    watcher_step_reward += 0.25
-                    watcher_reward_events.append({
-                        "reason": "Neue Koordinate",
-                        "amount": 0.25,
-                    })
 
-            # Party-Reader und p1_level sind beide gueltige Starter-Signale.
+            # Starter nur anhand der validierten Party-Art bewerten. Das alte
+            # reine Level>=5-Signal gab auch Bisasam/Glumanda faelschlich +1000.
+            detected_starter_species = detect_starter_species(watcher_party)
             live_party_level = max(
                 [int(mon.get("level", 0) or 0) for mon in (watcher_party or [])]
                 or [0]
             )
             effective_level = max(p1_level, live_party_level)
-            if not watcher_has_starter and effective_level >= 5:
+            wrong_starter_detected = False
+            if not watcher_has_starter and detected_starter_species:
                 watcher_has_starter = True
-                watcher_step_reward += 100.0
-                watcher_reward_events.append({
-                    "reason": "Starter erhalten",
-                    "amount": 100.0,
-                })
+                watcher_starter_species = detected_starter_species
+                watcher_has_target_starter = (
+                    detected_starter_species == TARGET_STARTER_SPECIES
+                )
+                watcher_starter_obtained_step = route_steps
+                starter_reward = watcher_starter_reward(
+                    detected_starter_species
+                )
+                watcher_step_reward += starter_reward
+                if watcher_has_target_starter:
+                    watcher_reward_events.append({
+                        "reason": "Schiggi erhalten",
+                        "amount": starter_reward,
+                    })
+                else:
+                    wrong_starter_detected = True
+                    watcher_reward_events.append({
+                        "reason": (
+                            "Bisasam gewählt"
+                            if detected_starter_species == 1
+                            else "Glumanda gewählt"
+                        ),
+                        "amount": starter_reward,
+                    })
                 watcher_last_level = effective_level
             elif watcher_has_starter and effective_level > watcher_last_level:
                 level_bonus = (
@@ -1702,7 +1770,7 @@ def main():
             if badge_count > watcher_last_badges:
                 badge_bonus = (
                     badge_count - watcher_last_badges
-                ) * 500.0
+                ) * 2500.0
                 watcher_step_reward += badge_bonus
                 watcher_reward_events.append({
                     "reason": f"Orden {watcher_last_badges}->{badge_count}",
@@ -1734,6 +1802,32 @@ def main():
                 else:
                     watcher_stuck_counter += 1
 
+                interaction_anchor = (
+                    bank,
+                    map_id,
+                    x,
+                    y,
+                    int(watcher_intro_complete_rewarded),
+                    int(watcher_stairs_done),
+                    int(watcher_left_house_rewarded),
+                    int(watcher_has_starter),
+                    effective_level,
+                    badge_count,
+                    in_battle,
+                )
+                if interaction_anchor != watcher_interaction_anchor:
+                    watcher_interaction_anchor = interaction_anchor
+                    watcher_interaction_count = 0
+
+                if current_action_name == "A" and in_battle == 0:
+                    watcher_interaction_count += 1
+                    if watcher_interaction_count > INTERACTION_SPAM_PENALTY_AFTER:
+                        watcher_step_reward += INTERACTION_SPAM_PENALTY
+                        watcher_reward_events.append({
+                            "reason": "A-Interaktion ohne Fortschritt",
+                            "amount": INTERACTION_SPAM_PENALTY,
+                        })
+
                 if in_battle == 0 and watcher_stuck_counter >= 60:
                     watcher_step_reward -= 0.03
                     watcher_reward_events.append({
@@ -1758,12 +1852,11 @@ def main():
             else:
                 watcher_stuck_counter = 0
                 watcher_last_progress_signature = None
+                watcher_interaction_anchor = None
+                watcher_interaction_count = 0
 
             watcher_episode_reward += watcher_step_reward
-            watcher_has_reward_event = any(
-                event["reason"] != "Zeitkosten"
-                for event in watcher_reward_events
-            )
+            watcher_has_reward_event = bool(watcher_reward_events)
 
             if WATCHER_REWARD_DEBUG and (
                 watcher_has_reward_event
@@ -1774,7 +1867,7 @@ def main():
                     for event in watcher_reward_events
                 )
                 event_label = (
-                    "EREIGNIS" if watcher_has_reward_event else "nur Zeitkosten"
+                    "EREIGNIS" if watcher_has_reward_event else "neutral"
                 )
                 print(
                     f"💰 WATCHER REWARD [{event_label}] "
@@ -1798,30 +1891,57 @@ def main():
             # wird dabei staendig auf 0 zurueckgesetzt, ohne dass je ein Starter
             # geholt wird. Absolute Notbremse unabhaengig vom Raumwechsel.
             _no_starter_hard_cap = (
-                not party_has_starter and total_steps >= 8000
+                not party_has_starter
+                and route_steps - watcher_episode_start_route_step >= 8000
+            )
+            # Dieselbe Raum-Pendel-Luecke gibt es auch MIT Starter: Labor
+            # verlassen (bank!=3) haengt fest, weil watcher_room_steps beim
+            # Pendeln zwischen Raeumen immer wieder auf 0 faellt. Absolute
+            # Notbremse: X Schritte nach Erhalt des Starters immer noch nicht
+            # draussen -> Reset (spiegelt starter_exit_stall im Trainer).
+            _no_exit_hard_cap = (
+                party_has_starter
+                and bank != 3
+                and watcher_starter_obtained_step is not None
+                and route_steps - watcher_starter_obtained_step >= 6000
+            )
+            _interaction_spam_reset = (
+                watcher_interaction_count >= INTERACTION_SPAM_RESET_AT
             )
             if (
                 gameplay_ready
                 and in_battle == 0
                 and (
+                    wrong_starter_detected
+                    or
+                    _interaction_spam_reset
+                    or
                     watcher_stuck_counter >= _stuck_cap
                     or watcher_room_steps >= _room_cap
                     or _no_starter_hard_cap
+                    or _no_exit_hard_cap
                 )
             ):
                 env.reset()
                 watcher_image_frames.clear()
                 print(
-                    f"🔄 Watcher Anti-Loop Reset -> Spielanfang "
-                    f"(still={watcher_stuck_counter}, room={watcher_room_steps}, "
+                    f"🔄 Watcher Reset -> Spielanfang "
+                    f"({'falscher Starter' if wrong_starter_detected else 'A-Interaktionsloop' if _interaction_spam_reset else 'Anti-Loop'}, "
+                    f"still={watcher_stuck_counter}, room={watcher_room_steps}, "
                     f"Episode {watcher_episode_reward:.2f})"
                 )
 
                 watcher_step_reward = 0.0
                 watcher_episode_reward = 0.0
                 watcher_reward_events = [{
-                    "reason": "Anti-Loop Reset",
-                    "amount": 0.0,
+                    "reason": (
+                        "Falscher Starter: -500, neu gestartet"
+                        if wrong_starter_detected
+                        else "A-Interaktionsloop: neu gestartet"
+                        if _interaction_spam_reset
+                        else "Anti-Loop Reset"
+                    ),
+                    "amount": -500.0 if wrong_starter_detected else 0.0,
                 }]
                 watcher_has_reward_event = True
                 watcher_seen_coords.clear()
@@ -1829,6 +1949,10 @@ def main():
                 watcher_last_level = 0
                 watcher_last_badges = 0
                 watcher_has_starter = False
+                watcher_has_target_starter = False
+                watcher_starter_species = 0
+                watcher_starter_obtained_step = None
+                watcher_episode_start_route_step = route_steps
                 watcher_stuck_counter = 0
                 watcher_room_steps = 0
                 watcher_last_room = None
@@ -1839,6 +1963,8 @@ def main():
                 watcher_intro_novelty_reward_total = 0.0
                 watcher_intro_complete_rewarded = False
                 watcher_last_progress_signature = None
+                watcher_interaction_anchor = None
+                watcher_interaction_count = 0
 
                 watcher_left_house_rewarded = False
                 watcher_stairs_done = False
@@ -1909,7 +2035,10 @@ def main():
                     "y": y,
                     "path": recent_path,
                     "room": f"Bank {bank} / Map {map_id}",
-                    "steps": total_steps,
+                    "steps": route_steps,
+                    "route_steps": route_steps,
+                    "battle_steps": battle_steps,
+                    "ppo_steps": total_steps,
                     "reward": round(watcher_episode_reward, 2),
                     "step_reward": round(watcher_step_reward, 4),
                     "reward_has_event": bool(watcher_has_reward_event),
@@ -1918,6 +2047,8 @@ def main():
                     "level": p1_level,
                     "party": watcher_party,
                     "has_starter": bool(watcher_has_starter),
+                    "has_target_starter": bool(watcher_has_target_starter),
+                    "starter_species_id": int(watcher_starter_species),
                     "active_skill": watcher_skill,
                     "loaded_model": loaded_model_name,
                     "model_version": int(loaded_version),
@@ -2044,20 +2175,12 @@ def main():
                 cv2.LINE_AA
             )
 
-            if in_battle:
-                _state_txt = "IM KAMPF"
-            elif bank == 3:
-                _state_txt = "Aussenwelt"
-            else:
-                _state_txt = f"Innen (Bank {bank})"
-            _kaempfe = int(watcher_battle_stats.get("completed", 0))
             cv2.putText(
                 canvas,
                 (
-                    f"Bank {bank} / Map {map_id}  ({x}, {y})"
-                    f"   -   {_state_txt}"
-                    f"   -   Kaempfe {_kaempfe}"
-                    f"   -   Skill: {str(watcher_skill).upper()}"
+                    f"LAUF: {route_steps} WEG-STEPS"
+                    f"   |   {battle_steps} KAMPF-STEPS"
+                    f"   |   MAP {bank}/{map_id} @ {x},{y}"
                 ),
                 (16, 55),
                 cv2.FONT_HERSHEY_SIMPLEX,
@@ -2105,7 +2228,7 @@ def main():
                 (40, 220, 80)
                 if watcher_step_reward > 0.0
                 else (60, 90, 255)
-                if watcher_step_reward < -0.0021
+                if watcher_step_reward < 0.0
                 else (170, 175, 185)
             )
             reward_event_text = " | ".join(
@@ -2116,7 +2239,8 @@ def main():
             cv2.putText(
                 canvas,
                 (
-                    f"Steps {total_steps}   Level {p1_level}   "
+                    f"Route {route_steps}   Kampf {battle_steps}   Aktionen {total_steps}   "
+                    f"Level {p1_level}   "
                     f"Badges {badge_count}/8   REWARD Δ {watcher_step_reward:+.3f}   "
                     f"EPISODE Σ {watcher_episode_reward:+.2f}   "
                     f"EVENT {'JA' if watcher_has_reward_event else 'NEIN'}"

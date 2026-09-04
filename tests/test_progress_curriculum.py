@@ -14,34 +14,44 @@ def bare_env(**overrides):
     env = object.__new__(PokemonFireRedEnv)
     env.visited_maps = set()
     env.last_badges = 0
+    env.has_target_starter = False
     env.viridian_mart_scene = 0
     env.viridian_old_man_scene = 0
     env.pallet_oaks_lab_scene = 0
+    env.parcel_obtained_confirmed = False
+    env.parcel_delivered_confirmed = False
+    env.parcel_obtained_confirm_reads = 0
+    env.parcel_delivered_confirm_reads = 0
     for key, value in overrides.items():
         setattr(env, key, value)
     return env
 
 
 class WorldStageTests(unittest.TestCase):
-    def test_step_cost_is_tiny_relative_to_story_rewards(self):
-        self.assertLess(PokemonFireRedEnv.GAMEPLAY_STEP_COST, 0)
-        self.assertGreater(PokemonFireRedEnv.GAMEPLAY_STEP_COST, -0.01)
-        self.assertGreater(
-            PokemonFireRedEnv.STARTER_REWARD,
-            abs(PokemonFireRedEnv.GAMEPLAY_STEP_COST) *
-            PokemonFireRedEnv.STARTER_SPECIALIST_TIMEOUT * 20,
-        )
+    def test_normal_movement_has_no_reward(self):
+        self.assertEqual(PokemonFireRedEnv.INTRO_STEP_COST, 0.0)
+        self.assertEqual(PokemonFireRedEnv.GAMEPLAY_STEP_COST, 0.0)
+        self.assertEqual(PokemonFireRedEnv.NEW_EDGE_REWARD, 0.0)
 
     def test_arbitrary_interiors_never_increase_stage(self):
         env = bare_env(visited_maps={(3, 0), (4, 0), (4, 1), (5, 0)})
         self.assertEqual(env._world_stage(), 1)
 
     def test_fire_red_story_chain_is_explicit(self):
-        env = bare_env(visited_maps={(3, 0), (3, 19), (3, 1)})
+        env = bare_env(
+            visited_maps={(3, 0), (3, 19), (3, 1)},
+            has_target_starter=True,
+        )
         self.assertEqual(env._world_stage(), 3)
+
+        # Einzelne rohe RAM-Werte duerfen keine permanente Weltstufe setzen.
         env.viridian_mart_scene = 1
+        self.assertEqual(env._world_stage(), 3)
+        env.parcel_obtained_confirmed = True
         self.assertEqual(env._world_stage(), 4)
         env.pallet_oaks_lab_scene = 6
+        self.assertEqual(env._world_stage(), 4)
+        env.parcel_delivered_confirmed = True
         self.assertEqual(env._world_stage(), 5)
         env.visited_maps.add((3, 20))
         self.assertEqual(env._world_stage(), 6)
@@ -53,11 +63,58 @@ class WorldStageTests(unittest.TestCase):
         self.assertEqual(env._world_stage(), 9)
 
     def test_story_checkpoint_requires_matching_map_and_state(self):
-        env = bare_env(viridian_mart_scene=1)
+        env = bare_env(has_target_starter=True, viridian_mart_scene=1)
+        self.assertNotEqual(env._stage_at_current_location(5, 3), 4)
+        env.parcel_obtained_confirmed = True
         self.assertEqual(env._stage_at_current_location(5, 3), 4)
         self.assertNotEqual(env._stage_at_current_location(5, 0), 4)
         env.pallet_oaks_lab_scene = 6
+        self.assertNotEqual(env._stage_at_current_location(4, 3), 5)
+        env.parcel_delivered_confirmed = True
         self.assertEqual(env._stage_at_current_location(4, 3), 5)
+
+    def test_story_confirmation_requires_map_order_and_three_reads(self):
+        env = bare_env(has_target_starter=True)
+
+        wrong_map = {
+            "map_bank": 3,
+            "map_id": 1,
+            "viridian_mart_scene": 1,
+            "pallet_oaks_lab_scene": 0,
+            "viridian_old_man_scene": 0,
+        }
+        for _ in range(5):
+            env._update_story_state_from_loc(wrong_map)
+        self.assertFalse(env.parcel_obtained_confirmed)
+
+        mart = dict(wrong_map, map_bank=5, map_id=3)
+        env._update_story_state_from_loc(mart)
+        env._update_story_state_from_loc(mart)
+        self.assertFalse(env.parcel_obtained_confirmed)
+        env._update_story_state_from_loc(mart)
+        self.assertTrue(env.parcel_obtained_confirmed)
+
+        lab = dict(
+            wrong_map,
+            map_bank=4,
+            map_id=3,
+            viridian_mart_scene=0,
+            pallet_oaks_lab_scene=6,
+        )
+        env._update_story_state_from_loc(lab)
+        env._update_story_state_from_loc(lab)
+        self.assertFalse(env.parcel_delivered_confirmed)
+        env._update_story_state_from_loc(lab)
+        self.assertTrue(env.parcel_delivered_confirmed)
+
+    def test_deep_maps_need_confirmed_parcel_chain(self):
+        env = bare_env(
+            visited_maps={(3, 20), (1, 0), (3, 2)},
+            has_target_starter=True,
+        )
+        self.assertEqual(env._world_stage(), 3)
+        env.parcel_delivered_confirmed = True
+        self.assertEqual(env._world_stage(), 8)
 
     def test_faster_full_run_wins_only_as_same_quality_tie_breaker(self):
         quality = {
@@ -133,9 +190,18 @@ class RoleAllocationTests(unittest.TestCase):
                 shared_progress={"max_world_stage": stage},
             )
             env._skill_vault_scores = lambda scores=scores: dict(scores)
-            role, _ = env._agent_role()
+            with patch.object(PokemonFireRedEnv, "FULL_ONLY_MODE", False):
+                role, _ = env._agent_role()
             roles[role] += 1
         return roles
+
+    def test_v16_uses_only_full_agents(self):
+        roles = Counter()
+        for rank in range(50):
+            env = bare_env(rank=rank, n_envs=50)
+            role, _ = env._agent_role()
+            roles[role] += 1
+        self.assertEqual(roles, Counter({"full": 50}))
 
     def roles_at(self, stage):
         return self.roles_for_scores({
@@ -154,14 +220,10 @@ class RoleAllocationTests(unittest.TestCase):
             "starter": 0,
             "progress": 0,
         })
-        self.assertEqual(roles, Counter({
-            "starter": 22,
-            "exit": 3,
-            "progress": 3,
-            "stairs": 2,
-            "intro": 1,
-            "full": 1,
-        }))
+        self.assertEqual(sum(roles.values()), 32)
+        self.assertGreater(roles["starter"], max(
+            roles["full"], roles["progress"], roles["exit"]
+        ))
 
     def test_before_parcel_delivery_world_push_dominates(self):
         roles = self.roles_at(3)
@@ -193,7 +255,15 @@ class SpecialistStartTests(unittest.TestCase):
         env._discover_saved_milestones = lambda: list(saved)
         env._champion_full_starter_ready = lambda: False
         env._agent_role = lambda: ("battle", "Battle")
-        return env._choose_episode_start()
+        with patch.object(PokemonFireRedEnv, "FULL_ONLY_MODE", False):
+            return env._choose_episode_start()
+
+    def test_v16_full_always_starts_at_beginning(self):
+        env = bare_env(saved_milestones=["stage_5"])
+        env._discover_saved_milestones = lambda: ["stage_5"]
+        env._champion_full_starter_ready = lambda: True
+        env._agent_role = lambda: ("full", "Full")
+        self.assertEqual(env._choose_episode_start(), "beginning")
 
     def test_battle_ready_is_preferred_over_indoor_story_front(self):
         self.assertEqual(

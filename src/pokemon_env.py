@@ -36,14 +36,16 @@ os.makedirs(STATS_DIR, exist_ok=True)
 
 
 class PokemonFireRedEnv(gym.Env):
-    BUILD_TAG = "V15_STAGE_CURRICULUM_FRAMESTACK"
+    BUILD_TAG = "V16_CLEAN_FULL_BRAIN"
     metadata = {"render_modes": []}
 
     # Training V2 nutzt feste Spezialisten statt einer 90/10-Zufallsquote.
 
     # Fuer einen langen 4-5h-Lauf deutlich laengere Episoden als bisher.
     # V10.19_1_EARLY_ROUTE_SAFE
-    MAX_EPISODE_STEPS = 65536
+    MAX_EPISODE_STEPS = 12000
+    MAX_EPISODE_BATTLE_STEPS = 6000
+    MAX_SINGLE_BATTLE_STEPS = 2000
     # Aktionsausfuehrung: Taste halten + neutrale Frames. 16 Halte-Frames sind
     # noetig, damit ein D-Pad-Druck wirklich eine Kachel laeuft statt die Figur
     # nur zu drehen; die Ruhe-Frames trennen aufeinanderfolgende Menue-Drücke
@@ -98,8 +100,10 @@ class PokemonFireRedEnv(gym.Env):
     # kostet gleich viel. So lohnt sich weder Herumlaufen noch gegen Waende
     # laufen/Menu-Camping. Echte Ziele bleiben um Groessenordnungen staerker
     # (Starter ~1550, neue Map 250, Weltstufe >=600).
-    INTRO_STEP_COST = -0.01
-    GAMEPLAY_STEP_COST = -0.002
+    INTRO_STEP_COST = 0.0
+    GAMEPLAY_STEP_COST = 0.0
+    INTRO_NOVELTY_REWARD = 2.0
+    INTRO_NOVELTY_REWARD_CAP = 20.0
     # Meilenstein-Spezialisten (intro/stairs/exit/starter + full vor dem Starter)
     # werden auf Tempo bewertet: fester Zielbonus minus feste Kosten pro Step.
     # Schnellster Lauf = hoechster Reward -> PPO lernt die kuerzeste Route.
@@ -117,11 +121,20 @@ class PokemonFireRedEnv(gym.Env):
     START_REPEAT_PENALTY_2 = 0.0
     START_REPEAT_PENALTY_3PLUS = 0.0
     START_SPAM_RESET_STEPS = 6
+    # Dialoge brauchen mehrere A-Druecke. Erst deutlich darueber gilt A auf
+    # derselben Kachel ohne Story-/Kampf-/Level-Fortschritt als Regal-/NPC-Loop.
+    INTERACTION_SPAM_PENALTY_AFTER = 24
+    INTERACTION_SPAM_RESET_AT = 64
+    INTERACTION_SPAM_PENALTY = -0.5
 
-    NEW_EDGE_REWARD = 0.10
-    NEW_MAP_REWARD = 250.0
-    EPISODE_NEW_MAP_REWARD = 0.0
-    NEW_GLOBAL_DEPTH_REWARD = 300.0
+    # PWhiddy-Stil: +1 fuer jede fleet-weit noch nie gelaufene Kachel-Kante,
+    # danach nie wieder (REPLAY/PENALTY-Konstanten bleiben bei 0.0). Nicht
+    # farmbar - _claim_shared() gibt pro Kante genau einmal ueber alle Agenten
+    # "wahr" zurueck, siehe Zeile ~4109.
+    NEW_EDGE_REWARD = 1.0
+    NEW_MAP_REWARD = 500.0
+    EPISODE_NEW_MAP_REWARD = 25.0
+    NEW_GLOBAL_DEPTH_REWARD = 1000.0
     STARTER_REWARD = 1000.0
     # Ein eindeutiges Ziel verhindert, dass drei verschiedene Starterpfade
     # denselben Reward teilen. Schiggy (Species 7) erleichtert Rocko und kann
@@ -129,19 +142,31 @@ class PokemonFireRedEnv(gym.Env):
     TARGET_STARTER_SPECIES = 7
     STARTER_SPECIES = {1, 4, 7}
     WRONG_STARTER_PENALTY = -500.0
-    ENEMY_DAMAGE_REWARD_PER_HP = 0.75
-    ENEMY_FAINT_REWARD = 20.0
-    LEVEL_GAIN_REWARD = 150.0
-    EXPERIENCE_GAIN_REWARD_PER_POINT = 0.5
+    # Kaempfe sind unbegrenzt wiederholbar (Wildgras respawnt), anders als
+    # Kanten/Maps/Stufen, die pro Fleet-Leben nur einmal zahlen. Auf dem alten
+    # Niveau (0.5/30/50) waere ein Kampf ~80-100 Reward in 20-40 Schritten -
+    # das schlaegt jede Erkundung, sobald die leichten neuen Kanten ausgehen,
+    # und der Agent haengt im Gras fest statt weiterzuziehen. Auf ein Drittel
+    # gekuerzt, damit Erkunden strukturell immer die bessere Wahl bleibt.
+    ENEMY_DAMAGE_REWARD_PER_HP = 0.15
+    ENEMY_FAINT_REWARD = 10.0
+    LEVEL_GAIN_REWARD = 25.0
+    # Kleiner, von der Party-Level-Summe komplett unabhaengiger Anreiz, das
+    # Center ueberhaupt aufzusuchen. Nur einmal pro Episode (Flag oben), keine
+    # Kopplung an Levelsumme/Party-Groesse - kann also nie durch PC-Box-
+    # Ein-/Auslagern verzerrt werden wie LEVEL_GAIN_REWARD vorher.
+    POKEMON_CENTER_FIRST_HEAL_REWARD = 10.0
+    EXPERIENCE_GAIN_REWARD_PER_POINT = 0.0
+    BATTLE_WIN_REWARD = 15.0
     ENEMY_HP_READ_EVERY = 2
     ENEMY_ACTIVITY_TTL = 96
-    FLED_BATTLE_PENALTY = -20.0
+    FLED_BATTLE_PENALTY = -25.0
     WILD_TRAINING_MAPS = {(3, 19), (3, 20), (1, 0)}
     # Beliebige Warps sind reine Kartendaten, niemals Reward. Nur explizit
     # bestaetigte Story-Uebergaenge (Treppe/Ausgang/Stage) werden einmalig
     # in ihren eigenen Bloecken belohnt.
     NEW_TRANSITION_REWARD = 0.0
-    REPLAY_MAP_REWARD = 20.0
+    REPLAY_MAP_REWARD = 25.0
     REPLAY_EDGE_REWARD = 0.0
     REPLAY_TRANSITION_REWARD = 0.0
 
@@ -161,11 +186,11 @@ class PokemonFireRedEnv(gym.Env):
     # Welt-Exploration bekommt keine generischen Koordinaten-Ziele mehr.
     # Diese Ziele bevorzugten wiederholt Haeuser und Sackgassen.
     TARGET_PROGRESS_REWARD = 0.0
-    EARLY_STORY_STEP_REWARD = 1.0
+    EARLY_STORY_STEP_REWARD = 0.0
 
     EXPLORATION_MEMORY_ENABLED = True
     CONFIRMED_WARP_MIN_AGENTS = 2
-    CONFIRMED_WARP_REWARD = 6.0
+    CONFIRMED_WARP_REWARD = 0.0
     # V11: nur noch echtes Einfrieren (exakt gleiche Kachel, lange) wird
     # milde bestraft - nicht mehr "-2.0 alle 96 Steps".
     # V15.1: schneller ausloesen, damit Auf-der-Stelle-Drehen frueh kostet.
@@ -174,9 +199,9 @@ class PokemonFireRedEnv(gym.Env):
     # V15: Der Welt-Reward bleibt absichtlich klein und eindeutig:
     # neue echte Weltkachel positiv, Wiederholung KOSTET jetzt etwas -
     # sonst ist Im-Kreis-Laufen gratis (V15.1).
-    V9_EXPLORER_NEW_TILE_BONUS = 1.0
-    V9_EXPLORER_REPEAT_TILE_PENALTY = -0.05
-    STAGE_ADVANCE_REWARD = 250.0
+    V9_EXPLORER_NEW_TILE_BONUS = 0.0
+    V9_EXPLORER_REPEAT_TILE_PENALTY = 0.0
+    STAGE_ADVANCE_REWARD = 0.0
 
     # V13.4 NORD-KORRIDOR: NUR die geraden Nord-Strecken vor dem Wald. Auf
     # diesen Maps ist "hoch = Weg". Pro neuer noerdlichster Y-Reihe gibt es
@@ -186,14 +211,14 @@ class PokemonFireRedEnv(gym.Env):
     # Vertania bleibt frei, weil dort der Paket-Rueckweg notwendig ist.
     NORTH_CORRIDOR_MAPS = {(3, 0), (3, 19), (3, 20)}
     PARCEL_RETURN_MAPS = {(3, 1), (3, 19), (3, 0)}
-    NORTH_CORRIDOR_ROW_REWARD = 1.2
+    NORTH_CORRIDOR_ROW_REWARD = 0.0
     # Potential-Differenz pro gelaufener Reihe. Nord->Sued nimmt exakt den
     # zuvor erhaltenen Betrag wieder weg; Hin-und-her-Laufen ist damit kein
     # Reward-Loop. Anders als der reine Rekordbonus liefert das auch nach
     # einem Rueckschritt wieder ein brauchbares Richtungssignal.
-    CORRIDOR_STEP_REWARD = 0.40
+    CORRIDOR_STEP_REWARD = 0.0
     NORTH_CORRIDOR_MAX_ROWS = 45
-    EXIT_ROUTE_EDGE_REWARD = 1.0
+    EXIT_ROUTE_EDGE_REWARD = 0.0
     EXIT_ROUTE_REVERSE_PENALTY = 0.0
     EXIT_ROUTE_REPEAT2_PENALTY = 0.0
     EXIT_ROUTE_REPEAT3_PENALTY = 0.0
@@ -310,6 +335,7 @@ class PokemonFireRedEnv(gym.Env):
         self.last_party_total_experience = 0
         self.faints_in_current_battle = 0
         self.last_party_size = 0
+        self.pokemon_center_healed_this_episode = False
         self.last_party_total_level = 0
         self.indoor_steps_without_transition = 0
         self.battle_activity_open = False
@@ -340,6 +366,25 @@ class PokemonFireRedEnv(gym.Env):
             inttype=retro.data.Integrations.CUSTOM_ONLY,
             render_mode=None
         )
+
+        # Stable-Retro setzt bei State.NONE beim spaeteren reset() keinen
+        # Emulatorzustand zurueck. Es fuehrt dann nur einen neutralen Frame
+        # aus; Party, Karte und Story-RAM der vorigen Episode bleiben stehen.
+        # Einen festen Startzustand deshalb einmal in self.initial_state
+        # laden und von nun an bei JEDEM Episodenreset wiederherstellen.
+        #
+        # V17: kein Kaltstart (Intro/Namenswahl) mehr. Jeder der 50 Agenten
+        # startet jede Episode ab StartGame.state - von Hand verifiziert via
+        # tools/make_savestate.py (Oaks Labor, Schiggi bereits geholt). Die
+        # Policy muss das nie belohnte, nie durch RL geloeste Intro dadurch
+        # gar nicht mehr lernen (PWhiddy-Prinzip). Diese Datei wird vom
+        # Training nur gelesen, nie geschrieben/ueberschrieben - das macht
+        # ausschliesslich die manuelle Aufnahme in tools/make_savestate.py,
+        # und die verweigert seit V17 selbst ein Ueberschreiben.
+        self.env.load_state(
+            "StartGame", inttype=retro.data.Integrations.CUSTOM_ONLY
+        )
+        self.env.reset()
 
         self.env.auto_render = False
         if hasattr(self.env, "viewer"):
@@ -392,7 +437,12 @@ class PokemonFireRedEnv(gym.Env):
             ),
         })
 
+        # total_steps = jede PPO-Entscheidung. route_steps pausiert im Kampf
+        # und ist die faire Uhr fuer Story-Horizonte und Champion-Tempo.
         self.total_steps = 0
+        self.route_steps = 0
+        self.battle_steps = 0
+        self.current_battle_steps = 0
         self.seen_coords = set()
         self.visited_maps = set()
         self._saved_outdoor_depth = 0
@@ -427,6 +477,17 @@ class PokemonFireRedEnv(gym.Env):
         self.viridian_mart_scene = 0
         self.viridian_old_man_scene = 0
         self.pallet_oaks_lab_scene = 0
+        # V17: der feste Startpunkt (StartGame.state) liegt bereits NACH der
+        # Paket-Abgabe bei Prof. Eich - dieses Ereignis kann innerhalb einer
+        # Episode nie wieder beobachtet werden (die Uebergangs-Sequenz, die es
+        # normalerweise bestaetigt, passiert vor dem Episodenstart). Deshalb
+        # von vornherein als erledigt gesetzt, sonst waere Weltstufe 4+ fuer
+        # immer gesperrt (siehe _world_stage(): stage>=6 wird ohne bestaetigte
+        # Paketkette hart auf 3 zurueckgeklemmt).
+        self.parcel_obtained_confirmed = True
+        self.parcel_delivered_confirmed = True
+        self.parcel_obtained_confirm_reads = 0
+        self.parcel_delivered_confirm_reads = 0
         # V10.31: die echte Wand ist "raus aus Eichs Labor nach dem Starter"
         # (nicht Route 1). Dafuer gab es bisher keinen Reward-Gradienten.
         self.starter_outdoor_rewarded = False
@@ -546,6 +607,8 @@ class PokemonFireRedEnv(gym.Env):
         self.last_pos = None
         self.stuck_counter = 0
         self.last_progress_signature = None
+        self.interaction_anchor = None
+        self.interaction_count = 0
 
         self.episode_start = "beginning"
         self.saved_milestones = self._discover_saved_milestones()
@@ -1146,6 +1209,10 @@ class PokemonFireRedEnv(gym.Env):
         return int(self.WORLD_STAGE_BY_MAP.get((int(bank), int(map_id)), 0))
 
     def _update_story_state_from_loc(self, loc):
+        map_key = (
+            int(loc.get("map_bank", -1)),
+            int(loc.get("map_id", -1)),
+        )
         self.viridian_mart_scene = max(
             self.viridian_mart_scene,
             int(loc.get("viridian_mart_scene", 0) or 0),
@@ -1159,29 +1226,68 @@ class PokemonFireRedEnv(gym.Env):
             int(loc.get("pallet_oaks_lab_scene", 0) or 0),
         )
 
+        # Ein einzelner plausibler u16-Wert darf keine permanente Story-Stufe
+        # mehr setzen. Paket und Abgabe werden nur auf der passenden Karte,
+        # in der richtigen Reihenfolge und ueber drei RAM-Lesezyklen bestaetigt.
+        if (
+            map_key == (5, 3)
+            and self.has_target_starter
+            and int(loc.get("viridian_mart_scene", 0) or 0) >= 1
+        ):
+            self.parcel_obtained_confirm_reads += 1
+            if self.parcel_obtained_confirm_reads >= 3:
+                self.parcel_obtained_confirmed = True
+        elif not self.parcel_obtained_confirmed:
+            self.parcel_obtained_confirm_reads = 0
+
+        if (
+            map_key == (4, 3)
+            and self.has_target_starter
+            and self.parcel_obtained_confirmed
+            and int(loc.get("pallet_oaks_lab_scene", 0) or 0) >= 6
+        ):
+            self.parcel_delivered_confirm_reads += 1
+            if self.parcel_delivered_confirm_reads >= 3:
+                self.parcel_delivered_confirmed = True
+        elif not self.parcel_delivered_confirmed:
+            self.parcel_delivered_confirm_reads = 0
+
     def _world_stage(self):
         """Hoechste explizite Map- oder Story-Stage dieser Episode."""
-        if int(getattr(self, "last_badges", 0) or 0) >= 1:
+        if (
+            int(getattr(self, "last_badges", 0) or 0) >= 1
+            and self.has_target_starter
+            and self.parcel_delivered_confirmed
+        ):
             return 9
         stage = max(
             (self._current_world_stage(*m) for m in self.visited_maps),
             default=0,
         )
-        if int(getattr(self, "viridian_mart_scene", 0)) >= 1:
+        # Route 2/Wald/Marmoria sind erst nach der bestaetigten Paketkette
+        # glaubwuerdig. Ein einzelner kaputter Map-Read darf die Weltfront
+        # sonst nicht auf 6-8 springen lassen.
+        if stage >= 6 and not self.parcel_delivered_confirmed:
+            stage = 3
+        if bool(getattr(self, "parcel_obtained_confirmed", False)):
             stage = max(stage, 4)
-        if (
-            int(getattr(self, "pallet_oaks_lab_scene", 0)) >= 6
-            or int(getattr(self, "viridian_mart_scene", 0)) >= 2
-            or int(getattr(self, "viridian_old_man_scene", 0)) >= 1
-        ):
+        if bool(getattr(self, "parcel_delivered_confirmed", False)):
             stage = max(stage, 5)
         return stage
 
     def _stage_at_current_location(self, bank, map_id):
         stage = self._current_world_stage(bank, map_id)
-        if (int(bank), int(map_id)) == (5, 3) and self.viridian_mart_scene >= 1:
+        if stage >= 6 and not self.parcel_delivered_confirmed:
+            stage = 3
+        if (
+            (int(bank), int(map_id)) == (5, 3)
+            and self.parcel_obtained_confirmed
+        ):
             stage = max(stage, 4)
-        if (int(bank), int(map_id)) == (4, 3) and self.pallet_oaks_lab_scene >= 6:
+        if (
+            (int(bank), int(map_id)) == (4, 3)
+            and self.parcel_delivered_confirmed
+        ):
             stage = max(stage, 5)
         return stage
 
@@ -1189,9 +1295,11 @@ class PokemonFireRedEnv(gym.Env):
         bank = int(meta.get("bank", -1))
         map_id = int(meta.get("map", -1))
         stage = self._current_world_stage(bank, map_id)
-        if (bank, map_id) == (5, 3) and int(meta.get("viridian_mart_scene", 0)) >= 1:
+        if stage >= 6 and not bool(meta.get("parcel_delivered_confirmed")):
+            stage = 3
+        if (bank, map_id) == (5, 3) and bool(meta.get("parcel_obtained_confirmed")):
             stage = max(stage, 4)
-        if (bank, map_id) == (4, 3) and int(meta.get("pallet_oaks_lab_scene", 0)) >= 6:
+        if (bank, map_id) == (4, 3) and bool(meta.get("parcel_delivered_confirmed")):
             stage = max(stage, 5)
         return stage
 
@@ -1235,16 +1343,19 @@ class PokemonFireRedEnv(gym.Env):
                 out[n] = name
         return out
 
-    def _save_stage_checkpoint(self, stage, bank, map_id, x, y):
+    def _save_stage_checkpoint(self, stage, bank, map_id, x, y, episode_reward=0.0):
         name = f"stage_{int(stage)}"
         meta = {
             "stage": int(stage), "bank": int(bank), "map": int(map_id),
             "x": int(x), "y": int(y), "has_starter": True,
             "starter_species": int(self._starter_species()),
-            "step": int(self.total_steps), "agent": int(self.rank),
+            "step": int(self.route_steps), "agent": int(self.rank),
             "viridian_mart_scene": int(self.viridian_mart_scene),
             "viridian_old_man_scene": int(self.viridian_old_man_scene),
             "pallet_oaks_lab_scene": int(self.pallet_oaks_lab_scene),
+            "parcel_obtained_confirmed": bool(self.parcel_obtained_confirmed),
+            "parcel_delivered_confirmed": bool(self.parcel_delivered_confirmed),
+            "episode_reward": float(episode_reward),
         }
         if self._stage_at_current_location(bank, map_id) != int(stage):
             return False
@@ -1273,10 +1384,21 @@ class PokemonFireRedEnv(gym.Env):
                     and old_map == (int(bank), int(map_id))
                     and int(y) < int(existing.get("y", 10_000))
                 )
-                # Ein belegter Schiggy-State darf einen alten Legacy-State
-                # gleicher Tiefe einmalig ersetzen. Danach gelten wieder nur
-                # echte Frontverbesserungen, damit nichts zurueckwandert.
-                if old_has_target and not is_better_corridor_front:
+                # V15.3: der Checkpoint bleibt lebendig statt einmalig
+                # einzufrieren. Ein neuer Schiggy-State auf derselben Stufe
+                # ersetzt den alten, sobald sein Episode-Reward hoeher ist -
+                # "wer mit mehr Punkten ankommt, ist im Schnitt weiter"
+                # (Schiggi + Level + gefangene Pokemon + neue Kanten stecken
+                # schon im Reward). Corridor-Front bleibt zusaetzlich als
+                # eindeutiges, reward-unabhaengiges Kriterium auf den drei
+                # Nord-Korridor-Maps (Alabastia/Route1/Route2).
+                old_reward = float(existing.get("episode_reward", 0.0) or 0.0)
+                is_better_reward = float(episode_reward) > old_reward
+                if (
+                    old_has_target
+                    and not is_better_corridor_front
+                    and not is_better_reward
+                ):
                     return False
 
             # Auch beim Verbessern atomar ersetzen. So bleibt bei einem
@@ -1920,7 +2042,7 @@ class PokemonFireRedEnv(gym.Env):
 
         if self._save_curriculum_state(name):
             self.last_progress_checkpoint_step = self.total_steps
-            self.last_progress_advance_step = self.total_steps
+            self.last_progress_advance_step = self.route_steps
             self._claim_journey_milestone("journey_progress_checkpoint","journey_seen_progress_checkpoint")
             return name
 
@@ -1987,14 +2109,9 @@ class PokemonFireRedEnv(gym.Env):
         n = self.n_envs
         slot = self.rank % n
 
-        # V15.3b: ALLE Agenten spielen ab Spielanfang, keine Ausnahme mehr.
-        # Die 2 Deep-Warm-Slots sind raus: der einzige verfuegbare Checkpoint
-        # (stage_5 = Eichs Labor, ein kleiner Innenraum) stammt aus dem alten
-        # Reward-Regime, lieferte fast nichts (~1.3-1.4k Steps/Lauf, kaum
-        # Kaempfe) und war eher ein Datenrest als eine echte Spaetphasen-Uebung.
-        # Sobald ein full-Agent unter dem NEUEN Regime selbst tief genug kommt,
-        # kann ein frischer stage_N-Checkpoint diese Rolle wieder sinnvoll
-        # uebernehmen.
+        # V16 CLEAN: alle Agenten spielen dieselbe komplette Aufgabe vom
+        # Spielanfang. Keine Skills und keine gemischten Checkpoint-Starts im
+        # selben PPO-Rollout.
         if getattr(self, "FULL_ONLY_MODE", False):
             return "full", f"Full Journey {slot + 1:03d}"
 
@@ -2106,8 +2223,9 @@ class PokemonFireRedEnv(gym.Env):
         self.training_objective = role
         saved = set(self.saved_milestones)
 
-        # V15.3: im All-Full-Regime startet JEDER full-Agent am Spielanfang
-        # (inkl. Intro). Nur die 2 progress-Deep-Warm-Slots resumen tief.
+        # V15.3c: im All-Full-Regime startet JEDER full-Agent am Spielanfang
+        # (inkl. Intro). Nur der 1 Frontier-Scout-Slot resumt tief, vom
+        # jeweils aktuellsten stage_N-Checkpoint.
         if getattr(self, "FULL_ONLY_MODE", False):
             if role == "progress":
                 return self._best_progress_milestone()
@@ -2363,9 +2481,23 @@ class PokemonFireRedEnv(gym.Env):
         self._image_frames = []
 
         self.total_steps = 0
+        self.route_steps = 0
+        self.battle_steps = 0
+        self.current_battle_steps = 0
         self.viridian_mart_scene = 0
         self.viridian_old_man_scene = 0
         self.pallet_oaks_lab_scene = 0
+        # V17: der feste Startpunkt (StartGame.state) liegt bereits NACH der
+        # Paket-Abgabe bei Prof. Eich - dieses Ereignis kann innerhalb einer
+        # Episode nie wieder beobachtet werden (die Uebergangs-Sequenz, die es
+        # normalerweise bestaetigt, passiert vor dem Episodenstart). Deshalb
+        # von vornherein als erledigt gesetzt, sonst waere Weltstufe 4+ fuer
+        # immer gesperrt (siehe _world_stage(): stage>=6 wird ohne bestaetigte
+        # Paketkette hart auf 3 zurueckgeklemmt).
+        self.parcel_obtained_confirmed = True
+        self.parcel_delivered_confirmed = True
+        self.parcel_obtained_confirm_reads = 0
+        self.parcel_delivered_confirm_reads = 0
         self.episode_battles_started = 0
         self.episode_battles_completed = 0
         self.enemy_party_cache = []
@@ -2374,6 +2506,7 @@ class PokemonFireRedEnv(gym.Env):
         self.last_party_total_experience = 0
         self.faints_in_current_battle = 0
         self.last_party_size = 0
+        self.pokemon_center_healed_this_episode = False
         self.last_party_total_level = 0
         self.indoor_steps_without_transition = 0
         self.battle_activity_open = False
@@ -2443,6 +2576,8 @@ class PokemonFireRedEnv(gym.Env):
         self.last_pos = None
         self.stuck_counter = 0
         self.last_progress_signature = None
+        self.interaction_anchor = None
+        self.interaction_count = 0
         self.episode_anti_loop_resets = 0
 
         self.objective_success = False
@@ -2752,6 +2887,12 @@ class PokemonFireRedEnv(gym.Env):
             <= self.ENEMY_ACTIVITY_TTL
         )
         in_battle = 1 if (_bt_any or _enemy_present) else 0
+        if in_battle:
+            self.battle_steps += 1
+            self.current_battle_steps += 1
+        else:
+            self.route_steps += 1
+            self.current_battle_steps = 0
         previous_battle_state = int(self.last_in_battle)
         battle_just_ended = previous_battle_state == 1 and in_battle == 0
         battle_ended_without_faint = False
@@ -2841,12 +2982,11 @@ class PokemonFireRedEnv(gym.Env):
         self.last_in_battle = in_battle
 
         if not gameplay_ready:
-            # Intro: nur eine winzige Zeitgebuehr, damit "schnell durch" besser
-            # ist als Dauer-Menue. Kein Novelty-Screen-Bonus mehr.
-            reward = -0.002 if self.FULL_ONLY_MODE else self.INTRO_STEP_COST
+            # V16: normale Aktionen sind auch im Intro neutral. Fortschritt
+            # entsteht nur durch gedeckelte neue Screens und Meilensteine.
+            reward = self.INTRO_STEP_COST
         elif self.FULL_ONLY_MODE:
-            # V15.3: nur eine winzige, einheitliche Zeitgebuehr. Kein
-            # rollen-/story-abhaengiges Step-Cost-Tuning mehr.
+            # V16: keine Bewegungs- oder Zeitpunkte im Full-Brain-Modus.
             reward = self.GAMEPLAY_STEP_COST
         else:
             _speed_graded = (
@@ -2894,8 +3034,9 @@ class PokemonFireRedEnv(gym.Env):
                 and current_party_size > self.last_party_size
                 and current_party_size <= 4
             ):
-                reward += 100.0
-                reward_events.append("caught_pokemon:+100.0")
+                # Fang-Telemetrie bleibt erhalten; kein Reward, damit das
+                # Story-Ziel nicht durch beliebiges Team-Farming verdraengt wird.
+                reward_events.append("caught_pokemon:+0")
 
             if (
                 self.last_party_total_level > 0
@@ -2907,7 +3048,7 @@ class PokemonFireRedEnv(gym.Env):
                     f"team_level_up:+{level_gain * self.LEVEL_GAIN_REWARD:.1f}"
                 )
                 self.reward_event_counts["level_up"] += level_gain
-                self.last_progress_advance_step = self.total_steps
+                self.last_progress_advance_step = self.route_steps
                 if self.training_objective == "level":
                     reward += self.SPECIALIST_SUCCESS_BONUS
                     reward_events.append(
@@ -2930,10 +3071,7 @@ class PokemonFireRedEnv(gym.Env):
                 experience_gain = (
                     current_total_experience - self.last_party_total_experience
                 )
-                experience_reward = min(
-                    50.0,
-                    experience_gain * self.EXPERIENCE_GAIN_REWARD_PER_POINT,
-                )
+                experience_reward = self.BATTLE_WIN_REWARD
                 reward += experience_reward
                 reward_events.append(
                     f"experience_gain:{experience_gain}:+{experience_reward:.1f}"
@@ -2941,7 +3079,7 @@ class PokemonFireRedEnv(gym.Env):
                 self.run_stats["experience_wins"] = int(
                     self.run_stats.get("experience_wins", 0)
                 ) + 1
-                self.last_progress_advance_step = self.total_steps
+                self.last_progress_advance_step = self.route_steps
                 if self.training_objective == "battle":
                     reward += self.SPECIALIST_SUCCESS_BONUS
                     reward_events.append(
@@ -2952,26 +3090,49 @@ class PokemonFireRedEnv(gym.Env):
                 self._save_run_stats()
 
             if current_total_hp == 0 and max_total_hp > 0 and not truncated:
-                reward -= 2.0
-                reward_events.append("party_wiped:-2.0")
+                reward -= 100.0
+                reward_events.append("party_wiped:-100.0")
                 truncated = True
                 self.last_stage_timeout = "party_wiped"
                 info["last_stage_timeout"] = "party_wiped"
             elif self.last_party_total_hp > 0:
                 hp_diff = current_total_hp - self.last_party_total_hp
                 if hp_diff < 0:
-                    hp_reward = abs(hp_diff) * -0.5
+                    hp_reward = abs(hp_diff) * -0.1
                     reward += hp_reward
                     reward_events.append(f"took_damage:{hp_reward:.1f}")
                 elif hp_diff > 0:
-                    hp_reward = hp_diff * 0.2
-                    reward += hp_reward
-                    reward_events.append(f"healed:+{hp_reward:.1f}")
+                    # Heilung ist Mittel zum Weiterkommen, kein eigenes Ziel.
+                    hp_reward = 0.0
+                    reward_events.append("healed:+0")
+
+                    if (
+                        not self.pokemon_center_healed_this_episode
+                        and in_battle == 0
+                        and max_total_hp > 0
+                        and current_total_hp == max_total_hp
+                        and self.last_party_total_hp < max_total_hp
+                    ):
+                        self.pokemon_center_healed_this_episode = True
+                        if self.POKEMON_CENTER_FIRST_HEAL_REWARD:
+                            reward += self.POKEMON_CENTER_FIRST_HEAL_REWARD
+                        reward_events.append(
+                            "pokemon_center_first_heal:"
+                            f"+{self.POKEMON_CENTER_FIRST_HEAL_REWARD:.1f}"
+                        )
 
             # Auch nach der ersten Baseline und bei unveraenderter Party
             # aktualisieren; sonst blieben die vorgeschlagenen Werte bei 0.
             self.last_party_size = current_party_size
-            self.last_party_total_level = current_total_level
+            # NIE absenken: sonst waere ein PC-Boxwechsel (Pokemon einlagern
+            # senkt die Party-Summe, wieder rausholen hebt sie zurueck auf den
+            # alten Wert) als "Level-Up" farmbar, weil current_total_level
+            # ueber den vorherigen (gesenkten) last-Wert steigt, ohne dass
+            # irgendein Pokemon wirklich ein Level gewonnen hat. Die Baseline
+            # bleibt beim bisherigen Maximum, bis ein ECHTER Level-Up sie hebt.
+            self.last_party_total_level = max(
+                self.last_party_total_level, current_total_level
+            )
             self.last_party_total_hp = current_total_hp
             self.last_party_total_experience = current_total_experience
             self.last_level = max(
@@ -2993,9 +3154,12 @@ class PokemonFireRedEnv(gym.Env):
                 if self._save_curriculum_state("squirtle_battle_ready"):
                     milestone_saved = "squirtle_battle_ready"
 
-        if blocked_battle_start:
+        if blocked_battle_start and self.BATTLE_BLOCKED_START_PENALTY:
             reward += self.BATTLE_BLOCKED_START_PENALTY
-            reward_events.append("battle_start_blocked:-0.10")
+            reward_events.append(
+                "battle_start_blocked:"
+                f"{self.BATTLE_BLOCKED_START_PENALTY:.2f}"
+            )
 
         # V7.5.1: reward only NEW opponent HP damage.
         if self.has_starter and self.total_steps % self.ENEMY_HP_READ_EVERY == 0:
@@ -3117,19 +3281,25 @@ class PokemonFireRedEnv(gym.Env):
             self.last_start_step = self.total_steps
 
             if gameplay_ready and in_battle == 0:
-                if not self.left_house_confirmed:
+                if (
+                    not self.left_house_confirmed
+                    and self.START_HOUSE_PENALTY
+                ):
                     reward += self.START_HOUSE_PENALTY
                     reward_events.append(
                         f"start_house:{self.START_HOUSE_PENALTY:.2f}"
                     )
 
-                if self.start_spam_count == 2:
+                if self.start_spam_count == 2 and self.START_REPEAT_PENALTY_2:
                     reward += self.START_REPEAT_PENALTY_2
                     reward_events.append(
                         "start_repeat2:"
                         f"{self.START_REPEAT_PENALTY_2:.2f}"
                     )
-                elif self.start_spam_count >= 3:
+                elif (
+                    self.start_spam_count >= 3
+                    and self.START_REPEAT_PENALTY_3PLUS
+                ):
                     reward += self.START_REPEAT_PENALTY_3PLUS
                     reward_events.append(
                         "start_repeat3+:"
@@ -3166,18 +3336,21 @@ class PokemonFireRedEnv(gym.Env):
 
                 # Nur deutliche, neue Screens belohnen. Cursor-Flackern allein
                 # reicht normalerweise nicht. Gesamtbonus ist auf +25 gedeckelt.
-                # V15.3: im All-Full-Regime aus (Cursor-Farm). intro_complete
-                # +100 bleibt; das v6-Netz kann das Intro ohnehin auswendig.
+                # V16: auch im Full-Modus aktiv. Jeder deutlich neue, grob
+                # quantisierte Bildschirm zaehlt nur einmal und der gesamte
+                # Bonus ist hart gedeckelt; damit bleibt das Intro im PPO-
+                # Gedaechtnis, ohne Cursor-Flackern unbegrenzt zu farmen.
                 if (
-                    not self.FULL_ONLY_MODE
-                    and diff >= 10.0
+                    diff >= 10.0
                     and state_key not in self.intro_seen_states
-                    and self.intro_novelty_reward_total < 25.0
+                    and self.intro_novelty_reward_total
+                        < self.INTRO_NOVELTY_REWARD_CAP
                 ):
-                    bonus = 1.0 if diff >= 28.0 else 0.5
+                    bonus = self.INTRO_NOVELTY_REWARD
                     bonus = min(
                         bonus,
-                        25.0 - self.intro_novelty_reward_total
+                        self.INTRO_NOVELTY_REWARD_CAP
+                        - self.intro_novelty_reward_total
                     )
                     reward += bonus
                     self.intro_novelty_reward_total += bonus
@@ -3219,7 +3392,7 @@ class PokemonFireRedEnv(gym.Env):
                 objective_done = True
             self.reward_event_counts["intro_complete"] += 1
             self.episode_milestone_steps.setdefault(
-                "intro_complete", self.total_steps
+                "intro_complete", self.route_steps
             )
             if in_battle == 0:
                 if self._save_curriculum_state("intro_complete"):
@@ -3386,16 +3559,13 @@ class PokemonFireRedEnv(gym.Env):
                     if pos_key not in self.v9_episode_tiles:
                         self.v9_episode_tiles.add(pos_key)
                         _tile_bonus = self.V9_EXPLORER_NEW_TILE_BONUS
-                        reward_events.append(
-                            f"v9_explorer_new_tile:+{self.V9_EXPLORER_NEW_TILE_BONUS:.2f}"
-                        )
                     else:
                         _tile_bonus = self.V9_EXPLORER_REPEAT_TILE_PENALTY
-                        if _tile_bonus:
-                            reward_events.append(
-                                f"v9_explorer_repeat_tile:{self.V9_EXPLORER_REPEAT_TILE_PENALTY:.2f}"
-                            )
-                    reward += _tile_bonus
+                    if _tile_bonus:
+                        reward += _tile_bonus
+                        reward_events.append(
+                            f"v9_tile:{_tile_bonus:+.2f}"
+                        )
 
             # V13.3: Progress/Battle/Level mit Starter, die drinnen herumhaengen
             # (kein Pflicht-Gebaeude direkt am Anfang), kriegen einen kleinen
@@ -3446,7 +3616,7 @@ class PokemonFireRedEnv(gym.Env):
                     )
                     _south_target = _returning_parcel and _mk in self.PARCEL_RETURN_MAPS
                     _directed_rows = _dy if _south_target else -_dy if _north_target else 0
-                    if _directed_rows:
+                    if _directed_rows and self.CORRIDOR_STEP_REWARD:
                         _step_r = _directed_rows * self.CORRIDOR_STEP_REWARD
                         reward += _step_r
                         reward_events.append(f"corridor_step:{_step_r:+.2f}")
@@ -3458,7 +3628,7 @@ class PokemonFireRedEnv(gym.Env):
                 and _mk in self.PARCEL_RETURN_MAPS
             ):
                 _prev_best = self._south_corridor_best.get(_mk, int(y) - 1)
-                if int(y) > _prev_best:
+                if int(y) > _prev_best and self.NORTH_CORRIDOR_ROW_REWARD:
                     _rows = min(int(y) - _prev_best, self.NORTH_CORRIDOR_MAX_ROWS)
                     _r = _rows * self.NORTH_CORRIDOR_ROW_REWARD
                     reward += _r
@@ -3474,7 +3644,7 @@ class PokemonFireRedEnv(gym.Env):
                 )
             ):
                 _prev_best = self._north_corridor_best.get(_mk, int(y) + 1)
-                if int(y) < _prev_best:
+                if int(y) < _prev_best and self.NORTH_CORRIDOR_ROW_REWARD:
                     _rows = min(_prev_best - int(y), self.NORTH_CORRIDOR_MAX_ROWS)
                     _r = _rows * self.NORTH_CORRIDOR_ROW_REWARD
                     reward += _r
@@ -3514,8 +3684,7 @@ class PokemonFireRedEnv(gym.Env):
                     self._save_confirmed_story_warp(
                         "stairs", stairs_transition
                     )
-                    reward += self.CONFIRMED_WARP_REWARD
-                    reward_events.append("confirmed_stairs_warp:+6")
+                    reward_events.append("confirmed_stairs_warp:+0")
 
                 reward += 150.0
                 reward_events.append("stairs_down:+150")
@@ -3527,7 +3696,7 @@ class PokemonFireRedEnv(gym.Env):
                     objective_done = True
                 self.reward_event_counts["stairs_down"] += 1
                 self.episode_milestone_steps.setdefault(
-                    "stairs_down", self.total_steps
+                    "stairs_down", self.route_steps
                 )
                 if in_battle == 0:
                     if self._save_curriculum_state("stairs_down"):
@@ -3599,11 +3768,10 @@ class PokemonFireRedEnv(gym.Env):
                     self._save_confirmed_story_warp(
                         "exit", self.pending_exit_story_transition
                     )
-                    reward += self.CONFIRMED_WARP_REWARD
-                    reward_events.append("confirmed_exit_warp:+6")
+                    reward_events.append("confirmed_exit_warp:+0")
 
-                reward += 500.0
-                reward_events.append("left_house_confirmed:+500")
+                reward += 300.0
+                reward_events.append("left_house_confirmed:+300")
                 self._commit_successful_exit_route()
                 self.confirmed_exit_route_edges = (
                     self._load_confirmed_exit_route_edges()
@@ -3616,7 +3784,7 @@ class PokemonFireRedEnv(gym.Env):
                     objective_done = True
                 self.reward_event_counts["left_house"] += 1
                 self.episode_milestone_steps.setdefault(
-                    "left_house", self.total_steps
+                    "left_house", self.route_steps
                 )
                 if in_battle == 0:
                     if self._save_curriculum_state("left_house"):
@@ -3634,10 +3802,9 @@ class PokemonFireRedEnv(gym.Env):
                     + abs(y - self.outdoor_entry_coord[1]) >= 1
             ):
                 self.outdoor_first_step_rewarded = True
-                reward += 30.0
-                reward_events.append("outdoor_first_step:+30")
+                reward_events.append("outdoor_first_step:+0")
                 self.reward_event_counts["outdoor_first_step"] += 1
-                self.last_progress_advance_step = self.total_steps
+                self.last_progress_advance_step = self.route_steps
                 bridge = self._maybe_save_progress_bridge(
                     "outdoor_first_step"
                 )
@@ -3662,15 +3829,14 @@ class PokemonFireRedEnv(gym.Env):
                 and map_id != self.first_outdoor_map
             ):
                 self.next_outdoor_map_rewarded = True
-                reward += 150.0
-                reward_events.append("next_outdoor_map:+150")
+                reward_events.append("next_outdoor_map:+0")
                 # V10.33: Alabastia -> Route 1 geschafft -> Weg als Spur sichern.
                 self._commit_journey_route()
                 self.reward_event_counts["next_outdoor_map"] += 1
                 self.episode_milestone_steps.setdefault(
-                    "next_outdoor_map", self.total_steps
+                    "next_outdoor_map", self.route_steps
                 )
-                self.last_progress_advance_step = self.total_steps
+                self.last_progress_advance_step = self.route_steps
                 bridge = self._maybe_save_progress_bridge(
                     "next_outdoor_map"
                 )
@@ -3716,10 +3882,10 @@ class PokemonFireRedEnv(gym.Env):
                 )
                 self.reward_event_counts["first_pokemon"] += 1
                 self.episode_milestone_steps.setdefault(
-                    "first_pokemon", self.total_steps
+                    "first_pokemon", self.route_steps
                 )
-                self.last_progress_advance_step = self.total_steps
-                self.starter_obtained_step = self.total_steps
+                self.last_progress_advance_step = self.route_steps
+                self.starter_obtained_step = self.route_steps
                 self._claim_journey_milestone(
                     "journey_starter", "journey_seen_starter"
                 )
@@ -3780,17 +3946,17 @@ class PokemonFireRedEnv(gym.Env):
             and loc["valid"]
         ):
             self.starter_outdoor_rewarded = True
-            reward += 150.0
-            reward_events.append("starter_outdoor:+150")
+            reward += 500.0
+            reward_events.append("starter_outdoor:+500")
             # V10.33: den Weg raus aus dem Labor als Brotkrumen-Spur sichern.
             self._commit_journey_route()
             self.reward_event_counts["starter_outdoor"] = (
                 self.reward_event_counts.get("starter_outdoor", 0) + 1
             )
             self.episode_milestone_steps.setdefault(
-                "starter_outdoor", self.total_steps
+                "starter_outdoor", self.route_steps
             )
-            self.last_progress_advance_step = self.total_steps
+            self.last_progress_advance_step = self.route_steps
             if in_battle == 0:
                 if self._save_curriculum_state("squirtle_outdoor"):
                     milestone_saved = "squirtle_outdoor"
@@ -3810,11 +3976,11 @@ class PokemonFireRedEnv(gym.Env):
 
         if badges > self.last_badges:
             badge_gain = badges - self.last_badges
-            reward += badge_gain * 500.0
+            reward += badge_gain * 2500.0
             self.reward_event_counts["badge"] += badge_gain
-            reward_events.append(f"badge:+{badge_gain * 500}")
+            reward_events.append(f"badge:+{badge_gain * 2500}")
             self.last_badges = badges
-            self.last_progress_advance_step = self.total_steps
+            self.last_progress_advance_step = self.route_steps
             if self.training_objective == "badge":
                 reward += self.SPECIALIST_SUCCESS_BONUS
                 reward_events.append(
@@ -3840,40 +4006,35 @@ class PokemonFireRedEnv(gym.Env):
             map_key = (bank, map_id)
             coord_key = (bank, map_id, x, y)
 
-            # V15: Welt-Rollen erhalten keinerlei Belohnung fuer einen blossen
-            # Mapwechsel. Das verhindert Warp-/Gebaeude-Touren. Bezahlt werden
-            # nur explizite Story-Stages weiter unten.
             _route_roller = self.training_objective in self.WORLD_ROLES
 
             if map_key not in self.visited_maps:
                 self.visited_maps.add(map_key)
-
-                if map_key not in self.learning_seen_maps:
-                    self.learning_seen_maps.add(map_key)
-                    if map_key in self.persistent_known_maps and not _route_roller:
-                        reward += self.REPLAY_MAP_REWARD
-                        reward_events.append(f"replay_map:+{self.REPLAY_MAP_REWARD:.2f}")
-
+                self.learning_seen_maps.add(map_key)
                 if map_key not in self.persistent_known_maps:
                     self.persistent_known_maps.add(map_key)
                     self.exploration_memory_dirty = True
                     self._nav_target_cache = None
 
-                    if _route_roller:
-                        reward_events.append("new_map_world_neutral:+0")
-                    elif self._claim_shared(self.shared_maps, map_key):
-                        self.last_progress_advance_step = self.total_steps
+                    if self._claim_shared(self.shared_maps, map_key):
+                        self.last_progress_advance_step = self.route_steps
                         reward += self.NEW_MAP_REWARD
                         reward_events.append(
                             f"new_map_global:+{self.NEW_MAP_REWARD:.2f}"
                         )
                     else:
-                        local_map_reward = self.NEW_MAP_REWARD * 0.25
-                        reward += local_map_reward
-                        self.last_progress_advance_step = self.total_steps
+                        reward += self.EPISODE_NEW_MAP_REWARD
+                        self.last_progress_advance_step = self.route_steps
                         reward_events.append(
-                            f"new_map_local:+{local_map_reward:.2f}"
+                            "new_map_episode:"
+                            f"+{self.EPISODE_NEW_MAP_REWARD:.2f}"
                         )
+                else:
+                    reward += self.EPISODE_NEW_MAP_REWARD
+                    reward_events.append(
+                        "replay_map_once:"
+                        f"+{self.EPISODE_NEW_MAP_REWARD:.2f}"
+                    )
 
             # Jede Policy lernt einen echten lokalen Stage-Anstieg. Der grosse
             # globale Bonus wird weiterhin nur einmal flottenweit ausgezahlt.
@@ -3881,21 +4042,19 @@ class PokemonFireRedEnv(gym.Env):
             _old_stage = int(getattr(self, "episode_best_stage", 0))
             if self.has_starter and _stage > _old_stage:
                 stage_gain = _stage - _old_stage
-                stage_reward = self.STAGE_ADVANCE_REWARD * stage_gain
-                reward += stage_reward
-                reward_events.append(
-                    f"stage_advance:{_old_stage}->{_stage}:+{stage_reward:.0f}"
-                )
+                if self.STAGE_ADVANCE_REWARD:
+                    stage_reward = self.STAGE_ADVANCE_REWARD * stage_gain
+                    reward += stage_reward
+                    reward_events.append(
+                        f"stage_advance:{_old_stage}->{_stage}:+{stage_reward:.0f}"
+                    )
                 self.episode_best_stage = _stage
-                self.last_progress_advance_step = self.total_steps
+                self.last_progress_advance_step = self.route_steps
 
-                # V15.3: PRO LAUF statt flottenweit-einmalig. Jeder Agent, der in
-                # DIESER Episode erstmals Stufe N erreicht, bekommt den vollen
-                # eskalierenden Tiefen-Bonus (300*N: Stufe2 +600 ... Stufe5 +1500).
-                # "Ich bin weiter = besser" gilt fuer jeden Client, nicht nur den
-                # ersten der Flotte. Nicht farmbar: episode_best_stage ist ein
-                # Hoechstwert, Rueckschritt+Wiederkehr zahlt +0.
-                depth_bonus = self.NEW_GLOBAL_DEPTH_REWARD * _stage
+                # Pro neu erreichter Stufe und Episode exakt ein fester Bonus.
+                # Kein Multiplizieren mit der Stufennummer und kein Reward bei
+                # Rueckkehr auf eine bereits erreichte Stufe.
+                depth_bonus = self.NEW_GLOBAL_DEPTH_REWARD * stage_gain
                 reward += depth_bonus
                 reward_events.append(
                     f"world_depth:{_stage}:+{depth_bonus:.0f}"
@@ -3904,10 +4063,6 @@ class PokemonFireRedEnv(gym.Env):
                     self.reward_event_counts.get("world_depth", 0) + 1
                 )
                 if self._claim_global_depth(_stage):
-                    # Flotten-Erster auf einer neuen Stufe: kleiner Extra-Anreiz,
-                    # echtes Neuland zu betreten.
-                    reward += 200.0
-                    reward_events.append(f"world_depth_pioneer:{_stage}:+200")
                     self.run_stats["global_depth_records"] += 1
                     self._save_run_stats()
 
@@ -3943,7 +4098,8 @@ class PokemonFireRedEnv(gym.Env):
                     and _north_ok
                 ):
                     _saved_now = self._save_stage_checkpoint(
-                        _stage_now, bank, map_id, x, y
+                        _stage_now, bank, map_id, x, y,
+                        episode_reward=self.current_reward,
                     )
                     if _saved_now:
                         milestone_saved = f"stage_{_stage_now}"
@@ -3979,7 +4135,10 @@ class PokemonFireRedEnv(gym.Env):
 
                         if edge_key not in self.learning_seen_edges:
                             self.learning_seen_edges.add(edge_key)
-                            if edge_key in self.persistent_known_edges:
+                            if (
+                                edge_key in self.persistent_known_edges
+                                and self.REPLAY_EDGE_REWARD
+                            ):
                                 reward += self.REPLAY_EDGE_REWARD
                                 reward_events.append(f"replay_edge:+{self.REPLAY_EDGE_REWARD:.2f}")
                         visit_count = self.episode_edge_visits.get(
@@ -4000,11 +4159,12 @@ class PokemonFireRedEnv(gym.Env):
                                 self.shared_edges, edge_key
                             ):
                                 self.steps_since_new_edge = 0
-                                reward += self.NEW_EDGE_REWARD
-                                reward_events.append(
-                                    "new_edge_global:"
-                                    f"+{self.NEW_EDGE_REWARD:.2f}"
-                                )
+                                if self.NEW_EDGE_REWARD:
+                                    reward += self.NEW_EDGE_REWARD
+                                    reward_events.append(
+                                        "new_edge_global:"
+                                        f"+{self.NEW_EDGE_REWARD:.2f}"
+                                    )
                             else:
                                 # V10.2:
                                 # Edge ist global bekannt, aber fuer diesen
@@ -4012,11 +4172,12 @@ class PokemonFireRedEnv(gym.Env):
                                 # signal statt den richtigen Weg neutral zu machen.
                                 local_edge_reward = self.NEW_EDGE_REWARD * 0.20
                                 self.steps_since_new_edge = 0
-                                reward += local_edge_reward
-                                reward_events.append(
-                                    "new_edge_local:"
-                                    f"+{local_edge_reward:.2f}"
-                                )
+                                if local_edge_reward:
+                                    reward += local_edge_reward
+                                    reward_events.append(
+                                        "new_edge_local:"
+                                        f"+{local_edge_reward:.2f}"
+                                    )
                         else:
                             self.steps_since_new_edge += (
                                 self.LOCATION_READ_EVERY
@@ -4030,11 +4191,12 @@ class PokemonFireRedEnv(gym.Env):
                                 if bank != self.OVERWORLD_BANK
                                 else self.SECOND_EDGE_VISIT_PENALTY
                             )
-                            reward += revisit_penalty
-                            reward_events.append(
-                                "edge_revisit:"
-                                f"{revisit_penalty:.2f}"
-                            )
+                            if revisit_penalty:
+                                reward += revisit_penalty
+                                reward_events.append(
+                                    "edge_revisit:"
+                                    f"{revisit_penalty:.2f}"
+                                )
                         elif (
                             visit_count
                             >= self.REPEAT_EDGE_VISITS_FOR_LOOP
@@ -4044,11 +4206,12 @@ class PokemonFireRedEnv(gym.Env):
                                 if bank != self.OVERWORLD_BANK
                                 else self.REPEAT_EDGE_PENALTY
                             )
-                            reward += repeat_penalty
-                            reward_events.append(
-                                "repeat_edge:"
-                                f"{repeat_penalty:.2f}"
-                            )
+                            if repeat_penalty:
+                                reward += repeat_penalty
+                                reward_events.append(
+                                    "repeat_edge:"
+                                    f"{repeat_penalty:.2f}"
+                                )
 
                         # Wiederholbarer, nicht farmbarer Ziel-Fortschritt:
                         # naeher und weiter sind symmetrisch.
@@ -4082,6 +4245,8 @@ class PokemonFireRedEnv(gym.Env):
                             )
 
                             if (
+                                target_step_reward
+                                and
                                 prev_d is not None
                                 and new_d is not None
                             ):
@@ -4162,12 +4327,12 @@ class PokemonFireRedEnv(gym.Env):
             # Absoluter Failsafe: Solange das Start-Haus nicht bestaetigt
             # verlassen wurde, darf KEINE Episode (Beginning oder Curriculum)
             # bis zum globalen 8192-Limit laufen.
-            if self.total_steps >= self.EARLY_HOUSE_HARD_CAP:
+            if self.route_steps >= self.EARLY_HOUSE_HARD_CAP:
                 stage_timeout = "early_house_hard_cap"
 
             elif (
                 not self.intro_complete_rewarded
-                and self.total_steps >= self.INTRO_TIMEOUT_STEPS
+                and self.route_steps >= self.INTRO_TIMEOUT_STEPS
             ):
                 stage_timeout = "intro_timeout"
 
@@ -4178,14 +4343,14 @@ class PokemonFireRedEnv(gym.Env):
                 intro_step = self.episode_milestone_steps.get(
                     "intro_complete", 0
                 )
-                if self.total_steps - intro_step >= self.STAIRS_TIMEOUT_STEPS:
+                if self.route_steps - intro_step >= self.STAIRS_TIMEOUT_STEPS:
                     stage_timeout = "stairs_timeout"
 
             elif self.stairs_down_rewarded:
                 stairs_step = self.episode_milestone_steps.get(
                     "stairs_down", 0
                 )
-                if self.total_steps - stairs_step >= self.EXIT_TIMEOUT_STEPS:
+                if self.route_steps - stairs_step >= self.EXIT_TIMEOUT_STEPS:
                     stage_timeout = "house_exit_timeout"
 
             if stage_timeout is not None and not truncated:
@@ -4232,19 +4397,62 @@ class PokemonFireRedEnv(gym.Env):
             else:
                 info["anti_loop_reset"] = False
 
+            # Wiederholtes A an exakt derselben Stelle ist typischerweise ein
+            # Buch/Regal/NPC-Loop. Die hohe Freigrenze laesst normale Dialoge
+            # durch; Bewegung oder echter Fortschritt setzt den Zaehler zurueck.
+            interaction_anchor = (
+                bank,
+                map_id,
+                x,
+                y,
+                int(self.intro_complete_rewarded),
+                int(self.stairs_down_rewarded),
+                int(self.left_house_rewarded),
+                int(self.has_starter),
+                p_lvl,
+                badges,
+                in_battle,
+            )
+            if interaction_anchor != self.interaction_anchor:
+                self.interaction_anchor = interaction_anchor
+                self.interaction_count = 0
+
+            if requested_action == 0 and in_battle == 0:
+                self.interaction_count += 1
+                if self.interaction_count > self.INTERACTION_SPAM_PENALTY_AFTER:
+                    reward += self.INTERACTION_SPAM_PENALTY
+                    reward_events.append(
+                        "interaction_spam:"
+                        f"{self.INTERACTION_SPAM_PENALTY:.1f}"
+                    )
+                if self.interaction_count >= self.INTERACTION_SPAM_RESET_AT:
+                    truncated = True
+                    self.last_stage_timeout = "interaction_spam"
+                    info["last_stage_timeout"] = "interaction_spam"
+                    info["interaction_spam_reset"] = True
+                    self.anti_loop_resets += 1
+                    self.episode_anti_loop_resets += 1
+                else:
+                    info["interaction_spam_reset"] = False
+            else:
+                info["interaction_spam_reset"] = False
+
             self.previous_valid_bank = bank
             self.previous_valid_map = map_id
         else:
             self.stuck_counter = 0
             self.last_progress_signature = None
+            self.interaction_anchor = None
+            self.interaction_count = 0
             info["anti_loop_reset"] = False
+            info["interaction_spam_reset"] = False
 
         # V7.7: Starter-Rusher trainieren nur Beginning -> Starter.
         if (
             self._is_starter_rusher()
             and not self.has_starter
             and in_battle == 0
-            and self.total_steps >= self.STARTER_RUSH_TIMEOUT
+            and self.route_steps >= self.STARTER_RUSH_TIMEOUT
         ):
             truncated = True
             self.last_stage_timeout = "starter_rush_timeout"
@@ -4256,7 +4464,7 @@ class PokemonFireRedEnv(gym.Env):
             self.training_objective == "progress"
             and self.has_starter
             and in_battle == 0
-            and self.total_steps - self.last_progress_advance_step
+            and self.route_steps - self.last_progress_advance_step
                 >= self.POST_STARTER_STALL_TIMEOUT
         ):
             truncated = True
@@ -4271,33 +4479,36 @@ class PokemonFireRedEnv(gym.Env):
             and not self._is_long_full_probe()
             and not truncated
         ):
-            if not self.intro_complete_rewarded and self.total_steps >= self.FULL_INTRO_STAGE_CAP:
+            if not self.intro_complete_rewarded and self.route_steps >= self.FULL_INTRO_STAGE_CAP:
                 truncated = True
                 self.last_stage_timeout = "full_intro_cap"
                 reward_events.append("full_intro_cap:truncate")
-            elif self.intro_complete_rewarded and not self.stairs_down_rewarded and self.total_steps >= self.FULL_STAIRS_STAGE_CAP:
+            elif self.intro_complete_rewarded and not self.stairs_down_rewarded and self.route_steps >= self.FULL_STAIRS_STAGE_CAP:
                 truncated = True
                 self.last_stage_timeout = "full_stairs_cap"
                 reward_events.append("full_stairs_cap:truncate")
-            elif self.stairs_down_rewarded and not self.left_house_rewarded and self.total_steps >= self.FULL_EXIT_STAGE_CAP:
+            elif self.stairs_down_rewarded and not self.left_house_rewarded and self.route_steps >= self.FULL_EXIT_STAGE_CAP:
                 truncated = True
                 self.last_stage_timeout = "full_exit_cap"
                 reward_events.append("full_exit_cap:truncate")
 
         # V10.15: ten long full probes get a real 32k horizon.
-        if self._is_long_full_probe() and self.total_steps >= self.LONG_FULL_PROBE_STEPS and not truncated:
+        if self._is_long_full_probe() and self.route_steps >= self.LONG_FULL_PROBE_STEPS and not truncated:
             truncated = True
             self.last_stage_timeout = "long_full_32k"
             reward_events.append("long_full_32k:truncate")
-        # V10.31: Starter-Spezialist hat den Starter, kommt aber seit 4000
-        # Schritten nicht aus dem Labor -> neu ansetzen (schnelle Iteration
-        # fuer genau diese Passage).
+        # V10.31/V15.3: hat den Starter, kommt aber seit 4000 Schritten nicht
+        # aus dem Labor -> neu ansetzen (schnelle Iteration fuer genau diese
+        # Passage). War auf die Rolle "starter" beschraenkt (Spezialisten-Ära);
+        # im All-Full-Regime ist "full" die einzige Rolle, die das ueberhaupt
+        # noch erlebt - ohne diese Erweiterung wandern Full-Agenten mit
+        # Starter beliebig lange im Labor herum (kein Timeout griff mehr).
         if (
-            self.training_objective == "starter"
+            self.training_objective in ("starter", "full", "progress")
             and self.has_starter
             and not self.starter_outdoor_rewarded
             and self.starter_obtained_step is not None
-            and self.total_steps - self.starter_obtained_step >= 4000
+            and self.route_steps - self.starter_obtained_step >= 4000
             and not truncated
         ):
             truncated = True
@@ -4318,7 +4529,7 @@ class PokemonFireRedEnv(gym.Env):
         if (
             specialist_timeout is not None
             and not objective_done
-            and self.total_steps >= specialist_timeout
+            and self.route_steps >= specialist_timeout
             and not truncated
         ):
             truncated = True
@@ -4340,7 +4551,7 @@ class PokemonFireRedEnv(gym.Env):
             # Durchqueren - nicht alle 8k Steps zurueckgesetzt werden.
             if str(self.episode_start).startswith("outdoor_"):
                 _prog_cap = max(_prog_cap, 45000)
-            if self.total_steps >= _prog_cap:
+            if self.route_steps >= _prog_cap:
                 truncated = True
                 self.last_stage_timeout = f"progress_tier{_tier}_cap"
                 reward_events.append(f"progress_tier{_tier}_cap:truncate")
@@ -4362,7 +4573,10 @@ class PokemonFireRedEnv(gym.Env):
         info["explored_tiles"] = len(self.seen_coords)
         info["visited_maps"] = len(self.visited_maps)
         info["stuck_counter"] = self.stuck_counter
-        info["episode_steps"] = self.total_steps
+        info["episode_steps"] = self.route_steps
+        info["route_steps"] = self.route_steps
+        info["battle_steps"] = self.battle_steps
+        info["ppo_episode_steps"] = self.total_steps
         info["story_stage"] = (
             "OUTDOOR"
             if self.left_house_confirmed else
@@ -4410,7 +4624,10 @@ class PokemonFireRedEnv(gym.Env):
                     "y": y,
                     "path": self.recent_path,
                     "room": f"Bank {bank} / Map {map_id}",
-                    "steps": self.total_steps,
+                    "steps": self.route_steps,
+                    "route_steps": self.route_steps,
+                    "battle_steps": self.battle_steps,
+                    "ppo_episode_steps": self.total_steps,
                     "reward": round(self.current_reward, 2),
                     "level": self.last_level,
                     "badges": self.last_badges,
@@ -4425,7 +4642,7 @@ class PokemonFireRedEnv(gym.Env):
                     "has_starter": bool(self.has_starter),
                     "has_target_starter": bool(self.has_target_starter),
                     "starter_species_id": int(self._starter_species()),
-                    "training_phase": (
+                    "training_phase": "full_brain" if self.FULL_ONLY_MODE else (
                         "forest_push"
                         if self.full_chain_ready
                         else "chain_repair"
@@ -4539,9 +4756,9 @@ class PokemonFireRedEnv(gym.Env):
         # Fortschritt erreicht wurde. Full-Chain darf weiterlaufen.
         if (
             self.training_objective == "progress"
-            and self.total_steps >= self.PROGRESS_STALL_TIMEOUT
+            and self.route_steps >= self.PROGRESS_STALL_TIMEOUT
             and (
-                self.total_steps - self.last_progress_advance_step
+                self.route_steps - self.last_progress_advance_step
                 >= self.PROGRESS_STALL_TIMEOUT
             )
         ):
@@ -4555,9 +4772,18 @@ class PokemonFireRedEnv(gym.Env):
             if self.training_objective in ("progress", "badge", "full")
             else 32768
         )
+        if (
+            self.current_battle_steps >= self.MAX_SINGLE_BATTLE_STEPS
+            or self.battle_steps >= self.MAX_EPISODE_BATTLE_STEPS
+        ):
+            truncated = True
+            self.last_stage_timeout = "battle_step_cap"
+            info["last_stage_timeout"] = "battle_step_cap"
+            reward_events.append("battle_step_cap:truncate")
+
         terminated = bool(
             objective_done
-            or self.total_steps >= episode_limit
+            or self.route_steps >= episode_limit
         )
 
         # V15.3: das Post-Haus-Wander-Shaping (+0.35/Kachel, Loop-Strafen) ist

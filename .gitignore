@@ -21,6 +21,7 @@ custom_integrations/
 runtime/
 checkpoints/
 brain_backups/
+backups/
 curriculum_shared/
 curriculum_states/
 exploration_memory/

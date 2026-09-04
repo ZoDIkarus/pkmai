@@ -98,19 +98,19 @@ def main() -> None:
     config.restart_failed_env_runners = True
     algorithm = config.build()
     version = 0
-    publish_policy(version)
+    last_checkpoint = None
+    publish_policy(version, last_checkpoint)
     try:
         while True:
             result = algorithm.train()
             version += 1
-            checkpoint = None
             if version % checkpoint_every == 0:
                 target = CHECKPOINTS_DIR / f"policy-v{version:08d}"
                 checkpoint_result = algorithm.save()
                 if checkpoint_result.checkpoint is None:
                     raise RuntimeError("RLlib returned no checkpoint")
-                checkpoint = persist_checkpoint(checkpoint_result.checkpoint, target)
-            publish_policy(version, checkpoint)
+                last_checkpoint = persist_checkpoint(checkpoint_result.checkpoint, target)
+            publish_policy(version, last_checkpoint)
             print(json.dumps({"policy_version": version, "timesteps": result.get("num_env_steps_sampled_lifetime", 0)}), flush=True)
     finally:
         algorithm.stop()

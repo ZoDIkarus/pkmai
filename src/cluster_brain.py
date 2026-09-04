@@ -34,6 +34,15 @@ CHECKPOINTS_DIR = CLUSTER_DIR / "brain_checkpoints"
 POLICY_FILE = CLUSTER_DIR / "policy.json"
 
 
+def persist_checkpoint(checkpoint, target: Path) -> str:
+    temporary = target.parent / f".{target.name}.tmp"
+    if temporary.exists():
+        shutil.rmtree(temporary)
+    checkpoint.to_directory(str(temporary))
+    os.replace(temporary, target)
+    return str(target)
+
+
 def make_cluster_env(config: dict):
     return ClusteredPokemonEnv(
         rank=int(config.get("rank", 0)),
@@ -97,12 +106,10 @@ def main() -> None:
             checkpoint = None
             if version % checkpoint_every == 0:
                 target = CHECKPOINTS_DIR / f"policy-v{version:08d}"
-                temporary = CHECKPOINTS_DIR / f".policy-v{version:08d}.tmp"
-                if temporary.exists():
-                    shutil.rmtree(temporary)
-                saved = Path(algorithm.save(str(temporary)))
-                os.replace(saved, target)
-                checkpoint = str(target)
+                checkpoint_result = algorithm.save()
+                if checkpoint_result.checkpoint is None:
+                    raise RuntimeError("RLlib returned no checkpoint")
+                checkpoint = persist_checkpoint(checkpoint_result.checkpoint, target)
             publish_policy(version, checkpoint)
             print(json.dumps({"policy_version": version, "timesteps": result.get("num_env_steps_sampled_lifetime", 0)}), flush=True)
     finally:

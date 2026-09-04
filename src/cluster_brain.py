@@ -50,11 +50,14 @@ def make_cluster_env(config: dict):
     )
 
 
-def publish_policy(version: int, checkpoint: str | None = None) -> None:
+def publish_policy(
+    version: int, checkpoint: str | None = None, timesteps: int = 0
+) -> None:
     CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": version,
         "checkpoint": checkpoint,
+        "timesteps": timesteps,
         "signature": build_environment_signature(
             observation_shape=(64, 64, 1), nav_features=28, action_count=7
         ),
@@ -99,7 +102,7 @@ def main() -> None:
     algorithm = config.build()
     version = 0
     last_checkpoint = None
-    publish_policy(version, last_checkpoint)
+    publish_policy(version, last_checkpoint, timesteps=0)
     try:
         while True:
             result = algorithm.train()
@@ -110,8 +113,9 @@ def main() -> None:
                 if checkpoint_result.checkpoint is None:
                     raise RuntimeError("RLlib returned no checkpoint")
                 last_checkpoint = persist_checkpoint(checkpoint_result.checkpoint, target)
-            publish_policy(version, last_checkpoint)
-            print(json.dumps({"policy_version": version, "timesteps": result.get("num_env_steps_sampled_lifetime", 0)}), flush=True)
+            timesteps = int(result.get("num_env_steps_sampled_lifetime", 0) or 0)
+            publish_policy(version, last_checkpoint, timesteps=timesteps)
+            print(json.dumps({"policy_version": version, "timesteps": timesteps}), flush=True)
     finally:
         algorithm.stop()
         ray.shutdown()

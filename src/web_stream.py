@@ -3,6 +3,7 @@ import glob
 import json
 import threading
 import tempfile
+import time
 from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse, FileResponse
 import uvicorn
@@ -25,6 +26,9 @@ EXPLORATION_MEMORY_DIR = os.path.join(RUNTIME_DIR, "exploration_memory")
 WATCHER_MAPPING_FILE = os.path.join(RUNTIME_DIR, "watcher_mapping.json")
 TRAINER_STATUS_FILE = os.path.join(RUNTIME_DIR, "trainer_status.json")
 WATCHER_STREAM_FILE = os.path.join(RUNTIME_DIR, "watcher.jpg")
+CLUSTER_DIR = os.path.join(RUNTIME_DIR, "cluster")
+CLUSTER_POLICY_FILE = os.path.join(CLUSTER_DIR, "policy.json")
+CLUSTER_WORKERS_FILE = os.path.join(CLUSTER_DIR, "workers.json")
 
 def _live_learner_steps(fallback=0):
     try:
@@ -52,6 +56,49 @@ def get_trainer_status():
             return json.load(f) or {}
     except Exception:
         return {"learner_steps":0,"champion_steps":0,"champion_version":0,"delta_steps":0}
+
+
+@app.get("/api/cluster-status")
+def get_cluster_status():
+    now = time.time()
+    try:
+        with open(CLUSTER_POLICY_FILE, "r", encoding="utf-8") as f:
+            policy = json.load(f) or {}
+    except Exception:
+        policy = {}
+    try:
+        with open(CLUSTER_WORKERS_FILE, "r", encoding="utf-8") as f:
+            worker_rows = json.load(f) or {}
+    except Exception:
+        worker_rows = {}
+
+    workers = []
+    for worker_id, row in worker_rows.items():
+        if not isinstance(row, dict):
+            continue
+        last_seen = float(row.get("last_seen", 0) or 0)
+        workers.append(
+            {
+                "worker_id": str(row.get("worker_id", worker_id)),
+                "hostname": str(row.get("hostname", "")),
+                "active_agents": max(0, int(row.get("active_agents", 0) or 0)),
+                "fps": max(0.0, float(row.get("fps", 0) or 0)),
+                "policy_version": max(0, int(row.get("policy_version", 0) or 0)),
+                "age_seconds": round(max(0.0, now - last_seen), 1),
+                "online": now - last_seen < 15,
+            }
+        )
+    workers.sort(key=lambda item: item["worker_id"])
+
+    checkpoint = os.path.basename(str(policy.get("checkpoint") or ""))
+    policy_mtime = os.path.getmtime(CLUSTER_POLICY_FILE) if os.path.exists(CLUSTER_POLICY_FILE) else 0
+    return {
+        "brain_online": bool(policy_mtime and now - policy_mtime < 45),
+        "policy_version": max(0, int(policy.get("version", 0) or 0)),
+        "timesteps": max(0, int(policy.get("timesteps", 0) or 0)),
+        "checkpoint": checkpoint,
+        "workers": workers,
+    }
 
 
 @app.get("/map.png")
@@ -2999,6 +3046,27 @@ setInterval(refreshChampionNight,2000);refreshChampionNight();
 <script id="learner-truth-js">async function refreshLearnerTruth(){try{const r=await fetch('/api/trainer-status?ts='+Date.now());const d=await r.json();const f=n=>Number(n||0).toLocaleString('de-DE');document.getElementById('lth-learner').textContent=f(d.learner_steps);document.getElementById('lth-champion').textContent=f(d.champion_steps);document.getElementById('lth-delta').textContent=(Number(d.delta_steps||0)>=0?'+':'')+f(d.delta_steps);}catch(e){}}setInterval(refreshLearnerTruth,1000);refreshLearnerTruth();</script>
 
 
+<style id="pkmai-cluster-style">
+  #cluster-dashboard{margin:16px;background:#101827;border:1px solid #2a3b55;border-radius:12px;padding:14px;color:#dbeafe;font:13px system-ui,sans-serif}
+  #cluster-dashboard h2{margin:0 0 10px;font-size:16px;color:#93c5fd}.cluster-summary{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px}.cluster-chip{background:#17243a;border-radius:7px;padding:7px 9px}.cluster-ok{color:#86efac}.cluster-stale{color:#fca5a5}.cluster-workers{display:grid;gap:7px}.cluster-worker{display:grid;grid-template-columns:1fr auto auto auto;gap:10px;align-items:center;background:#17243a;border-radius:7px;padding:8px}.cluster-worker small{color:#93a4bc}
+</style>
+<section id="cluster-dashboard" aria-live="polite">
+  <h2>Cluster Brain &amp; Worker</h2>
+  <div id="cluster-summary" class="cluster-summary">Cluster-Status wird geladen …</div>
+  <div id="cluster-workers" class="cluster-workers"></div>
+</section>
+<script id="pkmai-cluster-dashboard-js">
+  async function refreshClusterDashboard(){
+    try{
+      const r=await fetch('/api/cluster-status?ts='+Date.now());
+      const d=await r.json(), fmt=n=>Number(n||0).toLocaleString('de-DE'), esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+      const online=d.brain_online?'cluster-ok':'cluster-stale';
+      document.getElementById('cluster-summary').innerHTML=`<span class="cluster-chip ${online}">Brain: ${d.brain_online?'online':'offline'}</span><span class="cluster-chip">Policy v${d.policy_version||0}</span><span class="cluster-chip">${fmt(d.timesteps)} Steps</span><span class="cluster-chip">Checkpoint: ${d.checkpoint||'—'}</span>`;
+      document.getElementById('cluster-workers').innerHTML=(d.workers||[]).map(w=>`<div class="cluster-worker"><span><b>${esc(w.worker_id)}</b><br><small>${esc(w.hostname||'unbekannter Host')} · ${w.age_seconds}s</small></span><span class="${w.online?'cluster-ok':'cluster-stale'}">${w.online?'online':'stale'}</span><span>${w.active_agents} Emulatoren</span><span>${Number(w.fps||0).toFixed(1)} FPS · v${w.policy_version||0}</span></div>`).join('')||'<div class="cluster-worker">Keine Worker registriert.</div>';
+    }catch(e){document.getElementById('cluster-summary').textContent='Cluster-Status nicht erreichbar.';}
+  }
+  refreshClusterDashboard();setInterval(refreshClusterDashboard,2000);
+</script>
 </body>
 </html>
     """

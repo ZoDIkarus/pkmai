@@ -845,12 +845,12 @@ def main():
         inttype=retro.data.Integrations.CUSTOM_ONLY,
         render_mode=None,
     )
-    # Wie im Trainer: State.NONE besitzt keinen Reset-Anker. Einen echten
-    # Kaltstart einmal sichern, damit jeder Watcher-Reset garantiert wieder
-    # vor Intro und Namensvergabe beginnt.
+    # Wie im Trainer: State.NONE besitzt keinen Reset-Anker. V17: der Watcher
+    # startet ab jetzt vom selben fixen Savestate wie die 50 Trainings-Clients
+    # (Oaks Labor, Schiggi bereits geholt) statt vom Kaltstart - sonst wuerde
+    # der sichtbare Lauf ein anderes Spiel zeigen als das, was trainiert wird.
+    env.load_state("StartGame", inttype=retro.data.Integrations.CUSTOM_ONLY)
     env.reset()
-    env.initial_state = bytes(env.em.get_state())
-    env.statename = "v16_beginning.state"
     env.auto_render = False
     if hasattr(env, "viewer"):
         env.viewer = None

@@ -491,7 +491,12 @@ class PokemonFireRedEnv(gym.Env):
         # V10.31: die echte Wand ist "raus aus Eichs Labor nach dem Starter"
         # (nicht Route 1). Dafuer gab es bisher keinen Reward-Gradienten.
         self.starter_outdoor_rewarded = False
-        self.starter_obtained_step = None
+        # V17: wurde bisher nur beim Uebergang "kein Starter -> Starter"
+        # gesetzt. Der Startpunkt hat den Starter aber schon ab Step 0, dieser
+        # Uebergang passiert also nie mehr - das "muss innerhalb 4000 Steps aus
+        # dem Labor"-Sicherheitsnetz waere sonst permanent tot. 0 statt None:
+        # die 4000 Steps zaehlen jetzt ab Episodenstart.
+        self.starter_obtained_step = 0
 
         # Persistente Lernstatistik: bleibt ueber Episoden erhalten.
         self.completed_episodes = 0
@@ -581,13 +586,21 @@ class PokemonFireRedEnv(gym.Env):
         self.intro_last_thumb = None
         self.intro_same_screen_steps = 0
         self.intro_novelty_reward_total = 0.0
-        self.intro_complete_rewarded = False
+        # V17: der feste Startpunkt liegt bereits nach Intro/Treppe/Hausausgang.
+        # Diese Uebergaenge werden nur durch In-Episode-Beobachtung gesetzt und
+        # koennen ab dem neuen Startpunkt nie mehr beobachtet werden - False
+        # wuerde bei INTRO_TIMEOUT_STEPS/STAIRS_TIMEOUT_STEPS/EXIT_TIMEOUT_STEPS
+        # JEDE Episode zwangsweise frueh abbrechen (siehe Zeile ~4330).
+        self.intro_complete_rewarded = True
 
         # Story-Reward-Meilensteine (pro Episode nur einmal).
         self.initial_indoor_map = None
-        self.stairs_down_rewarded = False
-        self.left_house_rewarded = False
-        self.left_house_confirmed = False
+        self.stairs_down_rewarded = True
+        self.left_house_rewarded = True
+        # V17: separat von left_house_rewarded, aber gleiches Problem - nur
+        # Telemetrie (v2_full_left_house%), keine Reward-Wirkung, aber sonst
+        # dauerhaft fälschlich 0% obwohl der Hausausgang laengst erledigt ist.
+        self.left_house_confirmed = True
         self.outdoor_confirm_reads = 0
         self.last_stage_timeout = None
         self.outdoor_first_step_rewarded = False
@@ -2540,15 +2553,24 @@ class PokemonFireRedEnv(gym.Env):
         self.has_starter = False
         self.has_target_starter = False
         self.starter_outdoor_rewarded = False
-        self.starter_obtained_step = None
+        # V17: wurde bisher nur beim Uebergang "kein Starter -> Starter"
+        # gesetzt. Der Startpunkt hat den Starter aber schon ab Step 0, dieser
+        # Uebergang passiert also nie mehr - das "muss innerhalb 4000 Steps aus
+        # dem Labor"-Sicherheitsnetz waere sonst permanent tot. 0 statt None:
+        # die 4000 Steps zaehlen jetzt ab Episodenstart.
+        self.starter_obtained_step = 0
         self._v10171_has_starter_cached = False
         self._starter_species_cached = 0
         self._v10171_party_check_step = -999999
 
         self.initial_indoor_map = None
-        self.stairs_down_rewarded = False
-        self.left_house_rewarded = False
-        self.left_house_confirmed = False
+        # V17: siehe __init__ - Startpunkt liegt bereits nach Treppe/Hausausgang.
+        self.stairs_down_rewarded = True
+        self.left_house_rewarded = True
+        # V17: separat von left_house_rewarded, aber gleiches Problem - nur
+        # Telemetrie (v2_full_left_house%), keine Reward-Wirkung, aber sonst
+        # dauerhaft fälschlich 0% obwohl der Hausausgang laengst erledigt ist.
+        self.left_house_confirmed = True
         self.outdoor_confirm_reads = 0
         self.last_stage_timeout = None
         self.outdoor_first_step_rewarded = False
@@ -2565,7 +2587,8 @@ class PokemonFireRedEnv(gym.Env):
         self.intro_last_thumb = None
         self.intro_same_screen_steps = 0
         self.intro_novelty_reward_total = 0.0
-        self.intro_complete_rewarded = False
+        # V17: siehe __init__ - Startpunkt liegt bereits nach dem Intro.
+        self.intro_complete_rewarded = True
 
         self.previous_valid_bank = None
         self.previous_valid_map = None

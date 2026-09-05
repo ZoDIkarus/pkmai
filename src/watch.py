@@ -30,7 +30,7 @@ LOCAL_DIR = os.path.join(PROJECT_ROOT, "local")
 BASE_DIR = PROJECT_ROOT
 
 # Geschwindigkeit / Anzeige
-TARGET_FPS = 150.0
+TARGET_FPS = 59.7  # echte GBA-Bildwiederholrate (~59,7275 Hz)
 GUI_EVERY_FRAMES = 6
 TELEMETRY_INTERVAL = 0.5
 FPS_TITLE_INTERVAL = 0.5

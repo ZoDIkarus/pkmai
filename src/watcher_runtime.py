@@ -121,14 +121,14 @@ def render_console(screen, data, events):
         (w, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, weight)
         label(text, x_right - w, y, color, scale, weight)
 
-    def panel(x0, y0, x1, y1, fill=(38, 42, 50), border=(58, 64, 76)):
+    def panel(x0, y0, x1, y1, fill=(44, 44, 46), border=(64, 64, 70)):
         cv2.rectangle(canvas, (x0, y0), (x1, y1), fill, -1)
         cv2.rectangle(canvas, (x0, y0), (x1, y1), border, 1)
 
     def dot(x, y, color, r=4):
         cv2.circle(canvas, (x, y), r, color, -1, cv2.LINE_AA)
 
-    label('ALEX / LIVE WATCHER', 20, 24, (210, 225, 210), .65)
+    label('PKMAI - LIVE WATCHER', 20, 24, (210, 225, 210), .65)
     label(
         f"Champion v{data.get('champion_version', 0)}  |  "
         f"Learner {data.get('learner_steps', 0):,} steps total  |  "
@@ -138,7 +138,7 @@ def render_console(screen, data, events):
 
     # -- status card: model + episode/reward/stage at a glance, one shared
     #    3-column grid so every row lines up with the ones below it -------
-    panel(728, 8, 1192, 186)
+    panel(728, 8, 1192, 164)
     battle = bool(data['in_battle'])
     badge_color = _NEG if battle else _POS
     cv2.rectangle(canvas, (740, 18), (856, 40), badge_color, -1)
@@ -167,15 +167,18 @@ def render_console(screen, data, events):
         dot(x, 114, dot_color, 5)
         label(text, x + 14, 119, text_color, .44)
 
-    label('Same actions/observations/rewards/resets as training. No learning.',
-          740, 149, (125, 130, 140), .34)
-    label('TRAINER REWARD ENGINE / isolated evaluation - one-time bonuses are private',
-          740, 172, (120, 125, 135), .34)
+    # Kleingedrucktes bewusst winzig - nur Kontext, kein Statuswert, damit
+    # die Karte kompakt bleibt und das Fenster sich leichter fuers Streamen
+    # zurechtstutzen laesst.
+    label('Same rules as training, inference only, no learning.',
+          740, 146, (110, 114, 122), .28)
+    label('Isolated evaluation - one-time bonuses stay private.',
+          740, 158, (110, 114, 122), .28)
 
     # -- reward events table ---------------------------------------------
-    tx0, ty0, tx1, ty1 = 728, 194, 1192, 650
-    panel(tx0, ty0, tx1, ty1, fill=(30, 33, 39))
-    cv2.rectangle(canvas, (tx0, ty0), (tx1, ty0 + 26), (40, 58, 46), -1)
+    tx0, ty0, tx1, ty1 = 728, 172, 1192, 650
+    panel(tx0, ty0, tx1, ty1, fill=(33, 33, 36))
+    cv2.rectangle(canvas, (tx0, ty0), (tx1, ty0 + 26), (36, 50, 40), -1)
     label('REWARD EVENTS', tx0 + 12, ty0 + 18, (170, 225, 170), .48)
     label('newest first', tx1 - 92, ty0 + 18, (110, 130, 115), .36)
 
@@ -189,7 +192,7 @@ def render_console(screen, data, events):
         if y + row_h > ty1:
             break
         if i % 2 == 1:
-            cv2.rectangle(canvas, (tx0 + 1, y), (tx1 - 1, y + row_h), (35, 38, 45), -1)
+            cv2.rectangle(canvas, (tx0 + 1, y), (tx1 - 1, y + row_h), (39, 39, 42), -1)
         name, amount = _parse_event(ev)
         col = _event_color(amount)
         dot(tx0 + 16, y + row_h // 2 + 3, col, 4)

@@ -193,6 +193,10 @@ class PokemonFireRedEnv(gym.Env):
     # Kopplung an Levelsumme/Party-Groesse - kann also nie durch PC-Box-
     # Ein-/Auslagern verzerrt werden wie LEVEL_GAIN_REWARD vorher.
     POKEMON_CENTER_FIRST_HEAL_REWARD = 10.0
+    # Einmaliger Flotten-Bonus fuers allererste Mal ueberhaupt komplett
+    # geheilt worden zu sein (RAM-basiert, siehe POKEMON_CENTER_FIRST_HEAL_
+    # REWARD oben fuer die genaue Erkennung).
+    POKEMON_CENTER_VISIT_GLOBAL_REWARD = 100.0
     EXPERIENCE_GAIN_REWARD_PER_POINT = 0.0
     BATTLE_WIN_REWARD = 2.0
     ENEMY_HP_READ_EVERY = 2

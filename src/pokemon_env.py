@@ -2882,19 +2882,38 @@ class PokemonFireRedEnv(gym.Env):
         )
         # Ein Curriculum-Start darf seine bereits erreichte Stage nicht erneut
         # als neuen Durchbruch belohnen oder fortlaufend neu speichern.
+        # episode_best_stage MUSS beim welt-weiten Ratchet (_world_stage())
+        # bleiben - der schuetzt davor, dass der Depth-Reward
+        # (NEW_GLOBAL_DEPTH_REWARD, bis zu 1000/Stufe) bei jedem Episodenstart
+        # erneut ausgezahlt wird, nur weil der feste Savestate schon mit
+        # bestaetigter Paketabgabe (>= Stufe 5) startet.
         _baseline_stage = int(self._world_stage())
         _baseline_map = (
             int(self.cached_loc.get("map_bank", -1)),
             int(self.cached_loc.get("map_id", -1)),
         ) if self.cached_loc.get("valid", False) else (-1, -1)
+        self.episode_best_stage = _baseline_stage
+        # V17.4-Fix: _saved_stage (der Checkpoint-Anti-Doppel-Speicher-Schutz)
+        # darf NICHT dieselbe world_stage-Basis nutzen wie oben - genau dieser
+        # Ratchet floort ab Step 0 auf mindestens 5, wodurch _stage_now(2) >
+        # _saved_stage(5) fuer Route 1 NIE True wurde, egal wie kurz die
+        # Haltezeit ist. Reiner Kartenwert (_current_world_stage, OHNE die
+        # Paket-Flag-Bumps) statt world_stage/_stage_at_current_location -
+        # selbst Eichs Labor (der feste Spawnpunkt) wuerde ueber den
+        # Paket-Flag-Bump ebenfalls auf 5 kommen und denselben Fehler
+        # reproduzieren.
+        _checkpoint_baseline_stage = (
+            self._current_world_stage(*_baseline_map)
+            if _baseline_map != (-1, -1) else 0
+        )
         # Ein geladener Korridor-Checkpoint darf sich in dieser Episode noch
         # weiter nach Norden verbessern. Andere Stages bleiben einmalig.
         self._saved_stage = (
-            _baseline_stage - 1
-            if _baseline_stage >= 2 and _baseline_map in self.NORTH_CORRIDOR_MAPS
-            else _baseline_stage
+            _checkpoint_baseline_stage - 1
+            if _checkpoint_baseline_stage >= 2
+            and _baseline_map in self.NORTH_CORRIDOR_MAPS
+            else _checkpoint_baseline_stage
         )
-        self.episode_best_stage = _baseline_stage
         self._stage_hold_map = None
         self._stage_hold_steps = 0
 
@@ -4773,11 +4792,25 @@ class PokemonFireRedEnv(gym.Env):
                         bank, map_id, x, y
                     )
 
+                    # V17.4-Fix: der Wipe-Cooldown schuetzte bisher nur Map-/
+                    # Kachel-Rewards vor dem automatischen Pokecenter-
+                    # Teleport nach einem Party-Wipe - der Warp-Reward-Block
+                    # hier hatte NIE eine solche Pruefung, obwohl derselbe
+                    # Teleport einen (von,nach)-Uebergang zwischen einer fast
+                    # beliebigen Kampf-Position und dem Pokecenter erzeugt.
+                    # Da die genaue Kampf-Position praktisch nie zweimal
+                    # gleich ist, war das ein fast unerschoepflicher, immer
+                    # "global neuer" +100-Warp-Fund - jeder Party-Wipe konnte
+                    # so zusaetzlich zur -100-Strafe einen Bonus einbringen.
+                    # Buchfuehrung/Claims laufen wie bei Maps/Kacheln normal
+                    # weiter, nur die Auszahlung pausiert waehrend des
+                    # Cooldowns.
                     if transition_key not in self.learning_seen_transitions:
                         self.learning_seen_transitions.add(transition_key)
                         if (
                             transition_key in self.persistent_known_transitions
                             and self.EPISODE_TRANSITION_REWARD
+                            and not _wipe_cooldown_active
                         ):
                             reward += self.EPISODE_TRANSITION_REWARD
                             reward_events.append(
@@ -4795,10 +4828,15 @@ class PokemonFireRedEnv(gym.Env):
                         self._invalidate_navigation_cache()
                         self.steps_since_new_edge = 0
 
-                        if self._claim_shared(
+                        _claimed_warp_globally = self._claim_shared(
                             self.shared_transitions,
                             transition_key
-                        ):
+                        )
+                        if _wipe_cooldown_active:
+                            reward_events.append(
+                                "new_warp_suppressed_post_wipe:+0"
+                            )
+                        elif _claimed_warp_globally:
                             if self.NEW_TRANSITION_REWARD:
                                 reward += self.NEW_TRANSITION_REWARD
                             reward_events.append(

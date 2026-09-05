@@ -6,6 +6,96 @@ PKMAI is an experimental reinforcement-learning project that trains a PPO agent 
 
 ## Current release
 
+**V17.4 — Reward-Rebalance gegen Farm-Loops, Frontier-Scouts pro Stage, kritische Checkpoint-/Warp-Bugs behoben** (2026-09-06, Nachtsession)
+
+Ausgangspunkt war ein wiederkehrendes Live-Symptom: die Flotte lief lieber
+zurück in längst bekanntes Gebiet (Alabastia, Starterhaus) statt weiter nach
+Norden vorzustoßen, weil dort garantierter, risikofreier Reward wartete.
+Mehrere Runden aus Live-Beobachtung → Root-Cause-Suche → Fix haben dabei vier
+unabhängige, teils schon länger aktive Bugs zutage gefördert.
+
+**Reward-Rebalance (Farm-Loops geschlossen):**
+- Kanten-Reward komplett auf 0 (auch nicht mehr beim ersten Mal) — der
+  Pro-Episode-Anteil resettete sich bei jedem Reset und machte bekannte
+  Kurz-Loops am Spawn jede Episode neu profitabel.
+- Kachel-Reward: Pro-Run-Anteil (`EPISODE_TILE_REWARD`) auf 0 — dieselbe
+  Farm-Lücke wie bei Kanten, nur eine Stufe kleiner (sicheres Rumlaufen in
+  bekannten Innenräumen gab bisher noch kleines Dauer-Einkommen). Nur der
+  fleet-weite Einmal-Fund (`NEW_TILE_REWARD=2`) bleibt.
+- Map/Stadt-Reward: kein fleet-weiter Einmal-Jackpot mehr (ging strukturell
+  nur an den einen Agenten, der eine Map zuerst fand) — jetzt ein fester Wert
+  pro Run für JEDEN Agenten (`EPISODE_NEW_MAP_REWARD=100`,
+  `CITY_EPISODE_REWARD=250`). Gebäude-Erstfund (Reds Haus etc.) zahlt separat
+  nur noch einmal für die ganze Flotte, nicht mehr pro Agent.
+- Warp-Reward: kein Pro-Run-Bonus mehr für bekannte Türen
+  (`EPISODE_TRANSITION_REWARD=0`), nur der fleet-weite Einmal-Fund
+  (`NEW_TRANSITION_REWARD=100`) bleibt.
+- Neuer, benannter `BADGE_EARNED_REWARD=2000` (vorher unbenannt inline 2500).
+- Artenvielfalt-Fang und Pikachu-Wald-Bonus von fleet-weit-einmalig auf
+  pro-Run umgestellt (`SPECIES_CAUGHT_FIRST_REWARD=50`,
+  `PIKACHU_FOREST_CAUGHT_REWARD=1000`) — die Party resettet ja jede Episode,
+  ein Lifetime-Claim hätte ab dem zweiten jemals gefangenen Exemplar nie
+  wieder Anreiz gegeben, überhaupt zu fangen.
+- `GAMEPLAY_STEP_COST` 5× verschärft (`-0.001` → `-0.005`), da die echten
+  Ziele deutlich größer wurden, Herumstehen aber gleich billig blieb.
+
+**Vier kritische Bugs live gefunden und behoben:**
+1. **Stage-Checkpoints für Route 1/Vertania konnten nie entstehen.** Der
+   feste Savestate startet mit bereits bestätigter Paketabgabe an Prof.
+   Eich, wodurch `_world_stage()` (ein reiner Ratchet) ab Step 0 immer
+   mindestens 5 zurückgibt — unabhängig vom tatsächlichen Standort. Der
+   Checkpoint-Code nutzte diesen Wert sowohl (a) als zu speichernde
+   Stufennummer als auch (b) als Baseline für `_saved_stage`
+   (Anti-Doppel-Speicher-Schutz). Beide Stellen verglichen ihn gegen den rein
+   standortbasierten `_stage_at_current_location()` (Route 1 = 2, Vertania =
+   3) — 5 ≠ 2/3 schlug immer fehl. Beide Stellen jetzt auf den
+   standortbasierten Wert umgestellt (`episode_best_stage`, das den
+   Depth-Reward vor genau demselben Exploit schützt, bewusst NICHT
+   angefasst).
+2. **Alabastia (Pallet Town) gab jede Episode automatisch +250.** Der
+   Spawnpunkt liegt in Eichs Labor, 1-2 Schritte vor Alabastia — da
+   Alabastia selbst ein `CITY_MAPS`-Eintrag ist und längst bekannt, feuerte
+   der Stadt-Wiederholungsbonus jede einzelne Episode automatisch, quasi nur
+   fürs Rauslaufen. Alabastia explizit von diesem Bonus ausgenommen (andere
+   Städte bleiben unverändert, da echte wiederholte Lauf-Leistung nötig).
+3. **`shared_tiles` verlor seinen Fortschritt bei jedem Trainer-Neustart**
+   (nicht nur bei einem vollen Reset) — anders als `shared_edges`/`shared_maps`/
+   `shared_transitions` wurde es nie aus der persistierten Kanten-Historie
+   neu geseedet. Jeder gezielte Trainer-Neustart öffnete dadurch kurzzeitig
+   wieder das +2-Kachel-Fenster für längst bekanntes Terrain. Jetzt beim
+   Start aus den Endpunkten der geladenen Kanten-Historie vorbefüllt
+   (identische Logik im isolierten Watcher-Eval-Env, das zusätzlich alle 5
+   Minuten automatisch nachlädt, ohne den Prozess neu zu starten).
+4. **Party-Wipe-Teleport konnte einen Warp-Bonus auslösen.** Der
+   Wipe-Cooldown schützte bisher nur Map-/Kachel-Rewards vor dem
+   automatischen Pokecenter-Teleport nach einem Total-K.O. — der
+   Warp-Reward-Block hatte nie eine solche Prüfung. Da die exakte
+   Kampf-Position beim Fainten praktisch nie zweimal gleich ist, war das ein
+   fast unerschöpflicher, immer "global neuer" Warp-Fund — jeder Wipe konnte
+   zusätzlich zur -100-Strafe einen +100-Bonus einbringen. Jetzt ebenfalls
+   während des Cooldowns unterdrückt (Buchführung/Claims laufen normal
+   weiter).
+
+**Frontier-Scout-System überarbeitet:** vorher wanderten alle
+`FRONTIER_SCOUT_SLOTS` Scouts sofort zur tiefsten Front, sobald diese einen
+Checkpoint bekam — die vorherige Front wurde komplett verwaist. Jetzt bekommt
+jede validierte Stage ihre eigenen Scout-Slots dazu (`_scout_assigned_stage()`),
+bestehende Paare bleiben stabil auf ihrer Stage. `FRONTIER_SCOUT_SLOTS` 2 → 5
+(realistisch validiert die Flotte ohnehin nur 2-3 Stages pro Nacht). Die
+Checkpoint-Haltezeit (`_hold_required`) von 25 auf 3 Lesezyklen gesenkt — die
+eigentliche Qualitätssicherung passiert beim Ersetzen selbst (nur bei
+höherem Episoden-Reward oder weiter nördlicher Position).
+
+**Betrieb:** kompletter Reset aller Explorations-/Curriculum-/
+Statistik-Daten (Backup in `runtime_reset_backup_*/`, nicht gelöscht) — das
+trainierte Brain (`runtime/checkpoints/`), Champion-Metadaten und die
+Web-Karten-Layout-Konstanten bleiben unangetastet. **Neue Standing-Regel:**
+lief der Watcher gerade live (z.B. Stream), NIE über `stop_all.sh`/
+`start_all.sh` mitneustarten — stattdessen den Trainer gezielt per PID
+(`kill -INT`) stoppen und `start_all.sh` erneut aufrufen; das Skript erkennt
+bereits laufende Prozesse (Watcher/Web/Status) automatisch und lässt sie in
+Ruhe.
+
 **V17.2 — Savestate-Start, Fleet-Rekorde, Artenvielfalt** (2026-09-05)
 
 Seit V17 beginnt jede Episode nicht mehr am kalten Spielanfang, sondern an

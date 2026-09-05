@@ -105,6 +105,25 @@ class WorldStageTests(unittest.TestCase):
         self.assertEqual(env._stage_at_current_location(3, 19), 2)
         self.assertEqual(env._stage_at_current_location(3, 1), 3)
 
+    def test_saved_stage_baseline_must_not_use_world_stage_either(self):
+        # V17.4-Fix #2: reset() initialisiert _saved_stage (der Checkpoint-
+        # Anti-Doppel-Speicher-Schutz) - das darf ebenfalls NICHT den
+        # world_stage-Ratchet nutzen, sonst startet JEDE Episode mit
+        # _saved_stage>=5 und Route 1 (Stage 2)/Vertania (Stage 3) koennen
+        # NIE einen Checkpoint bekommen, egal wie kurz die Haltezeit ist
+        # (_stage_now(2) > _saved_stage(5) ist nie True). Sogar der fixe
+        # Spawnpunkt Eichs Labor (4,3) selbst wuerde ueber den Paket-Flag-
+        # Bump in _stage_at_current_location ebenfalls auf 5 kommen - nur
+        # der REINE Kartenwert (_current_world_stage, ohne Flag-Bumps) ist
+        # bei einem frischen Reset tatsaechlich 0.
+        env = bare_env(
+            parcel_obtained_confirmed=True,
+            parcel_delivered_confirmed=True,
+        )
+        self.assertEqual(env._current_world_stage(4, 3), 0)
+        self.assertEqual(env._stage_at_current_location(4, 3), 5)
+        self.assertEqual(env._current_world_stage(3, 19), 2)
+
     def test_story_confirmation_requires_map_order_and_three_reads(self):
         env = bare_env(has_target_starter=True)
 

@@ -1151,10 +1151,26 @@ def main():
     # Bewusst nicht aus alten Laeufen geseedet - jeder Full-Reset soll die
     # Erstfang-Boni wieder frisch vergeben koennen.
     shared_species = manager.dict()
-    # V17.4: welche Kacheln (bank,map,x,y) wurden fleet-weit schon jemals
+    # V17.4-Fix: welche Kacheln (bank,map,x,y) wurden fleet-weit schon jemals
     # betreten - ersetzt shared_edges als Basis fuer den einmaligen globalen
-    # Explorationsbonus. Ebenfalls bewusst nicht geseedet (wie shared_species).
-    shared_tiles = manager.dict()
+    # Explorationsbonus (+2). Anders als shared_species (bewusst leer, siehe
+    # oben) MUSS das aus der Kanten-Historie geseedet werden: shared_tiles
+    # ist ein reines In-Memory-Manager-Dict, das bei JEDEM Trainer-Neustart
+    # (nicht nur bei einem vollen Reset) neu entsteht. Ohne Seeding wuerde
+    # jede laengst besuchte Kachel nach jedem Neustart erneut als "global
+    # neu" gelten und +2 auszahlen - live beobachtet nach einem gezielten
+    # Trainer-Neustart heute Nacht. Es gibt keine eigene persistierte
+    # Tile-Historie, aber jede bekannte Kante verbindet zwei tatsaechlich
+    # betretene Kacheln - beide Endpunkte aus der ohnehin schon geladenen
+    # Kanten-Historie ergeben eine realistische Naeherung (identisch zur
+    # Watcher-Seed-Logik in watcher_runtime.make_evaluation_env()).
+    seed_tiles = {}
+    for e in seed_edges:
+        if len(e) == 6:
+            bank, map_id, x1, y1, x2, y2 = e
+            seed_tiles[(bank, map_id, x1, y1)] = 1
+            seed_tiles[(bank, map_id, x2, y2)] = 1
+    shared_tiles = manager.dict(seed_tiles)
 
     # V15: persistierter world_stage-Rekord (1=Alabastia .. 9=Orden).
     progress_file = os.path.join(

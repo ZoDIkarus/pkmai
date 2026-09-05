@@ -7,6 +7,60 @@
 
 ---
 
+## 🆕 V17.4-SESSION (2026-09-06, Nachtsession) — ZUERST LESEN
+
+Vollständige Details siehe README ("Current release"). Kurzfassung + offene
+Punkte:
+
+**Erledigt:**
+- Reward-Rebalance gegen Farm-Loops (Kanten/Kacheln/Warps: kein Pro-Run-Bonus
+  mehr auf bekanntem Terrain; Map/Stadt: fester Wert pro Run statt
+  fleet-Jackpot; Artenvielfalt/Pikachu: fleet-einmalig → pro-Run;
+  `BADGE_EARNED_REWARD=2000` benannt; `GAMEPLAY_STEP_COST` 5× verschärft).
+- **4 kritische, live gefundene Bugs behoben** (Details im README): (1)
+  Stage-Checkpoints für Route 1/Vertania konnten strukturell nie entstehen
+  (`_world_stage()`-Ratchet floort ab Step 0 auf ≥5, verglichen gegen
+  standortbasierte Werte), (2) Alabastia gab jede Episode automatisch +250
+  nur fürs Spawnen, (3) `shared_tiles` verlor seinen Fortschritt bei jedem
+  Trainer-Neustart (nicht nur bei vollem Reset), (4) Party-Wipe-Teleport
+  konnte einen +100-Warp-Bonus zusätzlich zur -100-Strafe auslösen.
+- Frontier-Scout-System: jede validierte Stage bekommt jetzt eigene
+  Scout-Slots (`FRONTIER_SCOUT_SLOTS` 2→5 pro Stage) statt dass alle Scouts
+  zur neuesten Front abwandern; Checkpoint-Haltezeit 25→3 Lesezyklen.
+- Kompletter Reset (Backup `runtime_reset_backup_20260905_224329/`, Brain +
+  Champion-Metadaten + Web-Karten-Layout unangetastet).
+- **Neue Standing-Regel:** Watcher während eines laufenden Livestreams NIE
+  über `stop_all.sh`/`start_all.sh` mitneustarten — nur den Trainer gezielt
+  per `kill -INT <pid>` stoppen, dann `start_all.sh` erneut aufrufen (erkennt
+  laufende Watcher/Web/Status-Prozesse automatisch und lässt sie in Ruhe).
+  Konsequenz: Code-Änderungen an `pokemon_env.py`/`watcher_runtime.py`
+  wirken sich auf den laufenden Watcher-Prozess NICHT aus, bis er reell neu
+  gestartet wird (isolierte Env wird nur einmal beim Prozessstart geladen).
+
+**Weiterhin offen / bewusst zurückgestellt:**
+- 🟡 `POKEMON_CENTER_VISIT_GLOBAL_REWARD` (+100, `shared_species["pokemon_center_ever"]`)
+  hat dieselbe Klasse von Bug wie der `shared_tiles`-Fund oben: kein Reseed
+  aus persistierten Daten bei einem Trainer-Neustart, kann sich also
+  theoretisch nach jedem gezielten Neustart einmal neu auslösen. Deutlich
+  kleinere Blast-Radius als der `shared_tiles`-Fund (nur +100, nur beim
+  nächsten tatsächlichen Heilungs-Event, nicht bei jeder Kachel) — bewusst
+  nicht mehr in dieser Session gefixt, da keine einfache persistierte
+  Proxy-Quelle existiert (anders als bei Tiles, die sich aus Kanten ableiten
+  lassen). Bei Gelegenheit: eigene kleine Persistenz für diesen einen Key
+  einführen, oder aus `shared_maps`/besuchten Center-Koordinaten ableiten.
+- 🟡 Watcher lief die ganze Nacht ohne Neustart (siehe Standing-Regel oben) -
+  zeigt bis zum naechsten echten Neustart weiterhin gelegentlich veraltete
+  "global neu"-Reward-Events (z.B. fuer laengst bekannte Tueren/Kacheln),
+  rein kosmetisch, betrifft NICHT das echte Training (isolierte, private
+  Registry). Beim naechsten regulaeren Neustart automatisch behoben.
+- 🔴 Item-/Pokeball-Pickup-Reward (~+15, RAM-Erkennung noch nicht verifiziert)
+- 🔴 Pokeball-Kauf-Reward (Geld-RAM-Adresse für deutsche ROM noch nicht
+  verifiziert, `task_3e5cd4bf`)
+- 🟡 Pokédex-basierte (statt Party-Groessen-Heuristik) Spezies-Fang-Erkennung
+  — offene Frage vom Nutzer, noch nicht untersucht.
+
+---
+
 ## 🆕 V17.2-SESSION (2026-09-05, tagsüber) — ZUERST LESEN
 
 Aufbauend auf der V17/V17.1-Nachtsession (siehe Block darunter — die meisten

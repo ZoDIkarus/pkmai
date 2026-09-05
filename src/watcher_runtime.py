@@ -252,6 +252,7 @@ def run(api):
     model = None
     signature = None
     last_model_check = last_publish = 0
+    last_navigation_refresh = time.monotonic()
     fps_started = time.monotonic()
     fps_frames = 0
     measured_fps = 0.0
@@ -271,6 +272,34 @@ def run(api):
     try:
             while not stop:
                 start = time.monotonic()
+                # V17.4-Fix: die isolierte Navigation (shared_edges/maps/
+                # transitions/tiles) wurde bisher nur EINMAL bei Prozessstart
+                # aus den Agenten-Dateien geseedet - lief der Watcher lange
+                # ohne Neustart (z.B. waehrend eines Livestreams, der bewusst
+                # nicht unterbrochen werden soll), driftete dieser Schnappschuss
+                # immer weiter von der echten Flotte weg. Ergebnis: laengst
+                # von der Flotte bekannte Kanten/Kacheln/Warps (z.B. die
+                # Haustuer nach einem Party-Wipe-Teleport) wurden im Watcher
+                # faelschlich wieder als "global neu" gemeldet. Alle 5 Minuten
+                # neu aus den (weiter wachsenden) Agenten-Dateien nachladen und
+                # in die bestehenden Dicts MERGEN (nicht ersetzen) - reine
+                # Lesenoperation, kein Einfluss auf das echte Training.
+                if start - last_navigation_refresh >= 300:
+                    try:
+                        edges, maps, transitions = api.load_global_navigation_memory()
+                        env.shared_edges.update(dict.fromkeys(edges, 1))
+                        env.shared_maps.update(dict.fromkeys(maps, 1))
+                        env.shared_transitions.update(dict.fromkeys(transitions, 1))
+                        tiles = {}
+                        for e in edges:
+                            if len(e) == 6:
+                                b, m, ex1, ey1, ex2, ey2 = e
+                                tiles[(b, m, ex1, ey1)] = 1
+                                tiles[(b, m, ex2, ey2)] = 1
+                        env.shared_tiles.update(tiles)
+                    except Exception as exc:
+                        print('NAV REFRESH ERROR:', exc, flush=True)
+                    last_navigation_refresh = start
                 if start - last_model_check >= 1:
                     path = api.get_watcher_model_path()
                     candidate = api.get_model_signature(path)

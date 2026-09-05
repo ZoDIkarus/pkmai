@@ -89,8 +89,8 @@ def main() -> None:
         .env_runners(
             num_env_runners=env_runners,
             num_envs_per_env_runner=1,
-            custom_resources_per_env_runner={"pkmai_rollout": 1},
             sample_timeout_s=30,
+            create_env_on_local_worker=False,
         )
     )
 
@@ -108,7 +108,9 @@ def main() -> None:
             result = algorithm.train()
             version += 1
             if version % checkpoint_every == 0:
-                target = CHECKPOINTS_DIR / f"policy-v{version:08d}"
+                target = CHECKPOINTS_DIR / (
+                    f"policy-v{version:08d}-{int(time.time())}"
+                )
                 checkpoint_result = algorithm.save()
                 if checkpoint_result.checkpoint is None:
                     raise RuntimeError("RLlib returned no checkpoint")

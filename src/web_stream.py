@@ -82,7 +82,11 @@ def get_cluster_status():
                 "worker_id": str(row.get("worker_id", worker_id)),
                 "hostname": str(row.get("hostname", "")),
                 "active_agents": max(0, int(row.get("active_agents", 0) or 0)),
-                "fps": max(0.0, float(row.get("fps", 0) or 0)),
+                "fps": (
+                    max(0.0, float(row["fps"]))
+                    if row.get("fps") is not None
+                    else None
+                ),
                 "policy_version": max(0, int(row.get("policy_version", 0) or 0)),
                 "age_seconds": round(max(0.0, now - last_seen), 1),
                 "online": now - last_seen < 15,
@@ -3062,7 +3066,7 @@ setInterval(refreshChampionNight,2000);refreshChampionNight();
       const d=await r.json(), fmt=n=>Number(n||0).toLocaleString('de-DE'), esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
       const online=d.brain_online?'cluster-ok':'cluster-stale';
       document.getElementById('cluster-summary').innerHTML=`<span class="cluster-chip ${online}">Brain: ${d.brain_online?'online':'offline'}</span><span class="cluster-chip">Policy v${d.policy_version||0}</span><span class="cluster-chip">${fmt(d.timesteps)} Steps</span><span class="cluster-chip">Checkpoint: ${d.checkpoint||'—'}</span>`;
-      document.getElementById('cluster-workers').innerHTML=(d.workers||[]).map(w=>`<div class="cluster-worker"><span><b>${esc(w.worker_id)}</b><br><small>${esc(w.hostname||'unbekannter Host')} · ${w.age_seconds}s</small></span><span class="${w.online?'cluster-ok':'cluster-stale'}">${w.online?'online':'stale'}</span><span>${w.active_agents} Emulatoren</span><span>${Number(w.fps||0).toFixed(1)} FPS · v${w.policy_version||0}</span></div>`).join('')||'<div class="cluster-worker">Keine Worker registriert.</div>';
+      document.getElementById('cluster-workers').innerHTML=(d.workers||[]).map(w=>{const fps=w.fps===null?'FPS —':`${Number(w.fps||0).toFixed(1)} FPS`;return `<div class="cluster-worker"><span><b>${esc(w.worker_id)}</b><br><small>${esc(w.hostname||'unbekannter Host')} · ${w.age_seconds}s</small></span><span class="${w.online?'cluster-ok':'cluster-stale'}">${w.online?'online':'stale'}</span><span>${w.active_agents} Emulatoren</span><span>${fps} · v${w.policy_version||0}</span></div>`;}).join('')||'<div class="cluster-worker">Keine Worker registriert.</div>';
     }catch(e){document.getElementById('cluster-summary').textContent='Cluster-Status nicht erreichbar.';}
   }
   refreshClusterDashboard();setInterval(refreshClusterDashboard,2000);

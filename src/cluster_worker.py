@@ -38,7 +38,6 @@ def payload(policy_version: int = 0) -> dict:
             observation_shape=(64, 64, 1), nav_features=28, action_count=7
         ),
         "active_agents": ACTIVE_AGENTS,
-        "fps": 0.0,
         "policy_version": policy_version,
         "platform": platform.platform(),
     }

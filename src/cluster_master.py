@@ -77,7 +77,11 @@ def _record(payload: dict, decision_reason: str) -> dict:
         "build": str(payload.get("build", "")),
         "signature": str(payload.get("signature", "")),
         "active_agents": max(0, int(payload.get("active_agents", 0))),
-        "fps": max(0.0, float(payload.get("fps", 0.0))),
+        "fps": (
+            max(0.0, float(payload["fps"]))
+            if payload.get("fps") is not None
+            else None
+        ),
         "policy_version": max(0, int(payload.get("policy_version", 0))),
         "status": decision_reason,
         "last_seen": time.time(),

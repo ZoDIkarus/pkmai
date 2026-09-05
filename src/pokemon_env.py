@@ -125,7 +125,14 @@ class PokemonFireRedEnv(gym.Env):
     # V17.3: winzige, aber von Null verschiedene Zeitgebuehr - jeder Schritt
     # kostet minimal, damit Herumstehen/Trippeln nicht mehr strikt neutral
     # ist. Bleibt Groessenordnungen kleiner als jedes echte Ziel.
-    GAMEPLAY_STEP_COST = -0.001
+    # V17.4: 5x angehoben (-0.001 -> -0.005). Seit dem heutigen Reward-
+    # Umbau sind die echten Ziele viel groesser geworden (Map 100, Stadt
+    # 250, Orden 2000), aber das reine Herumstehen/-laufen in laengst
+    # bekannten Gebaeuden/an Waenden blieb genauso billig wie vorher - die
+    # relative Buchse zwischen "nichts tun" und "weiterziehen" wurde also
+    # groesser statt kleiner. Bleibt weiterhin Groessenordnungen kleiner
+    # als jedes echte Ziel, macht aber stundenlanges Nichtstun spuerbarer.
+    GAMEPLAY_STEP_COST = -0.005
     INTRO_NOVELTY_REWARD = 2.0
     INTRO_NOVELTY_REWARD_CAP = 20.0
     # Meilenstein-Spezialisten (intro/stairs/exit/starter + full vor dem Starter)
@@ -4499,7 +4506,18 @@ class PokemonFireRedEnv(gym.Env):
                 and loc["valid"]
                 and self._stage_at_current_location(bank, map_id) >= 2
             ):
-                _stage_now = self._world_stage()
+                # V17.4-Fix: NICHT self._world_stage() - der feste Savestate
+                # startet mit bereits bestaetigter Paketabgabe, wodurch
+                # _world_stage() ab Step 0 IMMER >= 5 zurueckgibt, egal auf
+                # welcher Map der Agent gerade steht. _save_stage_checkpoint()
+                # verlangt aber intern exakte Uebereinstimmung mit
+                # _stage_at_current_location() (Route 1 = 2, Vertania = 3) -
+                # mit world_stage schlug das fuer Route 1/Vertania IMMER
+                # fehl, kein einziger Checkpoint konnte je entstehen. Die
+                # gesamte Validierung (_valid_stage_checkpoints,
+                # _meta_checkpoint_stage) rechnet ohnehin schon
+                # standortbasiert, nicht mit dem welt-weiten Ratchet-Wert.
+                _stage_now = self._stage_at_current_location(bank, map_id)
                 _mk = (int(bank), int(map_id))
                 if _mk == getattr(self, "_stage_hold_map", None):
                     self._stage_hold_steps = getattr(self, "_stage_hold_steps", 0) + 1

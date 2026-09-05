@@ -32,7 +32,7 @@ class WorldStageTests(unittest.TestCase):
         self.assertEqual(PokemonFireRedEnv.INTRO_STEP_COST, 0.0)
         # V17.3: winzige, aber von Null verschiedene Zeitgebuehr statt
         # strikt neutraler Bewegung.
-        self.assertEqual(PokemonFireRedEnv.GAMEPLAY_STEP_COST, -0.001)
+        self.assertEqual(PokemonFireRedEnv.GAMEPLAY_STEP_COST, -0.005)
         # V17.4: Kanten geben nie mehr Reward (farmbar durch Loop-Ablaufen
         # bekannter Kurzstrecken bei jedem Episodenstart) - der
         # Explorationsanreiz sitzt jetzt auf der einzelnen Kachel.
@@ -80,6 +80,26 @@ class WorldStageTests(unittest.TestCase):
         self.assertNotEqual(env._stage_at_current_location(4, 3), 5)
         env.parcel_delivered_confirmed = True
         self.assertEqual(env._stage_at_current_location(4, 3), 5)
+
+    def test_world_stage_and_location_stage_diverge_once_parcel_is_preconfirmed(self):
+        # V17.4-Fix: der feste Savestate startet mit bereits bestaetigter
+        # Paketabgabe. _world_stage() ist ein Ratchet und floort dadurch ab
+        # Step 0 auf mindestens 5 - EGAL auf welcher Map der Agent steht.
+        # _stage_at_current_location() bleibt dagegen rein standortbasiert
+        # (Route 1 = 2, Vertania = 3). Der Stage-Checkpoint-Code MUSS den
+        # zweiten Wert verwenden (siehe Kommentar an der Aufrufstelle) - mit
+        # dem ersten konnte fuer Route 1/Vertania nie ein Checkpoint
+        # entstehen, weil _save_stage_checkpoint() intern exakte
+        # Uebereinstimmung mit _stage_at_current_location() verlangt.
+        env = bare_env(
+            has_target_starter=True,
+            parcel_obtained_confirmed=True,
+            parcel_delivered_confirmed=True,
+            visited_maps={(3, 19)},
+        )
+        self.assertEqual(env._world_stage(), 5)
+        self.assertEqual(env._stage_at_current_location(3, 19), 2)
+        self.assertEqual(env._stage_at_current_location(3, 1), 3)
 
     def test_story_confirmation_requires_map_order_and_three_reads(self):
         env = bare_env(has_target_starter=True)

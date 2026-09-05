@@ -147,19 +147,32 @@ class PokemonFireRedEnv(gym.Env):
     INTERACTION_SPAM_RESET_AT = 64
     INTERACTION_SPAM_PENALTY = -0.5
 
-    # PWhiddy-Stil: +1 fuer jede fleet-weit noch nie gelaufene Kachel-Kante,
-    # danach nie wieder (REPLAY/PENALTY-Konstanten bleiben bei 0.0). Nicht
-    # farmbar - _claim_shared() gibt pro Kante genau einmal ueber alle Agenten
-    # "wahr" zurueck, siehe Zeile ~4109.
-    # A/B-getestet 2026-09-05: ohne Kanten-Reward 396 Steps/Sek, mit 437 -
-    # der Reward ist NICHT die FPS-Bremse (eher noch minimal schneller mit).
-    # Bleibt aktiv, bringt echten Explorationswert ohne Performance-Kosten.
-    # V17.3: explizite zwei Stufen statt eines Multiplikators - "im Run"
-    # (bereits bekannte Kante, aber neu fuer diesen Agenten/diese Episode)
-    # gibt jetzt immer denselben festen kleinen Wert, unabhaengig vom
-    # globalen Betrag.
-    NEW_EDGE_REWARD = 2.0
-    EPISODE_EDGE_REWARD = 0.05
+    # V17.4: Kanten-Reward komplett deaktiviert (nie wieder, auch nicht beim
+    # allerersten Mal). Grund: EPISODE_EDGE_REWARD wurde ueber
+    # learning_seen_edges nur PRO EPISODE dedupliziert, nicht ueber die
+    # Lebenszeit des Agenten - ein laengst bekannter Loop von 8-10 Kanten
+    # direkt am Savestate-Spawn gab dadurch bei JEDEM Episodenstart erneut
+    # vollen Reward fuers reine Abklappern, ohne echten Fortschritt. Live
+    # beobachtet: Agenten liefen absichtlich moeglichst viele Ecken/Kanten ab
+    # statt weiterzuziehen. Tracking (persistent_known_edges/shared_edges,
+    # Kanten-Zaehler + Kartenlinien im Dashboard) bleibt bestehen, zahlt aber
+    # nie wieder aus.
+    NEW_EDGE_REWARD = 0.0
+    EPISODE_EDGE_REWARD = 0.0
+    # Ersatz fuer den Explorationsanreiz: nicht mehr an die KANTE (Bewegung
+    # A->B) gekoppelt, sondern an die einzelne KACHEL (Koordinate) selbst.
+    # Zwei Stufen, beide EXPLIZIT gegen das Loop-Farming abgesichert:
+    #   - EPISODE_TILE_REWARD: jede Kachel zahlt hoechstens EINMAL PRO EPISODE
+    #     (self.seen_coords wird bei jedem reset() geleert) - ein zweiter
+    #     Durchlauf derselben Schleife in derselben Episode gibt dafuer 0,
+    #     kostet aber weiterhin GAMEPLAY_STEP_COST pro Schritt -> Loopen lohnt
+    #     sich nach der ersten Runde nicht mehr.
+    #   - NEW_TILE_REWARD: zusaetzlich, aber nur EINMAL UEBER DIE GESAMTE
+    #     FLOTTE FUER IMMER (shared_tiles + _claim_shared(), ueberlebt auch
+    #     Episodenwechsel) - anders als bei Kanten gibt es hier KEINE
+    #     Zwischenstufe, die bei jedem Reset neu farmbar waere.
+    NEW_TILE_REWARD = 2.0
+    EPISODE_TILE_REWARD = 0.05
     NEW_MAP_REWARD = 500.0
     EPISODE_NEW_MAP_REWARD = 25.0
     NEW_GLOBAL_DEPTH_REWARD = 1000.0
@@ -182,14 +195,21 @@ class PokemonFireRedEnv(gym.Env):
     # V17.3: Faenge sollen Artenvielfalt lernen statt immer dieselbe haeufige
     # Spezies (Taubsi/Rattfratz/Raupy) zu wiederholen. Species-ID = Pokedex-
     # Nummer (Gen3-interne SPECIES_-Konstanten entsprechen 1:1 der Nummer fuer
-    # alle Kanto/Johto-Spezies, z.B. Pikachu = 25). _claim_shared() zahlt den
-    # Bonus nur einmal ueber die ganze Flotte; jeder weitere Fang derselben
-    # Art ist danach neutral (0), keine Strafe mehr.
-    SPECIES_CAUGHT_FIRST_REWARD = 100.0
+    # alle Kanto/Johto-Spezies, z.B. Pikachu = 25).
+    # V17.4: NICHT mehr fleet-weit einmalig ueber die gesamte Trainingszeit
+    # (jede Episode startet ohne gefangene Mons neu - ein Lifetime-Claim haette
+    # ab dem zweiten jemals gefangenen Exemplar einer Art fuer den Rest des
+    # Trainings NIE WIEDER Anreiz gegeben, sie zu fangen). Dedup laeuft jetzt
+    # ueber episode_caught_species (pro Episode, pro Agent) - jede neue Art
+    # in DIESEM Run zahlt, ein zweites Exemplar derselben Art im selben Run
+    # ist neutral.
+    SPECIES_CAUGHT_FIRST_REWARD = 50.0
     SPECIES_CAUGHT_DUPLICATE_PENALTY = 0.0
     # Pikachu ist im Vertania-Wald selten und nicht der reguelaere Weg
-    # vorwaerts - ein eigener, deutlich groesserer Einmal-Bonus obendrauf,
-    # nur fuer genau diese Art an genau diesem Ort.
+    # vorwaerts - ein eigener, deutlich groesserer Bonus obendrauf, nur fuer
+    # genau diese Art an genau diesem Ort. Auch dieser ist pro Run (nicht
+    # fleet-lifetime): Pikachu wird fuer Orden 2 (Wasser-Typ-Konter) in JEDEM
+    # Run wieder gebraucht, nicht nur beim allerersten Fund ueberhaupt.
     PIKACHU_SPECIES_ID = 25
     PIKACHU_FOREST_MAP = (1, 0)
     PIKACHU_FOREST_CAUGHT_REWARD = 1000.0
@@ -376,6 +396,7 @@ class PokemonFireRedEnv(gym.Env):
         shared_progress=None,
         shared_lock=None,
         shared_species=None,
+        shared_tiles=None,
         n_envs=32,
     ):
         super().__init__()
@@ -391,6 +412,10 @@ class PokemonFireRedEnv(gym.Env):
         self.shared_progress = shared_progress
         self.shared_lock = shared_lock
         self.shared_species = shared_species
+        # V17.4: fleet-weite Lifetime-Registry fuer "diese Kachel wurde
+        # jemals von irgendeinem Agenten betreten" - ersetzt shared_edges als
+        # Grundlage fuer den einmaligen globalen Explorations-Bonus.
+        self.shared_tiles = shared_tiles
         self.shared_edge_snapshot = set()
         self.shared_transition_snapshot = set()
 
@@ -593,6 +618,14 @@ class PokemonFireRedEnv(gym.Env):
         # V10.31: die echte Wand ist "raus aus Eichs Labor nach dem Starter"
         # (nicht Route 1). Dafuer gab es bisher keinen Reward-Gradienten.
         self.starter_outdoor_rewarded = False
+        # V17.4: Spezies-Faenge sind PRO RUN, nicht mehr fleet-weit einmalig -
+        # jede Episode startet ohne gefangene Mons neu, ein fleet-weiter
+        # Einmal-Claim wuerde also ab dem zweiten Fund jeder Art fuer den Rest
+        # der gesamten Trainingszeit nie wieder Anreiz geben, ueberhaupt noch
+        # etwas zu fangen (auch Pikachu, das fuer Orden 2 in JEDEM Run wieder
+        # gebraucht wird).
+        self.episode_caught_species = set()
+        self.episode_pikachu_forest_caught = False
         # V17: wurde bisher nur beim Uebergang "kein Starter -> Starter"
         # gesetzt. Der Startpunkt hat den Starter aber schon ab Step 0, dieser
         # Uebergang passiert also nie mehr - das "muss innerhalb 4000 Steps aus
@@ -2696,6 +2729,8 @@ class PokemonFireRedEnv(gym.Env):
         self.has_starter = False
         self.has_target_starter = False
         self.starter_outdoor_rewarded = False
+        self.episode_caught_species = set()
+        self.episode_pikachu_forest_caught = False
         # V17: wurde bisher nur beim Uebergang "kein Starter -> Starter"
         # gesetzt. Der Startpunkt hat den Starter aber schon ab Step 0, dieser
         # Uebergang passiert also nie mehr - das "muss innerhalb 4000 Steps aus
@@ -3234,7 +3269,8 @@ class PokemonFireRedEnv(gym.Env):
                     if valid_party else 0
                 )
                 if new_species > 0:
-                    if self._claim_shared(self.shared_species, new_species):
+                    if new_species not in self.episode_caught_species:
+                        self.episode_caught_species.add(new_species)
                         reward += self.SPECIES_CAUGHT_FIRST_REWARD
                         reward_events.append(
                             f"species_caught_first:{new_species}:"
@@ -3246,19 +3282,17 @@ class PokemonFireRedEnv(gym.Env):
                             f"species_caught_dup:{new_species}:"
                             f"{self.SPECIES_CAUGHT_DUPLICATE_PENALTY:.0f}"
                         )
-                    # V17.3: Pikachu ist im Vertania-Wald selten und kein
-                    # Fortschrittsweg - eigener, viel groesserer Einmal-Bonus
-                    # obendrauf, unabhaengig vom generischen Fang-Claim oben
-                    # (eigener Registry-Key "pikachu_forest" statt der
-                    # species_id, damit sich beide Boni nicht gegenseitig
-                    # verbrauchen).
+                    # V17.4: Pikachu ist im Vertania-Wald selten und kein
+                    # Fortschrittsweg - eigener, viel groesserer Bonus obendrauf,
+                    # unabhaengig vom generischen Fang-Reward oben. Pro Run
+                    # (nicht fleet-lifetime): ein zweiter Pikachu im selben Run
+                    # zahlt nichts mehr, aber der naechste Run wieder von vorn.
                     if (
                         new_species == self.PIKACHU_SPECIES_ID
                         and (bank, map_id) == self.PIKACHU_FOREST_MAP
-                        and self._claim_shared(
-                            self.shared_species, "pikachu_forest"
-                        )
+                        and not self.episode_pikachu_forest_caught
                     ):
+                        self.episode_pikachu_forest_caught = True
                         reward += self.PIKACHU_FOREST_CAUGHT_REWARD
                         reward_events.append(
                             "pikachu_forest_first:"
@@ -4433,6 +4467,22 @@ class PokemonFireRedEnv(gym.Env):
 
             if coord_key not in self.seen_coords:
                 self.seen_coords.add(coord_key)
+                if not _wipe_cooldown_active:
+                    if self.EPISODE_TILE_REWARD:
+                        reward += self.EPISODE_TILE_REWARD
+                        reward_events.append(
+                            f"new_tile_episode:+{self.EPISODE_TILE_REWARD:.2f}"
+                        )
+                    if (
+                        self.NEW_TILE_REWARD
+                        and self._claim_shared(self.shared_tiles, coord_key)
+                    ):
+                        reward += self.NEW_TILE_REWARD
+                        reward_events.append(
+                            f"new_tile_global:+{self.NEW_TILE_REWARD:.2f}"
+                        )
+                else:
+                    reward_events.append("new_tile_suppressed_post_wipe:+0")
 
             # -----------------------------------------------------
             # PERSISTENTE BLUE-LINE / EDGE EXPLORATION

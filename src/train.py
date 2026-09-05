@@ -179,6 +179,7 @@ def make_env(
     shared_progress,
     shared_lock,
     shared_species,
+    shared_tiles,
     n_envs=NUM_ENVS,
 ):
     def _init():
@@ -190,6 +191,7 @@ def make_env(
             shared_progress=shared_progress,
             shared_lock=shared_lock,
             shared_species=shared_species,
+            shared_tiles=shared_tiles,
             n_envs=n_envs,
         )
     return _init
@@ -1149,6 +1151,10 @@ def main():
     # Bewusst nicht aus alten Laeufen geseedet - jeder Full-Reset soll die
     # Erstfang-Boni wieder frisch vergeben koennen.
     shared_species = manager.dict()
+    # V17.4: welche Kacheln (bank,map,x,y) wurden fleet-weit schon jemals
+    # betreten - ersetzt shared_edges als Basis fuer den einmaligen globalen
+    # Explorationsbonus. Ebenfalls bewusst nicht geseedet (wie shared_species).
+    shared_tiles = manager.dict()
 
     # V15: persistierter world_stage-Rekord (1=Alabastia .. 9=Orden).
     progress_file = os.path.join(
@@ -1193,6 +1199,7 @@ def main():
                 shared_progress,
                 shared_lock,
                 shared_species,
+                shared_tiles,
                 NUM_ENVS,
             )
             for i in range(NUM_ENVS)

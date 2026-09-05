@@ -53,6 +53,7 @@ def make_evaluation_env(root, navigation=((), (), ()), n_envs=60):
         shared_edges=dict.fromkeys(edges, 1), shared_maps=dict.fromkeys(maps, 1),
         shared_transitions=dict.fromkeys(transitions, 1),
         shared_progress={'max_world_stage': 0}, shared_species={},
+        shared_tiles={},
     )
 
 

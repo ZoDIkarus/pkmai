@@ -27,6 +27,23 @@ class WatcherJpegEndpointTests(unittest.TestCase):
             finally:
                 web_stream.WATCHER_FRAME_FILE = old_path
 
+    def test_emulator_endpoint_serves_only_the_separate_game_frame(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "watcher_emulator.jpg")
+            with open(path, "wb") as f:
+                f.write(b"game-only-frame")
+            with patch.object(web_stream, "RUNTIME_DIR", tmp):
+                response = web_stream.get_watcher_emulator_jpeg()
+            self.assertEqual(response.body, b"game-only-frame")
+            self.assertIn("no-store", response.headers["cache-control"])
+
+    def test_indoor_rendering_has_no_warp_markers(self):
+        html = web_stream.index()
+        indoor = html.split("function renderIndoorMapping()", 1)[1].split("setInterval", 1)[0]
+        self.assertNotIn("room.warps.forEach", indoor)
+        self.assertNotIn("Warp/Treppe/Tür", indoor)
+        self.assertIn("placeName(room.bank, room.mapId)", indoor)
+
     def test_dashboard_has_a_dedicated_watcher_navigation_tab(self):
         html = web_stream.index()
         self.assertIn("showTab('watcher', event)", html)

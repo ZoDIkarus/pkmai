@@ -98,12 +98,12 @@ else
   shared_run "TRAIN" "'$PY' src/train.py"
 fi
 
-# ---------------- WEBSERVER (Sammelfenster, Tab WEB) ----------------
+# ---------------- WEBSERVER (immer sichtbares eigenes Terminal) -----
 if pgrep -f "[s]rc/web_stream.py" >/dev/null 2>&1; then
   echo "✓ Webserver läuft bereits"
 else
   echo "▶ Starte Webserver"
-  shared_run "WEB" "'$PY' src/web_stream.py"
+  start_window "PKMAI WEB" "cd '$PROJECT' && '$PY' -u src/web_stream.py"
 fi
 
 # ---------------- STATUS-MONITOR (Sammelfenster, Tab STATUS) --------

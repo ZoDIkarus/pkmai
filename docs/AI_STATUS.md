@@ -8,6 +8,75 @@ Laufende Runtime-Werte immer aus `tools/pkmai_status.py` lesen, nicht hier absch
 
 ---
 
+## Watcher-FPS wieder sichtbar (2026-09-05)
+
+- Gemessene Emulator-FPS im Watcher-Header und Fenstertitel, alle 0,5 Sekunden
+  aktualisiert; zählt Hold-/Release-Frames je real verstrichener Sekunde.
+- Sollwert zusätzlich im Header; Ist-FPS auch in Watcher-Telemetrie.
+
+## Watcher = Trainer-Umgebung / Battle-Fix / DE–EN (2026-09-05)
+
+- `watch.main()` nutzt `watcher_runtime.run()` und direkt `PokemonFireRedEnv`;
+  alte separate Reward-Schleife entfernt. Keine `learn()`-/Optimizer-Aufrufe.
+  Aktionen, Beobachtungen, Rewards und Resets stammen aus dem Trainer-Code.
+- Watcher-State/Statistiken/Curriculum unter `runtime/watcher_evaluation/`;
+  öffentliche Telemetrie nur `inst_120.json`, niemals Trainingsstatistiken.
+  Einmal-Boni haben einen privaten Evaluationskontext (Navigations-Snapshot
+  beim Start). Identische Regeln, nicht identische Flottenhistorie/Reward-Summen.
+- Kampfstatus nun gemeinsam in `battle_state.py`: frische Gegnerdaten erkennen
+  auch Wildkämpfe mit Flags 0; kein 96-Step-Ablauf mitten im Kampfmenü.
+  Bestätigte Bewegung beendet den Status trotz verbleibender Gegnerdaten.
+  Ende-Erkennung bleibt bei stillstehender Figur bis zur nächsten Bewegung
+  konservativ; keine Behauptung einer perfekten RAM-Kampfstatusadresse.
+- Echter Bug korrigiert: Party-Wipe beim Kampfende verwendete `reward`,
+  `reward_events`, `truncated` vor Initialisierung. Initialisierung vorgezogen,
+  spätere Zeitkosten addieren sich statt Wipe-Strafe/Abbruch zu überschreiben.
+- Dark-Watcher in neutralem Grau, Log zeigt Reward-Ereignisse und Kampfgrund.
+  Rotierende Audit-Logs: `runtime/watcher_rewards.jsonl` (5 MB × 4 Dateien).
+- Web links separater `/watcher-emulator.jpg` (240×160, nur echte Spielpixel),
+  ohne Party-Sidebar im linken Detailbereich. Vollständige Diagnosegrafik
+  weiterhin im Watcher-Tab und nativen Fenster verfügbar.
+- Indoor-Ansicht ohne Warp-Punkte/-Legende/-Verbindungen. Ortsnamen für frühe
+  Karten anhand https://raw.githubusercontent.com/pret/pokefirered/master/data/maps/map_groups.json
+  (Reds Haus, Rivalenhaus, Eichs Labor usw.); unbekannte Orte neutral nummeriert.
+- Oben DE/EN-Schalter, Englisch als Standard, Browser merkt Auswahl. UI-Labels
+  und Ortsnamen wechseln; technische Reward-Event-IDs bleiben zum Debuggen.
+  Das Spiel selbst bleibt die deutsche ROM; UI-Sprache ändert keine Spieltexte.
+- Verifiziert: 50 Unit-Tests; 120 echte identische Emulator-Aktionen in
+  Trainer-/Watcher-Instanzen mit identischen Observations, Rewards, Events und
+  Done-Flags; zusätzlich erzwungener Wipe mit -100 und Abbruch. RAM-Discovery-
+  Cache für den Vergleich jeweils identisch initialisiert.
+- Live-Bild und Audit bestätigen Wildkampf mit Flags 0 als Kampf erkannt.
+- Trainer kontrolliert bei 1.649.880 Steps gespeichert. Worker-Shutdown hing
+  nach bestätigt erfolgreichem Final-Save; alte Prozesse gezielt beendet.
+  Wartungsstart via `PKMAI_RESUME_SAVED=1` setzt den gespeicherten Learner fort
+  statt beim älteren Champion zu beginnen. Neuer Trainer überschritt 1.651.200
+  Steps; Champion unverändert v2. Watcher/Web in sichtbaren Terminals gestartet.
+
+## Festes Browserlayout + Web-Terminal (2026-09-05)
+
+- Nutzerpräferenz: Webserver bei jedem Neustart in einem sichtbaren eigenen
+  Terminalfenster starten, damit Alex die Webserver-Ausgabe sehen kann.
+- Oben volle Browserbreite für Statusanzeigen. Darunter ein festes Raster
+  bis zum unteren Browserrand: links Alex-Watcher samt Details, mittig
+  Live-Karte, rechts scrollbare Agentenliste. Keine frei schwebenden Fenster.
+- Watcher-Bild wird jetzt auch auf dem Karten-Tab alle 500 ms aktualisiert.
+- Näherer Zoom und dynamische Kartenbegrenzung bleiben erhalten.
+- Python-/JavaScript-Syntax und HTML-Rendering geprüft.
+
+## Dashboard-Update (2026-09-05, V17.2)
+
+- Weblayout als durchgehende Seite: feste Abschnitte statt verschiebbarer
+  Fenster; Global-Status und Filter außerhalb der Karte, Agenten darunter.
+- Fester Kartenzoom 0 → 0.5 (ca. 41 % näher). Pan-Grenzen aus Live-Daten,
+  vier statt 200 Felder Rand; mindestens Viewport-Größe, bei Resize neu berechnet.
+  Harte Drag-Grenzen und keine Trägheit verhindern weites Wegschieben.
+- Python-/JavaScript-Syntax und Dashboard-Rendering geprüft. Keine Browser-Sichtprüfung.
+- Aktueller Trainings-/V17.2-Übergabestand: `STATUS_TODO.md` und README.
+  Der folgende V15-Stand ist historisch.
+
+---
+
 ## Wo wir gerade stehen (2026-09-04, V15.2)
 
 **Das Ziel:** von Spielanfang → Starter → Alabastia raus → Route 1 →

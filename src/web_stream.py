@@ -98,6 +98,22 @@ def get_watcher_jpeg():
         return Response(status_code=404)
 
 
+@app.get("/watcher-emulator.jpg")
+def get_watcher_emulator_jpeg():
+    try:
+        with open(os.path.join(RUNTIME_DIR, "watcher_emulator.jpg"), "rb") as f:
+            return Response(content=f.read(), media_type="image/jpeg",
+                            headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+    except OSError:
+        return Response(status_code=404)
+
+
+@app.get("/dashboard-language.js")
+def get_dashboard_language():
+    return FileResponse(os.path.join(ASSETS_DIR, "ui", "dashboard-language.js"),
+                        media_type="application/javascript", headers={"Cache-Control": "no-cache"})
+
+
 @app.get("/mapper.jpg")
 def get_mapper_jpeg():
     if os.path.exists(MAPPER_FRAME_FILE):
@@ -1956,9 +1972,62 @@ def index():
 @media(min-width:821px){#learner-truth-hud{position:static;inset:auto;width:auto;z-index:auto}}
 @media(max-width:820px){#learner-truth-hud{position:static!important;left:auto!important;right:auto!important;top:auto!important;bottom:auto!important;transform:none!important;width:auto!important;z-index:auto!important}}
 </style>
+
+<style id="continuous-page-style">
+html,body{height:100%!important;min-height:0!important;overflow:hidden!important}
+body{height:100dvh!important;display:flex!important;flex-direction:column!important;background:#0c0e14}
+header{flex:none;flex-wrap:wrap;gap:8px;position:relative!important}
+.header-left{flex-wrap:wrap;gap:8px}
+#brain-summary-row{flex:none;width:100%;box-sizing:border-box;grid-template-columns:1fr 1fr 1fr!important;gap:0!important;padding:0!important;margin:0!important}
+#learner-truth-hud,#champion-night-card,.live-global,.hud-overlay,.detail-panel,.agent-filter-bar{
+position:static!important;inset:auto!important;transform:none!important;width:auto!important;max-width:none!important;max-height:none!important;
+background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important;backdrop-filter:none!important;
+padding:12px!important;margin:0!important;box-sizing:border-box}
+#brain-summary-row>div{min-width:0;border-right:1px solid #283142!important}
+.live-global-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+.cn-grid div,.lth-cell,.live-stat,.detail-stat{background:transparent!important;border:0!important;border-radius:0!important}
+#main-container{position:relative!important;flex:1 1 0!important;min-height:0!important;overflow:hidden!important;height:auto!important;order:3}
+#map-workspace{display:grid;grid-template-columns:minmax(230px,26%) minmax(0,1fr) minmax(210px,22%);height:100%;width:100%;min-height:0}
+#alex-watcher-column{min-width:0;min-height:0;overflow-y:auto;border-right:1px solid #283142}
+#map-column{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+#map-column #map-view{position:relative!important;inset:auto!important;flex:1 1 0;height:auto!important;min-height:0!important;width:100%;overflow:hidden!important}
+#map-column .agent-filter-bar{flex:none;justify-content:flex-start;gap:5px;border-bottom:1px solid #283142!important}
+#map-column .agent-filter-bar select{min-width:0;max-width:130px;font-size:10px}
+#map-workspace #hud{min-width:0;min-height:0;overflow-y:auto!important;border-left:1px solid #283142!important}
+#alex-watcher-column .wt-stream-wrap{width:100%;max-width:none;margin:0;border:0;border-radius:0}
+#alex-watcher-stream{position:static;width:100%;height:auto;display:block;image-rendering:pixelated}
+#alex-watcher-column .wt-stream-wrap{aspect-ratio:3/2}
+#alex-watcher-column .v8-agent-party{display:none}
+#language-toggle{position:fixed;right:10px;top:8px;z-index:5001;background:#303236;color:#eee;border:1px solid #555;border-radius:5px;padding:6px;cursor:pointer}
+header{padding-right:85px!important}
+#watcher-view .wt-stream-wrap{aspect-ratio:1200/680;max-width:1000px}
+#watcher-stream{width:100%;position:static}
+.leaflet-container{background:#202124!important}
+.room-map-canvas{background:#202124}
+.alex-watcher-title{padding:12px;color:#00e676;font-size:12px;font-weight:700;border-bottom:1px solid #283142}
+#alex-watcher-column #detail-panel{border-top:1px solid #283142!important}
+#rooms-view,#graphs-view,#watcher-view,#mapper-view,#status-view{position:absolute!important;inset:0;height:100%!important;overflow-y:auto!important;box-sizing:border-box}
+.pkmai-float-tools,#pkmai-hidden-tray{display:none!important}
+.hud-overlay .agent-row{padding:9px 4px}
+@media(max-width:820px){
+header{padding:6px!important;gap:4px!important}
+#brain-summary-row{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+#brain-summary-row>div{padding:6px!important}
+.cn-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.lth-body{grid-template-columns:1fr}.cn-foot{display:none}
+#map-workspace{grid-template-columns:minmax(0,27%) minmax(0,1fr) minmax(0,23%)}
+#map-workspace #hud,#alex-watcher-column #detail-panel{padding:6px!important}
+#map-column .agent-filter-bar{padding:5px!important}
+#map-column .agent-filter-bar select{flex:1 1 40%!important;padding:4px!important;font-size:9px!important}
+.detail-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+.agent-row{flex-wrap:wrap;overflow-wrap:anywhere}
+}
+</style>
+<script src="/dashboard-language.js"></script>
 </head>
 <body>
     <header>
+        <button id="language-toggle" aria-label="Switch language / Sprache wechseln">EN / DE</button>
         <div class="header-left">
             <div class="logo-title">⚡ PKMAI <span id="model-ver" style="color:#2979ff;">v000001</span></div>
             
@@ -2357,23 +2426,14 @@ def index():
             fill('af-stage', new Set(instances.map(i => String(i.story_stage || '')).filter(Boolean)));
         }
 
-        // V17.2: Karte hatte einen festen setMaxBounds-Kasten (4000x4000
-        // Einheiten), der bei jedem Container-Seitenverhaeltnis kleiner ist
-        // als der fitBounds-Zielausschnitt. Leaflet erzwingt dann, dass die
-        // gesamte maxBounds-Flaeche NIE kleiner als der sichtbare Viewport
-        // ist - und zoomt dafuer bis auf minZoom (-3) heraus. Ergebnis: die
-        // eigentliche Karte schrumpft auf ein paar Pixel in der Bildmitte,
-        // alles drumherum wirkt "abgeschnitten"/leer. Fix: fester, nicht
-        // veraenderbarer Zoom (kein Herauszoomen mehr moeglich) + eine
-        // maxBounds-Box, die sich an der tatsaechlich aufgedeckten Welt
-        // orientiert statt an einem geratenen Fixwert.
-        const FIXED_ZOOM = 0;
+        // Slightly closer fixed zoom; panning follows the discovered world.
+        const FIXED_ZOOM = 0.5;
         const TILE_UNIT = 12;
-        const MAP_MARGIN_TILES = 200;
-        const MAP_MARGIN_UNITS = MAP_MARGIN_TILES * TILE_UNIT;
+        const MAP_MARGIN_UNITS = 4 * TILE_UNIT;
 
         const map = L.map('map-view', {
             crs: L.CRS.Simple,
+            zoomSnap: 0.5,
             minZoom: FIXED_ZOOM,
             maxZoom: FIXED_ZOOM,
             zoomControl: false,
@@ -2383,7 +2443,8 @@ def index():
             boxZoom: false,
             keyboard: false,
             dragging: true,
-            inertia: true,
+            inertia: false,
+            maxBoundsViscosity: 1.0,
             attributionControl: false
         });
         const bounds = [[0, 0], [3000, 3000]];
@@ -2392,15 +2453,6 @@ def index():
         // Flotte zu Beginn eines Laufs am meisten auf.
         const START_CENTER = [680, 1500];
         map.setView(START_CENTER, FIXED_ZOOM);
-
-        // Waechst automatisch mit, sobald Agenten neue Maps/Kanten aufdecken
-        // (siehe recomputeDynamicMapBounds weiter unten) - bis dahin ein
-        // Startwert rund um Alabastia/Route 1, damit man sich nach dem
-        // Verschieben nie "verlaufen" kann, bevor die erste Live-Antwort da ist.
-        map.setMaxBounds([
-            [START_CENTER[0] - MAP_MARGIN_UNITS - 600, START_CENTER[1] - MAP_MARGIN_UNITS - 300],
-            [START_CENTER[0] + MAP_MARGIN_UNITS + 600, START_CENTER[1] + MAP_MARGIN_UNITS + 300]
-        ]);
 
         // Beim ersten Laden ist der Container u.U. noch 0px hoch (CSS/Layout
         // noch nicht fertig) -> Leaflet rendert dann eine 0x0-Karte. Nach dem
@@ -2491,13 +2543,8 @@ def index():
             return [3000 - py, px];
         }
 
-        // V17.2: Statt einer geratenen Fixgroesse wird die pannbare Flaeche
-        // aus den tatsaechlich bekannten Kanten/Tiles/Agentenpositionen neu
-        // berechnet - mit MAP_MARGIN_TILES (200) Rand drumherum, den man
-        // sieht, aber nicht als Inhalt, nur zum Verschieben. So kann man die
-        // Karte nie mehr komplett aus dem Bild schieben (musste man vorher
-        // "suchen"), und der Rand waechst automatisch mit, sobald die Flotte
-        // eine neue Map aufdeckt.
+        // Recompute from live discoveries, allowing only four tiles of empty
+        // margin. Small worlds get a viewport-sized bound to stay centered.
         function recomputeDynamicMapBounds() {
             let b = null;
             const extend = (latlng) => {
@@ -2529,12 +2576,24 @@ def index():
                 extend(getLeafletCoords(3, 19, 20, 40));
             }
 
-            const sw = b.getSouthWest(), ne = b.getNorthEast();
+            const size = map.getSize();
+            if (!size.x || !size.y) return;
+            const scale = map.options.crs.scale(FIXED_ZOOM);
+            const center = b.getCenter();
+            const halfWidth = Math.max(
+                (b.getEast() - b.getWest()) / 2 + MAP_MARGIN_UNITS,
+                size.x / scale / 2
+            );
+            const halfHeight = Math.max(
+                (b.getNorth() - b.getSouth()) / 2 + MAP_MARGIN_UNITS,
+                size.y / scale / 2
+            );
             map.setMaxBounds([
-                [sw.lat - MAP_MARGIN_UNITS, sw.lng - MAP_MARGIN_UNITS],
-                [ne.lat + MAP_MARGIN_UNITS, ne.lng + MAP_MARGIN_UNITS]
+                [center.lat - halfHeight, center.lng - halfWidth],
+                [center.lat + halfHeight, center.lng + halfWidth]
             ]);
         }
+        map.on('resize', recomputeDynamicMapBounds);
 
         async function updateMapperMapOverlays(force=false) {
             try {
@@ -2618,8 +2677,8 @@ def index():
         let currentTab = 'map';
 
         function refreshWatcherStream() {
-            const img = document.getElementById('watcher-stream');
-            if (img) img.src = '/watcher.jpg?ts=' + Date.now();
+            const img = document.getElementById(currentTab === 'map' ? 'alex-watcher-stream' : 'watcher-stream');
+            if (img) img.src = (currentTab === 'map' ? '/watcher-emulator.jpg?ts=' : '/watcher.jpg?ts=') + Date.now();
         }
 
         // --- klickbare Agenten-Liste + Live-Stats (Watcher- UND Status-Tab) ---
@@ -2732,7 +2791,7 @@ def index():
             } catch (_) {}
         }
         setInterval(() => {
-            if (currentTab === 'watcher') refreshWatcherStream();
+            if (currentTab === 'watcher' || currentTab === 'map') refreshWatcherStream();
             if (currentTab === 'mapper') refreshMapperStream();
         }, 500);
 
@@ -2748,6 +2807,8 @@ def index():
             document.getElementById('watcher-view').style.display = t === 'watcher' ? 'block' : 'none';
 
             const showOverlays = t === 'map';
+            const workspace = document.getElementById('map-workspace');
+            if (workspace) workspace.style.display = showOverlays ? 'grid' : 'none';
             document.getElementById('hud').style.display = showOverlays ? 'block' : 'none';
             document.getElementById('detail-panel').style.display = showOverlays ? 'block' : 'none';
             const afb = document.getElementById('agent-filter-bar');
@@ -3774,29 +3835,8 @@ def index():
                 roomFor(bank, mapId).edges.push(e.map(Number));
             });
 
-            transitions.forEach(t => {
-                if (!Array.isArray(t) || t.length !== 8) return;
-                const aBank = Number(t[0]), aMap = Number(t[1]);
-                const bBank = Number(t[4]), bMap = Number(t[5]);
-
-                if (aBank !== 3) {
-                    roomFor(aBank, aMap).warps.push({
-                        x:Number(t[2]), y:Number(t[3]),
-                        toBank:bBank, toMap:bMap,
-                        toX:Number(t[6]), toY:Number(t[7])
-                    });
-                }
-                if (bBank !== 3) {
-                    roomFor(bBank, bMap).warps.push({
-                        x:Number(t[6]), y:Number(t[7]),
-                        toBank:aBank, toMap:aMap,
-                        toX:Number(t[2]), toY:Number(t[3])
-                    });
-                }
-            });
-
             const roomList = [...rooms.values()]
-                .filter(r => r.tiles.size || r.edges.length || r.warps.length)
+                .filter(r => r.tiles.size || r.edges.length)
                 .sort((a,b) => a.bank-b.bank || a.mapId-b.mapId);
 
             if (!roomList.length) {
@@ -3815,7 +3855,7 @@ def index():
                 room.edges.forEach(e => {
                     coords.push([e[2],e[3]], [e[4],e[5]]);
                 });
-                room.warps.forEach(w => coords.push([w.x,w.y]));
+
 
                 if (!coords.length) return;
 
@@ -3847,14 +3887,13 @@ def index():
 
                 const title = document.createElement('div');
                 title.className = 'title';
-                title.textContent = `Indoor · Bank ${room.bank} / Map ${room.mapId}`;
+                title.textContent = placeName(room.bank, room.mapId);
 
                 const sub = document.createElement('div');
                 sub.className = 'sub';
                 sub.textContent =
                     `${room.tiles.size} Felder · ` +
-                    `${room.edges.length} Kanten · ` +
-                    `${room.warps.length} Warp-Punkte`;
+                    `${room.edges.length} Kanten`;
 
                 const wrap = document.createElement('div');
                 wrap.className = 'room-canvas-wrap';
@@ -3864,8 +3903,7 @@ def index():
                 legend.className = 'room-legend';
                 legend.innerHTML =
                     '<span><i class="walked"></i>erkundet</span>' +
-                    '<span><i class="edge"></i>begehbare Kante</span>' +
-                    '<span><i class="warp"></i>Warp/Treppe/Tür</span>';
+                    '<span><i class="edge"></i>begehbare Kante</span>';
 
                 card.appendChild(title);
                 card.appendChild(sub);
@@ -3899,7 +3937,7 @@ def index():
                 }
 
                 // Green explored fields.
-                ctx.fillStyle = '#2e7d32';
+                ctx.fillStyle = '#596269';
                 room.tiles.forEach(s => {
                     const [x,y] = s.split(',').map(Number);
                     ctx.fillRect(
@@ -3909,7 +3947,7 @@ def index():
                 });
 
                 // Successful traversable edges.
-                ctx.strokeStyle = '#81c784';
+                ctx.strokeStyle = '#b4c7cf';
                 ctx.lineWidth = Math.max(2,cell*0.12);
                 room.edges.forEach(e => {
                     ctx.beginPath();
@@ -3918,21 +3956,7 @@ def index():
                     ctx.stroke();
                 });
 
-                // Warp points.
-                room.warps.forEach(w => {
-                    ctx.beginPath();
-                    ctx.fillStyle = '#ffca28';
-                    ctx.arc(
-                        cx(w.x), cy(w.y),
-                        Math.max(4,cell*0.28),
-                        0, Math.PI*2
-                    );
-                    ctx.fill();
 
-                    ctx.strokeStyle = '#fff3c4';
-                    ctx.lineWidth = 1;
-                    ctx.stroke();
-                });
             });
         }
 
@@ -3961,6 +3985,7 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
 
                 window.__trainerName = state.trainer_name || 'Alex';
                 const instances = state.instances || [];
+                instances.forEach(i => { i.room = placeName(i.bank, i.map); });
                 latestInstances = instances;
                 const _v81cnt = document.getElementById('v81-agent-count');
                 if (_v81cnt) _v81cnt.textContent = instances.filter(i => Number(i.id) !== 120).length;
@@ -4198,78 +4223,28 @@ async function refreshChampionNight(){
 setInterval(refreshChampionNight,2000);refreshChampionNight();
 </script>
 <div id="pkmai-hidden-tray"></div>
-<script id="pkmai-window-tools-js">
-(function(){
-  // Auf dem Handy sind alle Panels feste Kacheln: kein Verschieben,
-  // kein Minimieren, kein Ausblenden. Window-Tools komplett aus.
-  const isMobile=()=>matchMedia('(max-width:820px)').matches;
-  if(isMobile())return;
-  const tray=document.getElementById('pkmai-hidden-tray');
-  const preferred=['#champion-night-card','.v81skills','.live-global','.instance-panel','.agents-panel','.agent-list','.global-ai','.watcher-panel'];
-  function titleOf(el){const t=el.querySelector('.cn-title,.graph-title,.live-global-title,h1,h2,h3,b,strong');return (t&&t.textContent.trim())||el.id||'Fenster';}
-  function restoreButton(el,label){const b=document.createElement('button');b.textContent='↩ '+label;b.onclick=()=>{el.classList.remove('pkmai-hidden');b.remove();};tray.appendChild(b);}
-  function addTools(el){
-    if(!el||el.dataset.pkmaiTools==='1')return;
-    // Trainer-Live und Frontier-Champion sind jetzt feste Kacheln (siehe
-    // Status-Tab "Brain Progress") - nie mehr verschieb-/minimier-/ausblendbar.
-    if(el.id==='learner-truth-hud'||el.id==='champion-night-card')return;
-    el.dataset.pkmaiTools='1';el.classList.add('pkmai-movable');
-    if(getComputedStyle(el).position==='static')el.style.position='relative';
-    const tools=document.createElement('div');tools.className='pkmai-float-tools';
-    const min=document.createElement('button');min.textContent='−';min.title='Minimieren';
-    const hide=document.createElement('button');hide.textContent='×';hide.title='Ausblenden';
-    tools.append(min,hide);el.appendChild(tools);
-    min.onclick=e=>{e.stopPropagation();el.classList.toggle('pkmai-minimized');};
-    hide.onclick=e=>{e.stopPropagation();const label=titleOf(el);el.classList.add('pkmai-hidden');restoreButton(el,label);};
-    if(matchMedia('(max-width:820px)').matches)return;
-    let drag=false,ox=0,oy=0;
-    el.addEventListener('pointerdown',e=>{
-      if(e.target.closest('button,input,canvas,a'))return;
-      drag=true;el.setPointerCapture(e.pointerId);
-      const r=el.getBoundingClientRect();ox=e.clientX-r.left;oy=e.clientY-r.top;
-      el.style.position='fixed';el.style.margin='0';
-    });
-    el.addEventListener('pointermove',e=>{
-      if(!drag)return;
-      const x=Math.max(0,Math.min(innerWidth-el.offsetWidth,e.clientX-ox));
-      const y=Math.max(52,Math.min(innerHeight-40,e.clientY-oy));
-      el.style.left=x+'px';el.style.top=y+'px';el.style.right='auto';el.style.bottom='auto';
-    });
-    el.addEventListener('pointerup',()=>drag=false);
-    el.addEventListener('pointercancel',()=>drag=false);
-  }
-  function scan(){
-    preferred.forEach(sel=>document.querySelectorAll(sel).forEach(addTools));
-    document.querySelectorAll('body > div,#map-view > div,#graphs-view > div').forEach(el=>{
-      const cs=getComputedStyle(el);
-      if((cs.position==='fixed'||cs.position==='absolute')&&el.offsetWidth>180&&el.offsetHeight>80)addTools(el);
-    });
-  }
-  scan();setInterval(scan,2000);
-})();
-</script>
+
 <script id="learner-truth-js">async function refreshLearnerTruth(){try{const r=await fetch('/api/trainer-status?ts='+Date.now());const d=await r.json();const f=n=>Number(n||0).toLocaleString('de-DE');document.getElementById('lth-learner').textContent=f(d.learner_steps);document.getElementById('lth-champion').textContent=f(d.champion_steps);document.getElementById('lth-delta').textContent=(Number(d.delta_steps||0)>=0?'+':'')+f(d.delta_steps);}catch(e){}}setInterval(refreshLearnerTruth,1000);refreshLearnerTruth();</script>
 
-<script id="pkmai-mobile-relayout">
+<script id="fixed-workspace-layout">
 (function(){
-  // Auf dem Handy: die Overlay-Panels, die im Desktop ueber der Karte
-  // schweben (.live-global GLOBAL AI, .v81skills V8.4 SKILLS), aus der
-  // Karte herausholen und als feste Kacheln unter die Karte haengen.
-  if(!matchMedia('(max-width:820px)').matches) return;
-  const mc=document.getElementById('main-container');
-  const hud=document.getElementById('hud');
-  function relayout(){
-    document.querySelectorAll('#map-view > .live-global, #map-view > .v81skills').forEach(el=>{
-      el.classList.add('pkmai-mobile-tile');
-      mc.insertBefore(el, hud);
-      // Nur auf dem Map-Tab sichtbar - sonst ueberlagert die Kachel jeden
-      // anderen Tab (sie haengt jetzt ausserhalb jeder Tab-View).
-      el.style.setProperty('display', (typeof currentTab!=='undefined' && currentTab==='map') ? 'block' : 'none', 'important');
-    });
-  }
-  relayout();
-  // Panels werden teils spaeter per JS erzeugt -> ein paar Mal nachziehen.
-  let n=0; const iv=setInterval(()=>{ relayout(); if(++n>10) clearInterval(iv); }, 500);
+  const main=document.getElementById('main-container');
+  const workspace=document.createElement('div');
+  workspace.id='map-workspace';
+  const left=document.createElement('aside');
+  left.id='alex-watcher-column';
+  left.setAttribute('aria-label', 'Alex Watcher');
+  left.innerHTML='<div class="alex-watcher-title">● ALEX · LIVE WATCHER</div><div class="wt-stream-wrap"><img id="alex-watcher-stream" src="/watcher-emulator.jpg" alt="Alex spielt Pokémon live"></div>';
+  left.appendChild(document.getElementById('detail-panel'));
+  const center=document.createElement('section');
+  center.id='map-column';
+  center.setAttribute('aria-label','Live-Weltkarte');
+  document.getElementById('brain-summary-row').appendChild(document.querySelector('.live-global'));
+  center.appendChild(document.getElementById('agent-filter-bar'));
+  center.appendChild(document.getElementById('map-view'));
+  workspace.append(left,center,document.getElementById('hud'));
+  main.prepend(workspace);
+  requestAnimationFrame(()=>{map.invalidateSize();recomputeDynamicMapBounds();});
 })();
 </script>
 

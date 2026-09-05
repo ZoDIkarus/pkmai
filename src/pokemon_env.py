@@ -7,6 +7,7 @@ import os
 import json
 import gzip
 import random
+from battle_state import BattleState
 from firered_ram import (
     read_battle_type_flags,
     read_enemy_party,
@@ -2534,6 +2535,7 @@ class PokemonFireRedEnv(gym.Env):
 
         # Erst echter Spielstart.
         self.env.reset()
+        self.battle_state = BattleState(read_enemy_party(self.env))
         self._image_frames = []
 
         self.total_steps = 0
@@ -2954,26 +2956,31 @@ class PokemonFireRedEnv(gym.Env):
         map_id = int(loc["map_id"]) if loc["valid"] else 0
         x = int(loc["x_pos"]) if loc["valid"] else 0
         y = int(loc["y_pos"]) if loc["valid"] else 0
-        # Battle-Erkennung: das bestaetigte uint32 direkt aus RAM plus die
-        # Integrationsfelder. Gegnerdaten allein reichen NICHT, weil FireRed
-        # die letzte Gegner-Party nach Kampfende im RAM stehen laesst.
-        _bt_any = (
-            int(read_battle_type_flags(self.env) or 0)
-            or int(info.get("battle_flags", 0) or 0)
-            or int(info.get("in_battle", 0) or 0)
+        # Battle types can be zero for wild encounters and remain in RAM
+        # after exit. Track fresh enemy data and actual overworld movement.
+        if not hasattr(self, "battle_state"):
+            self.battle_state = BattleState()
+        try:
+            battle_party = read_enemy_party(self.env)
+        except Exception:
+            battle_party = self.enemy_party_cache
+        position = (bank, map_id, x, y) if loc.get("trusted") else None
+        in_battle = self.battle_state.update(
+            battle_party, position,
+            flags=read_battle_type_flags(self.env),
+            signal=int(info.get("in_battle", 0) or 0),
         )
-        # Frische Gegner-Sichtung (Zaehler laeuft nach Kampfende aus).
-        _enemy_present = (
-            self.total_steps - int(getattr(self, "_last_enemy_seen_step", -999))
-            <= self.ENEMY_ACTIVITY_TTL
-        )
-        in_battle = 1 if (_bt_any or _enemy_present) else 0
+        info["battle_detection"] = self.battle_state.reason
+        info["battle_type_flags"] = self.battle_state.raw_flags
         if in_battle:
             self.battle_steps += 1
             self.current_battle_steps += 1
         else:
             self.route_steps += 1
             self.current_battle_steps = 0
+        reward = 0.0
+        reward_events = []
+        truncated = False
         previous_battle_state = int(self.last_in_battle)
         battle_just_ended = previous_battle_state == 1 and in_battle == 0
         battle_ended_without_faint = False
@@ -3081,23 +3088,21 @@ class PokemonFireRedEnv(gym.Env):
         if not gameplay_ready:
             # V16: normale Aktionen sind auch im Intro neutral. Fortschritt
             # entsteht nur durch gedeckelte neue Screens und Meilensteine.
-            reward = self.INTRO_STEP_COST
+            reward += self.INTRO_STEP_COST
         elif self.FULL_ONLY_MODE:
             # V16: keine Bewegungs- oder Zeitpunkte im Full-Brain-Modus.
-            reward = self.GAMEPLAY_STEP_COST
+            reward += self.GAMEPLAY_STEP_COST
         else:
             _speed_graded = (
                 self.training_objective in self.SPECIALIST_SPEED_ROLES
                 or (self.training_objective == "full" and not self.has_starter)
             )
-            reward = (
+            reward += (
                 self.SPECIALIST_STEP_COST
                 if _speed_graded
                 else self.GAMEPLAY_STEP_COST
             )
         milestone_saved = None
-        reward_events = []
-        truncated = False
         objective_done = False
 
         if battle_ended_without_faint:

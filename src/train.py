@@ -1198,7 +1198,11 @@ def main():
 
     # Jeder neue Trainingsprozess beginnt an der letzten bestaetigten Basis.
     # Ein unbewerteter Resume-Zwischenstand darf keine Regression konservieren.
-    if os.path.exists(BEST_MODEL):
+    if os.environ.get("PKMAI_RESUME_SAVED") == "1" and os.path.exists(RESUME_MODEL):
+        # Explicit maintenance restart: continue the just-saved learner without
+        # promoting it to champion or discarding work since the last evaluation.
+        load_model = RESUME_MODEL
+    elif os.path.exists(BEST_MODEL):
         load_model = BEST_MODEL
     elif os.path.exists(RESUME_MODEL):
         load_model = RESUME_MODEL

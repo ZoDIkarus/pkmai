@@ -8,7 +8,7 @@ services:
     entrypoint: ["bash", "scripts/start_cluster_worker.sh"]
     environment:
       RAY_ADDRESS: ${PKMAI_RAY_ADDRESS:?set PKMAI_RAY_ADDRESS}
-      RAY_NODE_IP: ${PKMAI_WORKER_IP:?set PKMAI_WORKER_IP}
+      RAY_NODE_IP: ${PKMAI_WORKER_HOST_IP:?set PKMAI_WORKER_HOST_IP}
       PKMAI_CLUSTER_MASTER_URL: ${PKMAI_CLUSTER_MASTER_URL:?set PKMAI_CLUSTER_MASTER_URL}
       PKMAI_CLUSTER_KEY_FILE: /app/local/cluster_key.txt
       PKMAI_WORKER_ID: ${PKMAI_WORKER_ID:-remote-worker}
@@ -16,16 +16,9 @@ services:
       RAY_DISABLE_DOCKER_CPU_WARNING: "1"
     volumes:
       - ./local:/app/local:ro
-    networks:
-      wireguard_net:
-        ipv4_address: ${PKMAI_WORKER_IP:?set PKMAI_WORKER_IP}
+    network_mode: host
     cpus: 1.0
     mem_limit: 1g
     memswap_limit: 2g
-    shm_size: 256m
+    shm_size: 512m
     restart: "no"
-
-networks:
-  wireguard_net:
-    external: true
-    name: wireguard_net

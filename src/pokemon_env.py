@@ -4212,7 +4212,15 @@ class PokemonFireRedEnv(gym.Env):
                             "new_map_episode:"
                             f"+{self.EPISODE_NEW_MAP_REWARD:.2f}"
                         )
-                elif not _wipe_cooldown_active:
+                elif not _wipe_cooldown_active and bank == self.OVERWORLD_BANK:
+                    # V17.3: nur draussen. Innenraeume rund um den fixen
+                    # Savestate-Start (Reds Haus, Rivalenhaus, Eichs Labor)
+                    # sind JEDEM Agenten in JEDER Episode sofort bekannt -
+                    # das gab bis zu ~100 Gratis-Reward pro Episode allein
+                    # dafuer, kurz alle bekannten Raeume abzuklappern, bevor
+                    # ueberhaupt Route 1 erreicht wird. Live beobachtet:
+                    # Agenten "duempelten im Haus rum" statt loszulaufen,
+                    # gerade seit Episoden nach einem Wipe nicht mehr enden.
                     reward += self.EPISODE_NEW_MAP_REWARD
                     reward_events.append(
                         "replay_map_once:"

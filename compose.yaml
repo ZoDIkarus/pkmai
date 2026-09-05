@@ -13,9 +13,6 @@ services:
     volumes:
       - ./runtime:/app/runtime
       - ./local:/app/local:ro
-    networks:
-      wireguard_net:
-        ipv4_address: 10.10.15.110
     cpus: 1.5
     mem_limit: 1g
     memswap_limit: 2g
@@ -28,9 +25,8 @@ services:
     entrypoint: ["python", "-u", "src/web_stream.py"]
     volumes:
       - ./runtime:/app/runtime
-    networks:
-      wireguard_net:
-        ipv4_address: 10.10.15.111
+    ports:
+      - "10.10.15.1:8001:8000"
     cpus: 0.25
     mem_limit: 256m
     memswap_limit: 512m
@@ -41,11 +37,12 @@ services:
     container_name: pkmai-cluster-master
     profiles: ["cluster"]
     entrypoint: ["python", "-u", "src/cluster_master.py"]
+    environment:
+      PKMAI_CLUSTER_HOST: 10.10.15.1
+      PKMAI_CLUSTER_PORT: "8765"
     volumes:
       - ./runtime:/app/runtime
-    networks:
-      wireguard_net:
-        ipv4_address: 10.10.15.112
+    network_mode: host
     cpus: 0.25
     mem_limit: 256m
     memswap_limit: 512m
@@ -57,19 +54,17 @@ services:
     profiles: ["cluster"]
     entrypoint: ["bash", "scripts/start_cluster_brain.sh"]
     environment:
-      RAY_NODE_IP: 10.10.15.113
+      RAY_NODE_IP: 10.10.15.1
       PKMAI_CLUSTER_ENV_RUNNERS: "1"
       PKMAI_CLUSTER_CHECKPOINT_EVERY: "10"
     volumes:
       - ./runtime:/app/runtime
       - ./local:/app/local:ro
-    networks:
-      wireguard_net:
-        ipv4_address: 10.10.15.113
+    network_mode: host
     cpus: 1.0
     mem_limit: 2g
     memswap_limit: 3g
-    shm_size: 512m
+    shm_size: 768m
     restart: "no"
 
   cluster-worker:
@@ -78,25 +73,18 @@ services:
     profiles: ["cluster-local-worker"]
     entrypoint: ["bash", "scripts/start_cluster_worker.sh"]
     environment:
-      RAY_ADDRESS: 10.10.15.113:6379
-      RAY_NODE_IP: 10.10.15.114
-      PKMAI_CLUSTER_MASTER_URL: http://10.10.15.112:8765
+      RAY_ADDRESS: 10.10.15.1:6379
+      RAY_NODE_IP: 10.10.15.1
+      PKMAI_CLUSTER_MASTER_URL: http://10.10.15.1:8765
       PKMAI_CLUSTER_KEY_FILE: /app/runtime/cluster/cluster_key.txt
       PKMAI_WORKER_ID: ai-server-local-worker
       PKMAI_WORKER_AGENTS: "1"
     volumes:
       - ./runtime:/app/runtime:ro
       - ./local:/app/local:ro
-    networks:
-      wireguard_net:
-        ipv4_address: 10.10.15.114
+    network_mode: host
     cpus: 1.0
     mem_limit: 1g
     memswap_limit: 2g
-    shm_size: 256m
+    shm_size: 512m
     restart: "no"
-
-networks:
-  wireguard_net:
-    external: true
-    name: wireguard_net

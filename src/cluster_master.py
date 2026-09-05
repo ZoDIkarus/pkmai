@@ -135,4 +135,5 @@ def cluster(x_pkmai_key: str | None = Header(default=None)):
 
 if __name__ == "__main__":
     app_port = PORT
-    uvicorn.run(app, host="0.0.0.0", port=app_port, log_level="info")
+    app_host = os.getenv("PKMAI_CLUSTER_HOST", "0.0.0.0")
+    uvicorn.run(app, host=app_host, port=app_port, log_level="info")

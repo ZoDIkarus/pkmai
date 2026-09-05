@@ -67,24 +67,3 @@ services:
     memswap_limit: 3g
     shm_size: 768m
     restart: unless-stopped
-
-  cluster-worker:
-    image: pkmai-trainer:local
-    profiles: ["cluster-local-worker"]
-    entrypoint: ["bash", "scripts/start_cluster_worker.sh"]
-    environment:
-      PKMAI_CLUSTER_MASTER_URL: "http://${PKMAI_CLUSTER_HOST:-127.0.0.1}:8765"
-      PKMAI_CLUSTER_KEY_FILE: /app/runtime/cluster/cluster_key.txt
-      PKMAI_WORKER_AGENTS: "1"
-      PKMAI_WORKER_FLEET_SIZE: "${PKMAI_WORKER_FLEET_SIZE:-10}"
-    depends_on:
-      - cluster-master
-    volumes:
-      - ./runtime:/app/runtime
-      - ./local:/app/local:ro
-    network_mode: host
-    cpus: 1.0
-    mem_limit: 1g
-    memswap_limit: 2g
-    shm_size: 512m
-    restart: unless-stopped

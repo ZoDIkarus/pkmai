@@ -36,16 +36,14 @@ Firewall: allow the master port only from trusted VPN subnets. Do not expose it 
 ## Local Windows Docker Desktop host: ten trainers
 
 For an all-local rollout pool, use the default loopback host (`127.0.0.1`) and
-the local private ROM/integration files. `cluster-worker` intentionally has no
-fixed container name or worker ID, so Compose can scale it into ten independent
-emulator workers. Each scaled hostname maps to a distinct zero-based curriculum
-rank and shares the writable exploration/curriculum runtime volume.
+the local private ROM/integration files. Do not use `docker compose --scale`
+with `network_mode: host`: Docker Desktop exposes the same host name to every
+scaled container, collapsing their worker identities. The launcher assigns
+stable IDs and ranks explicitly.
 
 ```bash
 docker compose --profile trainer build trainer
-docker compose --profile cluster --profile cluster-local-worker up -d \
-  --scale cluster-worker=10 \
-  cluster-master cluster-brain cluster-worker
+./scripts/start_local_trainers.sh
 ```
 
 The expected CPU reservation is 11.25 CPUs: ten one-CPU rollout workers, one
@@ -56,16 +54,20 @@ Verify that all workers have independent identities and actively upload
 rollouts:
 
 ```bash
-docker compose --profile cluster --profile cluster-local-worker ps
-docker compose --profile cluster --profile cluster-local-worker logs --tail 50 cluster-worker
+docker ps --filter name=pkmai-local-trainer-
+docker logs --tail 50 pkmai-local-trainer-0
 curl -fsS http://127.0.0.1:8765/health
 ```
 
 `workers_online` must reach `10`; brain logs must show increasing
-`policy_version` and `timesteps`. Stop the local pool with:
+`policy_version` and `timesteps`. The master serves the dynamic learner's
+published policy artifact at the authenticated `/api/policy` endpoint, allowing
+workers to collect the first rollout before the learner has processed a batch.
+Stop the local pool with:
 
 ```bash
-docker compose --profile cluster --profile cluster-local-worker down
+docker rm -f $(docker ps -aq --filter name=pkmai-local-trainer-)
+docker compose --profile cluster down
 ```
 
 ## VPS / Linux remote worker

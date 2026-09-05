@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 import uvicorn
 
 from cluster_config import (
@@ -29,6 +29,7 @@ CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
 KEY_FILE = Path(os.getenv("PKMAI_CLUSTER_KEY_FILE", CLUSTER_DIR / "cluster_key.txt"))
 STATE_FILE = CLUSTER_DIR / "workers.json"
 POLICY_FILE = CLUSTER_DIR / "policy.json"
+MODEL_FILE = CLUSTER_DIR / "dynamic_policy.pt"
 ROLLOUT_INBOX = CLUSTER_DIR / "rollout_inbox"
 PORT = int(os.getenv("PKMAI_CLUSTER_PORT", "8765"))
 WORKER_TTL_SECONDS = max(15, int(os.getenv("PKMAI_WORKER_TTL_SECONDS", "60")))
@@ -58,6 +59,12 @@ def _policy_version() -> int:
         return int(json.loads(POLICY_FILE.read_text(encoding="utf-8")).get("version", 0))
     except Exception:
         return 0
+
+
+def load_policy_artifact() -> bytes:
+    if not MODEL_FILE.is_file():
+        raise HTTPException(status_code=503, detail="dynamic policy is not published yet")
+    return MODEL_FILE.read_bytes()
 
 
 def _save_state() -> None:
@@ -148,6 +155,12 @@ def heartbeat(payload: dict, x_pkmai_key: str | None = Header(default=None)):
     _check_key(x_pkmai_key)
     _record(payload, "online")
     return {"ok": True, "policy_version": _policy_version()}
+
+
+@app.get("/api/policy")
+def policy(x_pkmai_key: str | None = Header(default=None)):
+    _check_key(x_pkmai_key)
+    return Response(content=load_policy_artifact(), media_type="application/octet-stream")
 
 
 @app.post("/api/rollout/{worker_id}")

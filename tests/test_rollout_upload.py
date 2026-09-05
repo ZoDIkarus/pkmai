@@ -8,6 +8,16 @@ import cluster_master
 
 
 class RolloutUploadTests(unittest.TestCase):
+    def test_policy_artifact_is_read_from_the_dynamic_brain_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = cluster_master.MODEL_FILE
+            cluster_master.MODEL_FILE = Path(directory) / "dynamic_policy.pt"
+            cluster_master.MODEL_FILE.write_bytes(b"policy-artifact")
+            try:
+                self.assertEqual(cluster_master.load_policy_artifact(), b"policy-artifact")
+            finally:
+                cluster_master.MODEL_FILE = original
+
     def test_authenticated_upload_spools_a_valid_batch(self):
         with tempfile.TemporaryDirectory() as directory:
             original = cluster_master.ROLLOUT_INBOX

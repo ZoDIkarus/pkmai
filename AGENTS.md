@@ -10,3 +10,4 @@ This repository is actively used from multiple devices and by multiple coding ag
 - Never force-push or rewrite shared history.
 - Never commit `.env`, `.worker.env`, `local/`, ROMs, cluster keys, runtime data, checkpoints, or other credentials.
 - For worker or brain changes, verify the relevant container/service after the push. Do not claim emulator capacity from telemetry alone; confirm Ray resources and active rollout demand.
+- On Docker Desktop local training, start ten rollout workers with `scripts/start_local_trainers.sh`; do not use Compose scaling with `network_mode: host`, because Docker Desktop collapses scaled workers onto a shared hostname.

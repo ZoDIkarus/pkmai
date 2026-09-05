@@ -40,12 +40,37 @@ PKMAI_WORKER_ID=<unique worker name>
 PKMAI_WORKER_AGENTS=1
 ```
 
-Place the local ROM integration and `cluster_key.txt` in `local/`, then:
+Clone the exact `sascha` branch first:
+
+```bash
+git clone --branch sascha https://github.com/ZoDIkarus/pkmai.git /opt/pkmai
+cd /opt/pkmai
+```
+
+Then copy the local integration and cluster key:
+
+```bash
+# Run from the new worker after its SSH access to ai-server is configured.
+mkdir -p local/custom_integrations/PokemonFireRed-Gba
+
+scp ai-server:/opt/pkmai/runtime/cluster/cluster_key.txt \
+  local/cluster_key.txt
+scp ai-server:/opt/pkmai/local/custom_integrations/PokemonFireRed-Gba/rom.gba \
+  local/custom_integrations/PokemonFireRed-Gba/rom.gba
+scp ai-server:/opt/pkmai/local/custom_integrations/PokemonFireRed-Gba/rom.sha \
+  local/custom_integrations/PokemonFireRed-Gba/rom.sha
+chmod 600 local/cluster_key.txt
+```
+
+Create the local `.worker.env` from the template above, then build and start one worker:
 
 ```bash
 docker compose --env-file .worker.env -f compose.remote-worker.yaml build worker
 docker compose --env-file .worker.env -f compose.remote-worker.yaml up -d worker
+docker logs -f pkmai-cluster-worker
 ```
+
+The worker must be able to reach the brain host ports `6379`, `8765`, `10001-10003` and `11000-11100` over the VPN. Do not publish these ports to a public interface.
 
 ## Windows worker
 

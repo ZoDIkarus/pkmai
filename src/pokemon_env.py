@@ -45,6 +45,12 @@ class PokemonFireRedEnv(gym.Env):
     # Fuer einen langen 4-5h-Lauf deutlich laengere Episoden als bisher.
     # V10.19_1_EARLY_ROUTE_SAFE
     MAX_EPISODE_STEPS = 12000
+    # V17.3: Scouts (siehe FRONTIER_SCOUT_SLOTS) resetten bewusst frueher als
+    # der Rest der Flotte - haeufigere, kuerzere Durchlaeufe an derselben
+    # Front statt eines einzelnen sehr langen Laufs, damit sie die jeweils
+    # neue Map schneller und oefter ueben statt sich einmal sehr weit
+    # wegzubewegen.
+    SCOUT_EPISODE_STEPS = 6000
     MAX_EPISODE_BATTLE_STEPS = 6000
     MAX_SINGLE_BATTLE_STEPS = 2000
     # Aktionsausfuehrung: Taste halten + neutrale Frames. 16 Halte-Frames sind
@@ -63,6 +69,11 @@ class PokemonFireRedEnv(gym.Env):
     # vollen Lauf ab Spielanfang (inkl. Intro) - genau das, woran der Champion
     # gemessen wird. Kein Ueberfitting auf einzelne Resume-States mehr.
     FULL_ONLY_MODE = True
+    # V17.3: feste Anzahl Slots, die statt eines kompletten Laufs ab Pallet
+    # Town vom tiefsten gespeicherten Stage-Checkpoint aus weiterspielen
+    # (siehe _agent_role()). Bewusst klein gehalten, damit der Loewenanteil
+    # der Flotte weiterhin vollstaendige Champion-vergleichbare Laeufe liefert.
+    FRONTIER_SCOUT_SLOTS = 2
     PROGRESS_STALL_TIMEOUT = 12000
     POST_STARTER_STALL_TIMEOUT = 12000
     STARTER_RUSH_TIMEOUT = 5000
@@ -354,7 +365,7 @@ class PokemonFireRedEnv(gym.Env):
     # werden.
     CITY_MAPS = {STAGE_PALLET, STAGE_VIRIDIAN, STAGE_PEWTER}
     CITY_EPISODE_REWARD = 100.0
-    WORLD_ROLES = ("progress", "battle", "level", "badge", "full")
+    WORLD_ROLES = ("progress", "battle", "level", "badge", "full", "scout")
 
     def __init__(
         self,
@@ -1096,7 +1107,7 @@ class PokemonFireRedEnv(gym.Env):
         if (
             not targets
             and self.left_house_rewarded
-            and self.training_objective in ("progress", "full")
+            and self.training_objective in ("progress", "full", "scout")
             and self._valid_coord(bank, map_id, x, y)
         ):
             targets = self._progress_targets_for_map(
@@ -2133,7 +2144,7 @@ class PokemonFireRedEnv(gym.Env):
         Wird nur bei echten Fortschrittsereignissen gespeichert.
         Keine hartcodierten FireRed-Koordinaten oder Story-Loesung.
         """
-        if self.training_objective not in ("progress", "full"):
+        if self.training_objective not in ("progress", "full", "scout"):
             return None
 
         if (
@@ -2217,7 +2228,20 @@ class PokemonFireRedEnv(gym.Env):
         # V16 CLEAN: alle Agenten spielen dieselbe komplette Aufgabe vom
         # Spielanfang. Keine Skills und keine gemischten Checkpoint-Starts im
         # selben PPO-Rollout.
+        #
+        # V17.3: eigene Rolle "scout" (statt weiter "full" oder das alte,
+        # in vielen Legacy-Verzweigungen ueberladene "progress") fuer die
+        # FRONTIER_SCOUT_SLOTS - im Web-Dashboard filterbar, aber bewusst
+        # ein brandneuer String, der in KEINER bestehenden
+        # training_objective-Pruefung sonst irgendwo im Code vorkommt.
+        # Dadurch faellt "scout" ueberall dort, wo Reward-Code nach Rolle
+        # unterscheidet, automatisch auf dasselbe Verhalten wie "full"
+        # zurueck - ausser an der einen Stelle (episode_limit unten), wo es
+        # explizit ergaenzt wurde, damit auch Scouts das normale
+        # 12.000-Schritte-Limit behalten statt versehentlich 32768 zu bekommen.
         if getattr(self, "FULL_ONLY_MODE", False):
+            if slot >= n - self.FRONTIER_SCOUT_SLOTS:
+                return "scout", f"Frontier Scout {slot + 1:03d}"
             return "full", f"Full Journey {slot + 1:03d}"
 
         s = self._skill_vault_scores()
@@ -2328,11 +2352,18 @@ class PokemonFireRedEnv(gym.Env):
         self.training_objective = role
         saved = set(self.saved_milestones)
 
-        # V15.3c: im All-Full-Regime startet JEDER full-Agent am Spielanfang
-        # (inkl. Intro). Nur der 1 Frontier-Scout-Slot resumt tief, vom
-        # jeweils aktuellsten stage_N-Checkpoint.
+        # V15.3c: im All-Full-Regime startet JEDER full-Agent am Spielanfang.
+        #
+        # V17.3: bisher startete unter FULL_ONLY_MODE ausnahmslos jeder
+        # Agent "beginning" - die ganze Flotte spielte dadurch JEDE Episode
+        # wieder komplett ab Pallet Town los, egal wie tief die Front schon
+        # war (_save_stage_checkpoint() sammelte brav Checkpoints, aber
+        # niemand lud sie je wieder). Neue, tiefere Maps (Route 2/Wald/
+        # Marmoria) bekamen dadurch praktisch nie gezielte Uebung. Die
+        # "scout"-Rolle (siehe _agent_role()) resumt jetzt vom tiefsten
+        # validierten Checkpoint statt neu ab Spielanfang.
         if getattr(self, "FULL_ONLY_MODE", False):
-            if role == "progress":
+            if role == "scout":
                 return self._best_progress_milestone()
             return "beginning"
 
@@ -4513,7 +4544,7 @@ class PokemonFireRedEnv(gym.Env):
                             not targets
                             and self.left_house_rewarded
                             and self.training_objective
-                                in ("progress", "full")
+                                in ("progress", "full", "scout")
                         ):
                             targets = self._progress_targets_for_map(
                                 bank, map_id, x, y
@@ -5085,7 +5116,9 @@ class PokemonFireRedEnv(gym.Env):
             info["progress_stall_reset"] = False
 
         episode_limit = (
-            self.MAX_EPISODE_STEPS
+            self.SCOUT_EPISODE_STEPS
+            if self.training_objective == "scout"
+            else self.MAX_EPISODE_STEPS
             if self.training_objective in ("progress", "badge", "full")
             else 32768
         )

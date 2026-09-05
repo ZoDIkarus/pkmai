@@ -3321,11 +3321,11 @@ header{padding:6px!important;gap:4px!important}
         const FLEET_ROLE_LABELS = {
             intro:'Intro', stairs:'Treppe', exit:'Haus-Exit', starter:'Starter',
             starter_rush:'Starter', battle:'Kampf', level:'Level', progress:'Progress',
-            full:'Full Journey', badge:'Orden'
+            full:'Full Journey', badge:'Orden', scout:'Frontier Scout'
         };
         const STATUS_ROLE_ICONS = {
             intro:'🎬', stairs:'🪜', exit:'🚪', starter:'🐣', battle:'⚔️',
-            level:'⬆️', progress:'🧭', full:'🏁', badge:'🪨'
+            level:'⬆️', progress:'🧭', full:'🏁', badge:'🪨', scout:'🔭'
         };
         function statusEsc(value){
             return String(value ?? '–').replace(/[&<>"']/g, c=>({
@@ -3541,7 +3541,7 @@ header{padding:6px!important;gap:4px!important}
             const rolesEl = document.getElementById('fleet-roles');
             if(rolesEl){
                 const roles = f.roles || {};
-                const order = ['progress','battle','level','full','starter','exit','stairs','intro'];
+                const order = ['scout','progress','battle','level','full','starter','exit','stairs','intro'];
                 const keys = Object.keys(roles).sort((a,b)=>{
                     const ia=order.indexOf(a), ib=order.indexOf(b);
                     return (ia<0?99:ia)-(ib<0?99:ib);

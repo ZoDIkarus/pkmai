@@ -197,13 +197,45 @@ class RoleAllocationTests(unittest.TestCase):
             roles[role] += 1
         return roles
 
-    def test_v16_uses_only_full_agents(self):
+    def test_v16_uses_full_agents_plus_a_few_frontier_scouts(self):
+        # V17.3: FRONTIER_SCOUT_SLOTS feste Slots bekommen die eigene Rolle
+        # "scout" (im Dashboard filterbar) statt jede Episode komplett neu
+        # ab Pallet Town zu spielen - der Rest bleibt bei vollstaendigen
+        # Champion-vergleichbaren "full"-Laeufen. "scout" ist ein
+        # brandneuer String, der in keiner alten Rollen-Pruefung sonst im
+        # Code vorkommt und dadurch ueberall automatisch wie "full"
+        # behandelt wird, ausser wo explizit ergaenzt (episode_limit etc.).
         roles = Counter()
         for rank in range(50):
             env = bare_env(rank=rank, n_envs=50)
             role, _ = env._agent_role()
             roles[role] += 1
-        self.assertEqual(roles, Counter({"full": 50}))
+        scouts = PokemonFireRedEnv.FRONTIER_SCOUT_SLOTS
+        self.assertEqual(
+            roles, Counter({"full": 50 - scouts, "scout": scouts})
+        )
+
+    def test_scout_slots_resume_from_deepest_checkpoint(self):
+        # Die letzten FRONTIER_SCOUT_SLOTS Slots sollen vom tiefsten
+        # gespeicherten Checkpoint weiterspielen statt jede Episode wieder
+        # komplett ab Pallet Town zu beginnen - alle anderen Slots bleiben
+        # bei "beginning". Rolle bleibt "full" fuer alle (siehe
+        # test_v16_uses_only_full_agents) - nur der Startpunkt weicht ab.
+        scouts = PokemonFireRedEnv.FRONTIER_SCOUT_SLOTS
+        n = 50
+
+        def scout_env(rank):
+            env = bare_env(rank=rank, n_envs=n, saved_milestones=["stage_5"])
+            env._discover_saved_milestones = lambda: ["stage_5"]
+            env._champion_full_starter_ready = lambda: True
+            env._best_progress_milestone = lambda: "stage_5"
+            return env
+
+        self.assertEqual(scout_env(n - 1)._choose_episode_start(), "stage_5")
+        self.assertEqual(scout_env(n - scouts)._choose_episode_start(), "stage_5")
+        self.assertEqual(
+            scout_env(n - scouts - 1)._choose_episode_start(), "beginning"
+        )
 
     def roles_at(self, stage):
         return self.roles_for_scores({
@@ -261,7 +293,9 @@ class SpecialistStartTests(unittest.TestCase):
             return env._choose_episode_start()
 
     def test_v16_full_always_starts_at_beginning(self):
-        env = bare_env(saved_milestones=["stage_5"])
+        # rank=0 liegt ausserhalb der FRONTIER_SCOUT_SLOTS am Ende der
+        # Flotte (siehe test_scout_slots_resume_from_deepest_checkpoint).
+        env = bare_env(rank=0, n_envs=50, saved_milestones=["stage_5"])
         env._discover_saved_milestones = lambda: ["stage_5"]
         env._champion_full_starter_ready = lambda: True
         env._agent_role = lambda: ("full", "Full")

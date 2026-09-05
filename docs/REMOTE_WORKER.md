@@ -62,9 +62,12 @@ never copy private keys, ROMs, or `.worker.env` contents into commands or git.
 
 ### 1. Install the WSL runtime
 
-In an elevated WSL shell, install the native libraries. Then create a virtual
-environment and install the same Python dependencies as the worker image. Use
-the CPU PyTorch index so this does not pull a CUDA runtime:
+In an elevated WSL shell, install the native libraries. The Python minor
+version must exactly match the brain's Ray runtime (currently Python 3.11.16);
+Ray rejects a node using a different Python minor version. Install Python 3.11
+with `uv`, then create a virtual environment and install the same Python
+dependencies as the worker image. Use the CPU PyTorch index so this does not
+pull a CUDA runtime:
 
 ```bash
 apt-get update
@@ -72,17 +75,18 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   build-essential cmake pkg-config python3-dev python3-venv \
   libgl1 libglib2.0-0 libsdl2-2.0-0 libsdl2-dev libpng-dev zlib1g-dev iptables
 
-python3 -m venv ~/.venvs/pkmai-worker
-~/.venvs/pkmai-worker/bin/python -m pip install --upgrade pip
-~/.venvs/pkmai-worker/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch
+python3 -m pip install --break-system-packages uv
+python3 -m uv python install 3.11
+python3 -m uv venv --python 3.11 ~/.venvs/pkmai-worker311
+python3 -m uv pip install --python ~/.venvs/pkmai-worker311/bin/python --index-url https://download.pytorch.org/whl/cpu torch
 grep -v '^torch$' /mnt/c/zod/pkmai2/requirements.txt >/tmp/pkmai-requirements.txt
-~/.venvs/pkmai-worker/bin/pip install -r /tmp/pkmai-requirements.txt
+python3 -m uv pip install --python ~/.venvs/pkmai-worker311/bin/python -r /tmp/pkmai-requirements.txt
 ```
 
 Verify the runtime without printing configuration secrets:
 
 ```bash
-~/.venvs/pkmai-worker/bin/python -c 'import ray, gymnasium, retro, torch; print(ray.__version__, gymnasium.__version__, torch.__version__)'
+~/.venvs/pkmai-worker311/bin/python -c 'import sys, ray, gymnasium, retro, torch; print(sys.version.split()[0], ray.__version__, gymnasium.__version__, torch.__version__)'
 ```
 
 ### 2. Forward the fixed Ray ports through Windows
@@ -145,13 +149,20 @@ PY
 
 Use `bash`, not `sh`, when importing `.worker.env`: the file is compose/bash
 configuration and can contain syntax that `/bin/sh` does not accept. Keep the
-key file on the local mounted drive and do not print it:
+key file on the local mounted drive and do not print it. If the local env file
+was edited on Windows, strip a trailing CR character from imported values before
+using them; otherwise Python rejects URLs such as the master endpoint as invalid
+HTTP header values:
 
 ```bash
 set -a
 source /mnt/c/zod/pkmai2/.worker.env
 set +a
-export PATH="$HOME/.venvs/pkmai-worker/bin:$PATH"
+for VARIABLE in PKMAI_RAY_ADDRESS PKMAI_CLUSTER_MASTER_URL PKMAI_WORKER_ID; do
+  VALUE="${!VARIABLE-}"
+  printf -v "$VARIABLE" '%s' "${VALUE%$'\x0d'}"
+done
+export PATH="$HOME/.venvs/pkmai-worker311/bin:$PATH"
 export RAY_ADDRESS="$PKMAI_RAY_ADDRESS"
 export RAY_NODE_IP=192.168.2.88
 export PKMAI_CLUSTER_KEY_FILE=/mnt/c/zod/pkmai2/local/cluster_key.txt

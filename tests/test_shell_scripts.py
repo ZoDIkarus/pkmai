@@ -49,6 +49,15 @@ class ShellScriptLineEndingTests(unittest.TestCase):
         self.assertIn('PKMAI_WORKER_FLEET_SIZE="$trainer_count"', launcher)
         self.assertIn('--network host', launcher)
 
+    def test_dynamic_watcher_service_reads_the_published_brain_and_writes_the_stream(self):
+        compose_text = (PROJECT_ROOT / "compose.yaml").read_text(encoding="utf-8")
+        watcher_section = compose_text.split("  dynamic-watcher:\n", 1)[1]
+
+        self.assertIn('entrypoint: ["python", "-u", "src/dynamic_watcher.py"]', watcher_section)
+        self.assertIn("- ./runtime:/app/runtime", watcher_section)
+        self.assertIn("- ./local:/app/local:ro", watcher_section)
+        self.assertIn('profiles: ["watcher"]', watcher_section)
+
 
 if __name__ == "__main__":
     unittest.main()

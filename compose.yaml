@@ -69,3 +69,18 @@ services:
     memswap_limit: 3g
     shm_size: 768m
     restart: unless-stopped
+
+  dynamic-watcher:
+    image: pkmai-trainer:local
+    container_name: pkmai-dynamic-watcher
+    profiles: ["watcher"]
+    entrypoint: ["python", "-u", "src/dynamic_watcher.py"]
+    environment:
+      PKMAI_WATCHER_RELOAD_SECONDS: "1.0"
+    volumes:
+      - ./runtime:/app/runtime
+      - ./local:/app/local:ro
+    cpus: 1.0
+    mem_limit: 1g
+    memswap_limit: 1200m
+    restart: unless-stopped

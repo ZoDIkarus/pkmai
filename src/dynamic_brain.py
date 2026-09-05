@@ -19,6 +19,7 @@ CLUSTER_DIR = PROJECT_ROOT / "runtime" / "cluster"
 INBOX = CLUSTER_DIR / "rollout_inbox"
 POLICY_FILE = CLUSTER_DIR / "policy.json"
 MODEL_FILE = CLUSTER_DIR / "dynamic_policy.pt"
+BEST_MODEL_FILE = CLUSTER_DIR / "dynamic_policy_best.pt"
 CHECKPOINTS_DIR = CLUSTER_DIR / "brain_checkpoints"
 
 
@@ -60,13 +61,19 @@ class DynamicLearner:
         self.optimizer.step()
         self.version += 1
         self.timesteps += len(actions)
-        return {"samples": len(actions), "loss": float(loss.detach())}
+        return {
+            "samples": len(actions),
+            "loss": float(loss.detach()),
+            "mean_reward": float(rewards.mean()),
+        }
 
-    def publish(self, checkpoint: str | None = None) -> None:
+    def publish(self, checkpoint: str | None = None, best: bool = False) -> None:
         CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
-        temporary_model = MODEL_FILE.with_suffix(".pt.tmp")
-        torch.save({"version": self.version, "state_dict": self.model.state_dict()}, temporary_model)
-        os.replace(temporary_model, MODEL_FILE)
+        artifact = {"version": self.version, "state_dict": self.model.state_dict()}
+        for model_file in (MODEL_FILE, BEST_MODEL_FILE) if best else (MODEL_FILE,):
+            temporary_model = model_file.with_suffix(".pt.tmp")
+            torch.save(artifact, temporary_model)
+            os.replace(temporary_model, model_file)
         payload = {
             "version": self.version,
             "timesteps": self.timesteps,
@@ -83,18 +90,22 @@ def main() -> None:
     checkpoint_every = max(1, int(os.getenv("PKMAI_CLUSTER_CHECKPOINT_EVERY", "50")))
     learner = DynamicLearner()
     CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
-    learner.publish()
+    best_mean_reward = float("-inf")
+    learner.publish(best=True)
     while True:
         consumed = 0
         for _, batch in consume_rollouts(INBOX, limit=8):
-            learner.learn(batch)
+            metrics = learner.learn(batch)
             consumed += 1
             checkpoint = None
             if learner.version % checkpoint_every == 0:
                 checkpoint_path = CHECKPOINTS_DIR / f"dynamic-v{learner.version:08d}.pt"
                 torch.save({"version": learner.version, "state_dict": learner.model.state_dict()}, checkpoint_path)
                 checkpoint = str(checkpoint_path)
-            learner.publish(checkpoint)
+            is_best = float(metrics["mean_reward"]) >= best_mean_reward
+            if is_best:
+                best_mean_reward = float(metrics["mean_reward"])
+            learner.publish(checkpoint, best=is_best)
             print(json.dumps({"policy_version": learner.version, "timesteps": learner.timesteps}), flush=True)
         if not consumed:
             time.sleep(0.25)

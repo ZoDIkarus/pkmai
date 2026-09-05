@@ -13,6 +13,7 @@ private VPN interface; never publish them as `0.0.0.0`.
 | `pkmai-cluster-master` | Authenticated worker registry and rollout inbox | `8765` |
 | `pkmai-cluster-brain` | Dynamic PPO batch learner | no published port |
 | `pkmai-cluster-worker` | Independent rollout uploader | outbound access to master only |
+| `pkmai-dynamic-watcher` | Visible replay of the best published dynamic brain | dashboard stream at `/watcher` |
 | `pkmai-trainer` | Legacy local SB3 trainer | no published port |
 
 ## VPS / Linux brain host
@@ -30,6 +31,16 @@ docker compose --profile cluster up -d cluster-master cluster-brain
 ```
 
 Dashboard: `http://10.10.15.1:8001/`
+
+Start the visible watcher after the brain is online:
+
+```bash
+docker compose --profile watcher up -d dynamic-watcher
+```
+
+It loads `dynamic_policy_best.pt`, reloads when the learner publishes a better
+reward-scored brain, starts every episode from the true initial game state, and
+writes its JPEG stream to `/watcher` on the dashboard.
 
 Firewall: allow the master port only from trusted VPN subnets. Do not expose it through a public interface.
 

@@ -1,11 +1,31 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
+import dynamic_brain
 from dynamic_brain import DynamicLearner
 
 
 class DynamicLearnerTests(unittest.TestCase):
+    def test_publishes_a_best_brain_artifact_for_the_watcher(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_model = dynamic_brain.MODEL_FILE
+            original_best = dynamic_brain.BEST_MODEL_FILE
+            original_policy = dynamic_brain.POLICY_FILE
+            root = Path(directory)
+            dynamic_brain.MODEL_FILE = root / "dynamic_policy.pt"
+            dynamic_brain.BEST_MODEL_FILE = root / "dynamic_policy_best.pt"
+            dynamic_brain.POLICY_FILE = root / "policy.json"
+            try:
+                DynamicLearner().publish(best=True)
+                self.assertTrue(dynamic_brain.BEST_MODEL_FILE.is_file())
+            finally:
+                dynamic_brain.MODEL_FILE = original_model
+                dynamic_brain.BEST_MODEL_FILE = original_best
+                dynamic_brain.POLICY_FILE = original_policy
+
     def test_trains_only_from_supplied_rollout_batch(self):
         learner = DynamicLearner()
         before = learner.version

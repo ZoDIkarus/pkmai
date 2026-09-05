@@ -76,8 +76,11 @@ class PokemonFireRedEnv(gym.Env):
     # Champion-vergleichbare Laeufe liefert.
     # V17.4: gilt jetzt PRO STAGE, nicht mehr als fester Gesamtwert - jede
     # neu validierte Stage bekommt ihre eigenen FRONTIER_SCOUT_SLOTS Scouts
-    # dazu, bestehende Stages behalten ihre. 2 Stages -> 4 Scouts insgesamt.
-    FRONTIER_SCOUT_SLOTS = 2
+    # dazu, bestehende Stages behalten ihre. 2 Stages -> 10 Scouts insgesamt.
+    # 2 -> 5: realistisch schafft die Flotte heute Nacht eh nur 2-3 validierte
+    # Stages, mehr Scouts pro Stage bringen dann mehr/bessere Lerndaten statt
+    # ungenutzt zu bleiben.
+    FRONTIER_SCOUT_SLOTS = 5
     PROGRESS_STALL_TIMEOUT = 12000
     POST_STARTER_STALL_TIMEOUT = 12000
     STARTER_RUSH_TIMEOUT = 5000
@@ -4560,7 +4563,16 @@ class PokemonFireRedEnv(gym.Env):
                 _north_ok = (
                     _mk not in self.NORTH_CORRIDOR_MAPS or int(y) <= 34
                 )
-                _hold_required = 1 if _stage_now in (4, 5) else 25
+                # V17.4: 25 -> 3. Random-Kaempfe pausieren diesen Zaehler nur
+                # (in_battle==0 oben), setzen ihn nicht zurueck - aber bei
+                # haeufigen Kaempfen dauert es trotzdem lange, bis 25
+                # Lesezyklen (~100 Steps) am Stueck ohne Kampf zusammenkommen.
+                # Die eigentliche Qualitaetssicherung passiert ohnehin schon
+                # beim SPEICHERN selbst (_save_stage_checkpoint ersetzt einen
+                # bestehenden Checkpoint nur bei hoeherem episode_reward oder
+                # weiter noerdlicher Position) - ein kurzer Zaehler reicht als
+                # Schutz gegen einen einzelnen RAM-Ausrutscher.
+                _hold_required = 1 if _stage_now in (4, 5) else 3
                 if (
                     _stage_now >= 2
                     and _stage_now > int(getattr(self, "_saved_stage", 0))

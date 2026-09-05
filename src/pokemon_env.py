@@ -170,20 +170,19 @@ class PokemonFireRedEnv(gym.Env):
     # nie wieder aus.
     NEW_EDGE_REWARD = 0.0
     EPISODE_EDGE_REWARD = 0.0
-    # Ersatz fuer den Explorationsanreiz: nicht mehr an die KANTE (Bewegung
-    # A->B) gekoppelt, sondern an die einzelne KACHEL (Koordinate) selbst.
-    # Zwei Stufen, beide EXPLIZIT gegen das Loop-Farming abgesichert:
-    #   - EPISODE_TILE_REWARD: jede Kachel zahlt hoechstens EINMAL PRO EPISODE
-    #     (self.seen_coords wird bei jedem reset() geleert) - ein zweiter
-    #     Durchlauf derselben Schleife in derselben Episode gibt dafuer 0,
-    #     kostet aber weiterhin GAMEPLAY_STEP_COST pro Schritt -> Loopen lohnt
-    #     sich nach der ersten Runde nicht mehr.
-    #   - NEW_TILE_REWARD: zusaetzlich, aber nur EINMAL UEBER DIE GESAMTE
-    #     FLOTTE FUER IMMER (shared_tiles + _claim_shared(), ueberlebt auch
-    #     Episodenwechsel) - anders als bei Kanten gibt es hier KEINE
-    #     Zwischenstufe, die bei jedem Reset neu farmbar waere.
+    # Ersatz fuer den Explorationsanreiz: nicht an die KANTE (Bewegung A->B)
+    # gekoppelt, sondern an die einzelne KACHEL (Koordinate) selbst - nur
+    # EINMAL UEBER DIE GESAMTE FLOTTE FUER IMMER (shared_tiles +
+    # _claim_shared(), ueberlebt auch Episodenwechsel).
+    # V17.4-Fix: EPISODE_TILE_REWARD (0.05 pro Kachel, einmal pro Episode)
+    # war strukturell dieselbe Farm-Luecke wie beim alten Kanten-Reward -
+    # laengst bekannte Innenraeume (z.B. Reds Haus) gaben dafuer risikofrei
+    # kleines Dauer-Einkommen, ohne jemals draussen ins hohe Gras/Kampf-
+    # Risiko zu muessen. Live beobachtet: viele Agenten liefen absichtlich
+    # zurueck ins Starterhaus statt durch Route 1 zu ziehen. Komplett auf 0,
+    # damit nur noch echte fleet-weite Erstfunde und Kampf punkten.
     NEW_TILE_REWARD = 2.0
-    EPISODE_TILE_REWARD = 0.05
+    EPISODE_TILE_REWARD = 0.0
     # V17.4: kein fleet-weiter Einmal-Jackpot mehr fuer die allererste Map-
     # Entdeckung (ehem. NEW_MAP_REWARD=500, ging strukturell nur an einen
     # einzigen Agenten je Map) - jetzt EIN Wert pro Run, fuer JEDEN Agenten

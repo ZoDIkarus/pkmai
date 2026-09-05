@@ -39,7 +39,11 @@ class WorldStageTests(unittest.TestCase):
         self.assertEqual(PokemonFireRedEnv.NEW_EDGE_REWARD, 0.0)
         self.assertEqual(PokemonFireRedEnv.EPISODE_EDGE_REWARD, 0.0)
         self.assertEqual(PokemonFireRedEnv.NEW_TILE_REWARD, 2.0)
-        self.assertEqual(PokemonFireRedEnv.EPISODE_TILE_REWARD, 0.05)
+        # V17.4-Fix: derselbe Farm-Loophole wie bei Kanten - laengst
+        # bekannte Innenraeume gaben sonst risikofreies Dauer-Einkommen ohne
+        # je ins Kampfrisiko drausen zu muessen. Nur noch echte fleet-weite
+        # Erstfunde zahlen.
+        self.assertEqual(PokemonFireRedEnv.EPISODE_TILE_REWARD, 0.0)
 
     def test_arbitrary_interiors_never_increase_stage(self):
         env = bare_env(visited_maps={(3, 0), (4, 0), (4, 1), (5, 0)})

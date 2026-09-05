@@ -113,7 +113,12 @@ def render_console(screen, data, events):
     # V17.3: 680 -> 570 - die Reward-Tabelle rechts braucht seit dem
     # 4-Zeilen-Kuerzen keine 680px Hoehe mehr, das Fenster wird dadurch
     # insgesamt kompakter fuers Streaming.
-    canvas = np.full((570, 1200, 3), 24, dtype=np.uint8)
+    # V17.4: 1200 -> 980 - die rechte Box (Status + Reward Events) auf die
+    # Haelfte ihrer Breite gebracht (464 -> 232px), damit das Fenster
+    # schmaler auf dem Screen sitzt. Statuswerte stehen dafuer einspaltig
+    # untereinander statt in einem 3-Spalten-Raster - bleibt bei jeder
+    # Zahlenlaenge (z.B. "Reward +1234.56") sauber lesbar, ohne Ueberlappung.
+    canvas = np.full((570, 980, 3), 24, dtype=np.uint8)
     canvas[64:544, :720] = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_RGB2BGR),
                                     (720, 480), interpolation=cv2.INTER_NEAREST)
 
@@ -140,59 +145,62 @@ def render_console(screen, data, events):
         20, 52, (150, 200, 235), .46
     )
 
-    # -- status card: model + episode/reward/stage at a glance, one shared
-    #    3-column grid so every row lines up with the ones below it -------
-    panel(728, 8, 1192, 164)
+    # -- status card: model + episode/reward/stage at a glance -----------
+    # V17.4: rechte Box auf halbe Breite (464 -> 232px) - fuer ein
+    # 3-Spalten-Raster reicht die Breite nicht mehr (z.B. "Reward +1234.56"
+    # kann leicht ueber 100px breit werden). Einspaltig untereinander bleibt
+    # bei jeder Zahlenlaenge garantiert ueberlappungsfrei und lesbar.
+    rx0, rx1 = 728, 960
+    panel(rx0, 8, rx1, 234)
     battle = bool(data['in_battle'])
     badge_color = _NEG if battle else _POS
-    cv2.rectangle(canvas, (740, 18), (856, 40), badge_color, -1)
-    label('BATTLE' if battle else 'OVERWORLD', 748, 34, (20, 20, 20), .44, 1)
-    label(f"{data['model_name']} v{data['model_version']} - inference only",
-          868, 34, (185, 190, 202), .4)
-    label(str(data.get('battle_detection', ''))[:52], 740, 58, (135, 140, 152), .36)
+    cv2.rectangle(canvas, (rx0 + 12, 18), (rx0 + 128, 40), badge_color, -1)
+    label('BATTLE' if battle else 'OVERWORLD', rx0 + 20, 34, (20, 20, 20), .44, 1)
+    label(f"{data['model_name']} v{data['model_version']}"[:30],
+          rx0 + 12, 55, (185, 190, 202), .36)
+    label(str(data.get('battle_detection', ''))[:34], rx0 + 12, 70,
+          (135, 140, 152), .32)
 
-    col = (748, 898, 1048)
     reward_col = _POS if data['reward'] >= 0 else _NEG
     step_col = _POS if data['step_reward'] >= 0 else _NEG
-    row1 = (
+    rows = (
         (_POS, f"Episode {data['episode']}", (220, 220, 220)),
         (reward_col, f"Reward {data['reward']:+.2f}", reward_col),
         (_GOLD, f"Stage {data['world_stage']}", (220, 220, 220)),
-    )
-    row2 = (
         (_GOLD, f"Route {data['route_steps']}", (220, 220, 220)),
         (_NEG, f"Battle {data['battle_steps']}", (220, 220, 220)),
         (step_col, f"Step {data['step_reward']:+.4f}", step_col),
     )
-    for x, (dot_color, text, text_color) in zip(col, row1):
-        dot(x, 82, dot_color, 5)
-        label(text, x + 14, 87, text_color, .44)
-    for x, (dot_color, text, text_color) in zip(col, row2):
-        dot(x, 114, dot_color, 5)
-        label(text, x + 14, 119, text_color, .44)
+    for i, (dot_color, text, text_color) in enumerate(rows):
+        y = 92 + i * 19
+        dot(rx0 + 12, y, dot_color, 5)
+        label(text, rx0 + 26, y + 5, text_color, .42)
 
     # Kleingedrucktes bewusst winzig - nur Kontext, kein Statuswert, damit
     # die Karte kompakt bleibt und das Fenster sich leichter fuers Streamen
     # zurechtstutzen laesst.
     label('Same rules as training, inference only, no learning.',
-          740, 146, (110, 114, 122), .28)
+          rx0 + 12, 210, (110, 114, 122), .28)
     label('Isolated evaluation - one-time bonuses stay private.',
-          740, 158, (110, 114, 122), .28)
+          rx0 + 12, 222, (110, 114, 122), .28)
 
     # -- reward events table ---------------------------------------------
     # V17.3: 4 Zeilen weniger (16 -> 12), damit die Tabelle und damit das
     # ganze Fenster kompakter fuers Streaming wird.
-    tx0, ty0, tx1, ty1 = 728, 172, 1192, 542
+    # V17.4: Zeilen-Layout an die halbierte Breite angepasst (kuerzerer
+    # Event-Name, engerer Step-Prefix) - die Zeilenzahl sinkt leicht (12 ->
+    # 10), weil die Statuskarte darueber jetzt einspaltig mehr Hoehe braucht.
+    tx0, ty0, tx1, ty1 = rx0, 242, rx1, 542
     panel(tx0, ty0, tx1, ty1, fill=(33, 33, 36))
     cv2.rectangle(canvas, (tx0, ty0), (tx1, ty0 + 26), (36, 50, 40), -1)
-    label('REWARD EVENTS', tx0 + 12, ty0 + 18, (170, 225, 170), .48)
-    label('newest first', tx1 - 92, ty0 + 18, (110, 130, 115), .36)
+    label('REWARD EVENTS', tx0 + 12, ty0 + 18, (170, 225, 170), .44)
+    label('newest first', tx1 - 78, ty0 + 18, (110, 130, 115), .3)
 
     row_h = 27
     visible = list(reversed(events[-12:]))
     if not visible:
-        label('No reward events yet this episode.', tx0 + 16, ty0 + 48,
-              (120, 125, 135), .4)
+        label('No reward events yet.', tx0 + 16, ty0 + 48,
+              (120, 125, 135), .38)
     for i, (step, ev) in enumerate(visible):
         y = ty0 + 26 + i * row_h
         if y + row_h > ty1:
@@ -201,11 +209,11 @@ def render_console(screen, data, events):
             cv2.rectangle(canvas, (tx0 + 1, y), (tx1 - 1, y + row_h), (39, 39, 42), -1)
         name, amount = _parse_event(ev)
         col = _event_color(amount)
-        dot(tx0 + 16, y + row_h // 2 + 3, col, 4)
-        label(f"S{step}", tx0 + 28, y + 18, (110, 115, 125), .34)
-        label(name[:34], tx0 + 84, y + 18, (205, 208, 215), .38)
+        dot(tx0 + 10, y + row_h // 2 + 3, col, 4)
+        label(f"S{step}", tx0 + 18, y + 18, (110, 115, 125), .3)
+        label(name[:16], tx0 + 52, y + 18, (205, 208, 215), .36)
         if amount is not None:
-            right_label(f"{amount:+.2f}", tx1 - 12, y + 18, col, .4, 1)
+            right_label(f"{amount:+.2f}", tx1 - 8, y + 18, col, .38, 1)
 
     label('Q / Esc to close.', 20, 556, (150, 150, 150), .38)
     label(f"Last reset: {data.get('last_reset', '-')}", 220, 556, (150, 150, 150), .38)
@@ -225,7 +233,7 @@ def run(api):
     signal.signal(signal.SIGTERM, request_stop)
     window = 'PKMAI / Alex Watcher'
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window, 1200, 570)
+    cv2.resizeWindow(window, 980, 570)
     model = None
     signature = None
     last_model_check = last_publish = 0

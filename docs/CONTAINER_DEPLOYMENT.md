@@ -70,6 +70,8 @@ docker compose --env-file .worker.env -f compose.remote-worker.yaml up -d worker
 docker logs -f pkmai-cluster-worker
 ```
 
+The brain uses a configurable pool of 64 pending Ray env-runners by default. Ray schedules them only when worker CPUs are available, so new remote workers can join without changing code. To choose another upper bound before a controlled brain restart, set `PKMAI_CLUSTER_ENV_RUNNERS` in the brain host environment.
+
 The worker must be able to reach the brain host ports `6379`, `8765`, `10001-10003` and `11000-11100` over the VPN. Do not publish these ports to a public interface.
 
 ## Windows worker

@@ -71,7 +71,7 @@ def publish_policy(
 def main() -> None:
     CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
     CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
-    env_runners = max(0, int(os.getenv("PKMAI_CLUSTER_ENV_RUNNERS", "1")))
+    env_runners = max(1, int(os.getenv("PKMAI_CLUSTER_ENV_RUNNERS", "64")))
     checkpoint_every = max(1, int(os.getenv("PKMAI_CLUSTER_CHECKPOINT_EVERY", "10")))
     register_env("pkmai_cluster_env", make_cluster_env)
     ModelCatalog.register_custom_model("pkmai_dict_cnn", PKMAIDictCNN)

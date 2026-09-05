@@ -55,7 +55,7 @@ services:
     entrypoint: ["bash", "scripts/start_cluster_brain.sh"]
     environment:
       RAY_NODE_IP: 10.10.15.1
-      PKMAI_CLUSTER_ENV_RUNNERS: "1"
+      PKMAI_CLUSTER_ENV_RUNNERS: "${PKMAI_CLUSTER_ENV_RUNNERS:-64}"
       PKMAI_CLUSTER_CHECKPOINT_EVERY: "10"
     volumes:
       - ./runtime:/app/runtime

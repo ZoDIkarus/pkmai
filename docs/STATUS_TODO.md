@@ -5,6 +5,63 @@
 **Python:** `/opt/homebrew/Caskroom/miniforge/base/envs/pokemon-ai/bin/python`  
 **Letzter gepflegter Stand:** 2026-09-02
 
+---
+
+## 🆕 OFFENE TODOs AUS DER V17-SESSION (2026-09-05, nachts) — ZUERST LESEN
+
+Diese Punkte sind bewusst NICHT mehr in derselben Session umgesetzt worden,
+damit der frische V17-Trainingslauf (Savestate-Start ab Oaks Labor, dauerhafter
+Kanten-Reward, Kampf-Rebalance, Reproduzierbarkeits-Schwelle - siehe README
+"Current release") ungestoert ueber Nacht laufen kann. Der Rest dieser Datei
+ist AELTER (Stand 2026-09-02, 30-Agenten-Architektur) und teilweise ueberholt -
+im Zweifel zaehlt README.md + der aktuelle Code, nicht der Rest dieser Datei.
+
+- 🔴 **Item-/Pokeball-Pickup-Reward:** Herumliegende Items/Pokebaelle (z.B. am
+  Wegesrand) sollen beim Aufsammeln einen Reward geben (~+15 vorgeschlagen).
+  Noch nicht recherchiert, ob/wie sich Item-Pickup zuverlaessig per RAM
+  erkennen laesst (aehnliches Vorsichtsprinzip wie beim Geld-RAM-Bug unten:
+  erst empirisch verifizieren, nicht blind eine Adresse raten).
+- 🔴 **Pokeball-Kauf-Reward im Pokemarkt** (nur wenn Geld > 500 Pokedollar,
+  gegen Kaufen-bis-pleite-Loop): Geld-RAM-Adresse fuer die DEUTSCHE FireRed-
+  ROM ist noch nicht verifiziert - die extern recherchierte Adresse
+  (0x02023CC4 bzw. 0x0202494C fuer US) hat sich im Test als falsch erwiesen
+  (kompletter Bereich nur Nullen; auch eine Volltextsuche nach exakt 3000 im
+  RAM ergab 0 Treffer). Ausgelagert als Hintergrund-Task `task_3e5cd4bf`
+  ("Finde und verifiziere Geld-RAM-Adresse (deutsches FireRed)"), Status beim
+  Fortsetzen pruefen.
+- 🔴 **Watcher: Schiggy-Sprite fehlt.** Das Team-Panel im Watcher-Overlay zeigt
+  aktuell nur Name+Level+HP-Balken als Text, kein echtes Pokemon-Sprite-Bild.
+  Sollte durch ein echtes Sprite ersetzt/ergaenzt werden (Sprite-Quelle noch
+  zu klaeren - ROM-intern extrahieren oder Asset-Datei).
+- 🔴 **Watcher-Overlay: eigene Reward-Logik hat vermutlich denselben
+  Savestate-Start-Bug wie pokemon_env.py hatte** (intro_complete_rewarded/
+  left_house_rewarded/starter_obtained_step in src/watch.py, siehe Zeilen um
+  1025-1970). Betrifft NUR die sichtbare Watcher-Anzeige, NICHT das
+  eigentliche Training (train.py/pokemon_env.py sind bereits gefixt und
+  laufen unabhaengig vom Watcher) - deshalb bewusst nicht mehr in dieser
+  Session angefasst. Sollte aber denselben Fix bekommen wie pokemon_env.py:
+  diese Flags am Watcher-Episodenstart auf "bereits erledigt" setzen statt
+  auf False, sonst resettet der sichtbare Lauf vermutlich immer wieder frueh.
+- 🟡 **Dashboard-Feinschliff (angefangen, nicht abgeschlossen):**
+  - Watcher-Overlay-Titel "LIVE MAP TILING" -> "LiveMap" umbenannt und ueber
+    die tatsaechliche Kartenflaeche zentriert (MAP_X0 statt GAME_PANEL_W+18) -
+    ERLEDIGT in src/watch.py.
+  - Gruener Header-Text gekuerzt (kein "Pokemon FireRed AI by Alex" mehr am
+    Ende, das verursachte die Ueberlappung mit "LIVE MAP TILING") -
+    ERLEDIGT, jetzt "Live Brain v{version} | Learner ... | Nx nachgeladen".
+  - "Hintergrund etwas modernere Farben, aktuell zu braun" - NICHT
+    umgesetzt, unklar wo genau (Web-Dashboard oder Watcher-Canvas?). Mit User
+    klaeren, wo genau das braun auftaucht, bevor Farben geaendert werden.
+  - "Team-Panel huebscher, Pokemon-Sprites, ggf. Status-Werte" - NICHT
+    umgesetzt, haengt am Sprite-Punkt oben.
+  - Countdown "noch X Steps bis Timeout" pro laufendem Agenten - NICHT
+    umgesetzt, komplett neues Feature.
+  - Trainer-Sprite-Pfad-Nachbau der ersten Agenten + Spielernamen fuer
+    spaeteres Online-Training + feste (nicht zoombare) Kartengroesse -
+    explizit vom User als spaetere Baustelle markiert, nicht jetzt.
+
+---
+
 > Diese Datei ist die zentrale Übergabe zwischen ChatGPT, Claude und Gemini.
 > Bitte **vor Änderungen zuerst diese Datei lesen** und anschließend die aktuell
 > vorhandenen Projektdateien prüfen. Keine Änderung als "eingebaut" bezeichnen,

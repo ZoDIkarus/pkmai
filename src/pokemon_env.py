@@ -51,8 +51,13 @@ class PokemonFireRedEnv(gym.Env):
     # nur zu drehen; die Ruhe-Frames trennen aufeinanderfolgende Menue-Drücke
     # sauber. MUSS mit watch.py (ACTION_HOLD_FRAMES/ACTION_RELEASE_FRAMES)
     # identisch sein, sonst rendert der Watcher ein anderes Spiel als trainiert.
-    ACTION_HOLD_FRAMES = 12
-    ACTION_RELEASE_FRAMES = 6
+    # A/B-getestet 2026-09-05 direkt gegen echte Bewegung (nicht nur FPS):
+    # 8 Hold-Frames brechen (3 von 12 Tastendruecken bewegen die Figur nicht),
+    # 9 Hold-Frames sind exakt so zuverlaessig wie die vorherigen 12 (11/12,
+    # der eine "Fehlschlag" ist in beiden Faellen dieselbe echte Wand). 14
+    # statt 18 Frames/Entscheidung = ~22% weniger Emulator-Arbeit pro Schritt.
+    ACTION_HOLD_FRAMES = 9
+    ACTION_RELEASE_FRAMES = 5
     # V15.3: Kein Spezialisten-Bootcamp mehr. Fast alle Agenten spielen den
     # vollen Lauf ab Spielanfang (inkl. Intro) - genau das, woran der Champion
     # gemessen wird. Kein Ueberfitting auf einzelne Resume-States mehr.
@@ -131,10 +136,22 @@ class PokemonFireRedEnv(gym.Env):
     # danach nie wieder (REPLAY/PENALTY-Konstanten bleiben bei 0.0). Nicht
     # farmbar - _claim_shared() gibt pro Kante genau einmal ueber alle Agenten
     # "wahr" zurueck, siehe Zeile ~4109.
+    # A/B-getestet 2026-09-05: ohne Kanten-Reward 396 Steps/Sek, mit 437 -
+    # der Reward ist NICHT die FPS-Bremse (eher noch minimal schneller mit).
+    # Bleibt aktiv, bringt echten Explorationswert ohne Performance-Kosten.
     NEW_EDGE_REWARD = 1.0
     NEW_MAP_REWARD = 500.0
     EPISODE_NEW_MAP_REWARD = 25.0
     NEW_GLOBAL_DEPTH_REWARD = 1000.0
+    # V17.2: Wenn ein Agent den bisher tiefsten world_stage ueberhaupt (ueber
+    # ALLE Agenten und Episoden seit dem letzten Reset) als Erster erreicht,
+    # zahlt das einmalig fuers ganze Brain - danach nie wieder fuer diese
+    # Stufe. _claim_global_depth() trug das bereits in run_stats ein, zahlte
+    # aber nie Reward aus. Ergaenzt NEW_GLOBAL_DEPTH_REWARD (das pro Episode
+    # jedem Agenten seinen eigenen Stufenanstieg belohnt) um einen echten
+    # Fleet-weiten Meilenstein-Bonus fuer Route 1 / Vertania / Route 2 /
+    # Vertania-Wald / Marmoria usw.
+    GLOBAL_STAGE_RECORD_REWARD = 1000.0
     STARTER_REWARD = 1000.0
     # Ein eindeutiges Ziel verhindert, dass drei verschiedene Starterpfade
     # denselben Reward teilen. Schiggy (Species 7) erleichtert Rocko und kann
@@ -142,6 +159,14 @@ class PokemonFireRedEnv(gym.Env):
     TARGET_STARTER_SPECIES = 7
     STARTER_SPECIES = {1, 4, 7}
     WRONG_STARTER_PENALTY = -500.0
+    # V17.2: Faenge sollen Artenvielfalt lernen statt immer dieselbe haeufige
+    # Spezies (Taubsi/Rattfratz/Raupy) zu wiederholen. Species-ID = Pokedex-
+    # Nummer (Gen3-interne SPECIES_-Konstanten entsprechen 1:1 der Nummer fuer
+    # alle Kanto/Johto-Spezies, z.B. Pikachu = 25). _claim_shared() zahlt den
+    # grossen Bonus nur einmal ueber die ganze Flotte; jeder weitere Fang
+    # derselben Art kostet danach, statt neutral (0) zu sein.
+    SPECIES_CAUGHT_FIRST_REWARD = 1000.0
+    SPECIES_CAUGHT_DUPLICATE_PENALTY = -500.0
     # Kaempfe sind unbegrenzt wiederholbar (Wildgras respawnt), anders als
     # Kanten/Maps/Stufen, die pro Fleet-Leben nur einmal zahlen. Auf dem alten
     # Niveau (0.5/30/50) waere ein Kampf ~80-100 Reward in 20-40 Schritten -
@@ -294,6 +319,7 @@ class PokemonFireRedEnv(gym.Env):
         shared_transitions=None,
         shared_progress=None,
         shared_lock=None,
+        shared_species=None,
         n_envs=32,
     ):
         super().__init__()
@@ -308,6 +334,7 @@ class PokemonFireRedEnv(gym.Env):
         self.shared_transitions = shared_transitions
         self.shared_progress = shared_progress
         self.shared_lock = shared_lock
+        self.shared_species = shared_species
         self.shared_edge_snapshot = set()
         self.shared_transition_snapshot = set()
 
@@ -341,6 +368,16 @@ class PokemonFireRedEnv(gym.Env):
         self.battle_activity_open = False
         self.enemy_hp_min = {}
         self.enemy_fainted_rewarded = set()
+        # V17.2: fehlte hier komplett. total_steps setzt jede Episode auf 0
+        # zurueck, dieser Wert aber nicht - nach der ersten Episode wird
+        # total_steps - _last_enemy_seen_step sofort stark negativ, was die
+        # "<=96"-Pruefung immer erfuellt. Folge: in_battle haengt am Anfang
+        # JEDER Episode ausser der ersten faelschlich auf 1, bis total_steps
+        # den alten (episodenfremden) Wert wieder eingeholt hat - oft
+        # tausende Schritte. Erklaert sowohl die "haengt in Kampf fest ohne
+        # sichtbaren Kampf"-Agenten als auch die ausbleibende Fluchtstrafe
+        # (battle_just_ended kann nie feuern, wenn in_battle nie auf 0 faellt).
+        self._last_enemy_seen_step = -999
         self.episode_enemy_damage_hp = 0
         self.episode_enemy_damage_reward = 0.0
         self.episode_enemy_faints = 0
@@ -576,6 +613,7 @@ class PokemonFireRedEnv(gym.Env):
             "enemy_damage_reward": 0.0,
             "enemy_faints": 0,
             "experience_wins": 0,
+            "party_wipes": 0,
         }
         self.episode_anti_loop_resets = 0
         self._load_run_stats()
@@ -2525,6 +2563,16 @@ class PokemonFireRedEnv(gym.Env):
         self.battle_activity_open = False
         self.enemy_hp_min = {}
         self.enemy_fainted_rewarded = set()
+        # V17.2: fehlte hier komplett. total_steps setzt jede Episode auf 0
+        # zurueck, dieser Wert aber nicht - nach der ersten Episode wird
+        # total_steps - _last_enemy_seen_step sofort stark negativ, was die
+        # "<=96"-Pruefung immer erfuellt. Folge: in_battle haengt am Anfang
+        # JEDER Episode ausser der ersten faelschlich auf 1, bis total_steps
+        # den alten (episodenfremden) Wert wieder eingeholt hat - oft
+        # tausende Schritte. Erklaert sowohl die "haengt in Kampf fest ohne
+        # sichtbaren Kampf"-Agenten als auch die ausbleibende Fluchtstrafe
+        # (battle_just_ended kann nie feuern, wenn in_battle nie auf 0 faellt).
+        self._last_enemy_seen_step = -999
         self.episode_enemy_damage_hp = 0
         self.episode_enemy_damage_reward = 0.0
         self.episode_enemy_faints = 0
@@ -2933,6 +2981,22 @@ class PokemonFireRedEnv(gym.Env):
                 1 for mon in self.player_party_cache
                 if int(mon.get("cur_hp", 0)) > 0
             )
+            # V17.2: Party-Wipe HIER erkennen, nicht nur ueber das periodische
+            # current_total_hp==0 unten (Party wird nur alle PARTY_READ_EVERY=8
+            # Schritte neu gelesen). Nach einem Wipe teleportiert das Spiel
+            # automatisch zu einem Pokecenter - das kann als "neue Map" +25/
+            # +500 durchrutschen, wenn die Strafe hier verpasst wird, weil die
+            # exakte HP==0-Lesung zwischen zwei 8-Schritt-Samples faellt. Der
+            # Kampf-Ende-Uebergang wird dagegen JEDEN Schritt zuverlaessig
+            # erkannt, deshalb hier pruefen statt nur periodisch zu hoffen.
+            if alive_pokemon == 0 and self.player_party_cache and not truncated:
+                reward += -100.0
+                reward_events.append("party_wiped_at_battle_end:-100.0")
+                self.run_stats["party_wipes"] += 1
+                self._save_run_stats()
+                truncated = True
+                self.last_stage_timeout = "party_wiped"
+                info["last_stage_timeout"] = "party_wiped"
             # Der letzte Angriff kann Gegner-KP und Battle-Flag im selben
             # Emulator-Step auf 0 setzen. Die alte Reihenfolge loeschte hier
             # enemy_hp_min und verlor dadurch genau diesen K.O.
@@ -3057,9 +3121,30 @@ class PokemonFireRedEnv(gym.Env):
                 and current_party_size > self.last_party_size
                 and current_party_size <= 4
             ):
-                # Fang-Telemetrie bleibt erhalten; kein Reward, damit das
-                # Story-Ziel nicht durch beliebiges Team-Farming verdraengt wird.
-                reward_events.append("caught_pokemon:+0")
+                # V17.2: Erstfang einer Spezies fleet-weit belohnen, jeden
+                # weiteren Fang derselben Art bestrafen - lernt Artenvielfalt
+                # statt denselben haeufigen Wildpokemon (Taubsi/Raupy/...)
+                # immer wieder zu fangen. Neu gefangene Mons haengen sich ans
+                # Party-Ende an, valid_party[-1] ist daher der Neuzugang.
+                new_species = (
+                    int(valid_party[-1].get("species_id", 0))
+                    if valid_party else 0
+                )
+                if new_species > 0:
+                    if self._claim_shared(self.shared_species, new_species):
+                        reward += self.SPECIES_CAUGHT_FIRST_REWARD
+                        reward_events.append(
+                            f"species_caught_first:{new_species}:"
+                            f"+{self.SPECIES_CAUGHT_FIRST_REWARD:.0f}"
+                        )
+                    else:
+                        reward += self.SPECIES_CAUGHT_DUPLICATE_PENALTY
+                        reward_events.append(
+                            f"species_caught_dup:{new_species}:"
+                            f"{self.SPECIES_CAUGHT_DUPLICATE_PENALTY:.0f}"
+                        )
+                else:
+                    reward_events.append("caught_pokemon:+0")
 
             if (
                 self.last_party_total_level > 0
@@ -3115,6 +3200,8 @@ class PokemonFireRedEnv(gym.Env):
             if current_total_hp == 0 and max_total_hp > 0 and not truncated:
                 reward -= 100.0
                 reward_events.append("party_wiped:-100.0")
+                self.run_stats["party_wipes"] += 1
+                self._save_run_stats()
                 truncated = True
                 self.last_stage_timeout = "party_wiped"
                 info["last_stage_timeout"] = "party_wiped"
@@ -4088,6 +4175,12 @@ class PokemonFireRedEnv(gym.Env):
                 if self._claim_global_depth(_stage):
                     self.run_stats["global_depth_records"] += 1
                     self._save_run_stats()
+                    if self.GLOBAL_STAGE_RECORD_REWARD:
+                        reward += self.GLOBAL_STAGE_RECORD_REWARD
+                        reward_events.append(
+                            f"global_stage_record:{_stage}:"
+                            f"+{self.GLOBAL_STAGE_RECORD_REWARD:.0f}"
+                        )
 
             # V14: STAGE-CHECKPOINT - EIGENER Block, jeden Schritt, NICHT im
             # "neue Map"-Zweig (dort lief der Zaehler nur 1x und erreichte nie

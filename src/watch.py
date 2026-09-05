@@ -6,12 +6,14 @@ import json
 import time
 import glob
 import signal
+import urllib.request
 
 from stable_baselines3 import PPO
 from firered_ram import (
     read_battle_type_flags,
     read_player_location,
     read_player_party,
+    read_enemy_party,
 )
 
 # Hinweis: Der Watcher startet BEWUSST immer vom Spielanfang - er ist die
@@ -38,8 +40,10 @@ FPS_TITLE_INTERVAL = 0.5
 # Exakt dieselbe Aktionsausfuehrung wie PokemonFireRedEnv.step().
 # MUSS mit PokemonFireRedEnv.ACTION_HOLD_FRAMES/ACTION_RELEASE_FRAMES identisch
 # sein. 16 Halte-Frames = echter Kachel-Schritt statt nur Drehung.
-ACTION_HOLD_FRAMES = 12
-ACTION_RELEASE_FRAMES = 6
+# A/B-getestet 2026-09-05 (siehe pokemon_env.py) - 9/5 genauso zuverlaessig
+# wie 12/6, ~22% weniger Emulator-Frames pro Entscheidung.
+ACTION_HOLD_FRAMES = 9
+ACTION_RELEASE_FRAMES = 5
 
 # V15.3 BRAIN-MODUS: der sichtbare Watcher benutzt EIN vollstaendiges Netz
 # end-to-end, ohne Skill-Snapshots oder hartkodierte Skill-Umschaltung. Er zeigt
@@ -743,6 +747,85 @@ def _hp_color(ratio, fainted):
     return (120, 230, 90)      # gruen
 
 
+SPRITE_DIR = os.path.join(LOCAL_DIR, "..", "assets", "sprites", "pokemon")
+SPRITE_URL = (
+    "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/"
+    "pokemon/versions/generation-iii/firered-leafgreen/{}.png"
+)
+_sprite_cache = {}
+
+
+def _get_pokemon_sprite(species_id, size=32):
+    """Laedt/cached das FireRed/LeafGreen-Sprite fuer eine Pokemon-Spezies.
+    Dieselbe oeffentliche PokeAPI-Sprite-Quelle wie im Web-Dashboard
+    (web_stream.py). Lokal unter assets/sprites/pokemon/<id>.png gecached,
+    damit nicht bei jedem Frame neu heruntergeladen wird. Gibt bei Fehlern
+    None zurueck - der Team-Panel-Text funktioniert dann weiter wie bisher."""
+    species_id = int(species_id or 0)
+    if species_id <= 0:
+        return None
+    cache_key = (species_id, size)
+    if cache_key in _sprite_cache:
+        return _sprite_cache[cache_key]
+
+    os.makedirs(SPRITE_DIR, exist_ok=True)
+    local_path = os.path.join(SPRITE_DIR, f"{species_id}.png")
+    if not os.path.exists(local_path):
+        try:
+            urllib.request.urlretrieve(
+                SPRITE_URL.format(species_id), local_path
+            )
+        except Exception:
+            _sprite_cache[cache_key] = None
+            return None
+
+    try:
+        img = cv2.imread(local_path, cv2.IMREAD_UNCHANGED)
+        if img is None:
+            _sprite_cache[cache_key] = None
+            return None
+        if img.shape[2] == 3:
+            alpha = np.full(img.shape[:2] + (1,), 255, dtype=np.uint8)
+            img = np.concatenate([img, alpha], axis=2)
+        img = cv2.resize(img, (size, size), interpolation=cv2.INTER_NEAREST)
+    except Exception:
+        img = None
+    _sprite_cache[cache_key] = img
+    return img
+
+
+def _blit_rgba(canvas, sprite, x, y):
+    """Zeichnet ein BGRA-Sprite alphaueberblendet auf den Canvas an (x, y)."""
+    if sprite is None:
+        return
+    sh, sw = sprite.shape[:2]
+    ch, cw = canvas.shape[:2]
+    if x < 0 or y < 0 or x + sw > cw or y + sh > ch:
+        return
+    region = canvas[y:y + sh, x:x + sw]
+    alpha = (sprite[:, :, 3:4].astype(np.float32)) / 255.0
+    blended = (
+        sprite[:, :, :3].astype(np.float32) * alpha
+        + region.astype(np.float32) * (1.0 - alpha)
+    )
+    canvas[y:y + sh, x:x + sw] = blended.astype(np.uint8)
+
+
+# National-Dex-IDs der Starter (Bisasam/Glumanda/Schiggy) - einzige Spezies,
+# deren Wachstumsrate ("medium slow") hier sicher bekannt ist.
+_MEDIUM_SLOW_SPECIES = {1, 4, 7}
+
+
+def _exp_for_level(level, species_id):
+    """Naeherungsweise Gesamt-EXP fuer ein gegebenes Level. Medium-Slow-Formel
+    fuer die Starter, sonst Medium-Fast (n^3) als verbreitete Naeherung fuer
+    fruehe Gen-1-Wildpokemon (nicht exakt fuer jede Wachstumsrate-Gruppe)."""
+    n = max(1, int(level))
+    if int(species_id or 0) in _MEDIUM_SLOW_SPECIES:
+        return max(0, int(1.2 * n**3 - 15 * n**2 + 100 * n - 140))
+    return int(n**3)
+
+
 def draw_team_overlay(canvas, party, ui, x0, y0, w, h):
     """Team-SPALTE zwischen Emu und Live-Map. 6 Pokemon untereinander.
     Klick auf eines -> Stats/Moves-Popup, nochmal klicken -> weg."""
@@ -763,10 +846,15 @@ def draw_team_overlay(canvas, party, ui, x0, y0, w, h):
         if ui.get("expanded") == i:
             cv2.rectangle(canvas, (x0 + 2, sy + 1), (x0 + w - 2, sy + sh - 2),
                           (0, 230, 118), 1)
+        sprite = _get_pokemon_sprite(mon.get("species_id", 0), size=28)
+        text_x0 = x0 + 8
+        if sprite is not None:
+            _blit_rgba(canvas, sprite, x0 + 4, sy + 2)
+            text_x0 = x0 + 36
         name = str(mon.get("name", "?"))[:11]
-        cv2.putText(canvas, name, (x0 + 8, sy + 16),
+        cv2.putText(canvas, name, (text_x0, sy + 16),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, (235, 240, 250), 1, cv2.LINE_AA)
-        cv2.putText(canvas, f"Lv{mon.get('level', 0)}", (x0 + 8, sy + 33),
+        cv2.putText(canvas, f"Lv{mon.get('level', 0)}", (text_x0, sy + 33),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.36, (150, 160, 180), 1, cv2.LINE_AA)
         bx0, bx1 = x0 + 8, x0 + w - 8
         by = sy + 42
@@ -783,13 +871,16 @@ def draw_team_overlay(canvas, party, ui, x0, y0, w, h):
     exp = ui.get("expanded")
     if exp is not None and exp < len(party):
         mon = party[exp]
-        pw, ph = 290, 176
+        pw, ph = 290, 208
         px = x0 - pw - 6
         py = y0 + 10
         ov = canvas.copy()
         cv2.rectangle(ov, (px, py), (px + pw, py + ph), (18, 22, 32), -1)
         cv2.addWeighted(ov, 0.92, canvas, 0.08, 0, canvas)
         cv2.rectangle(canvas, (px, py), (px + pw, py + ph), (0, 230, 118), 1)
+        big_sprite = _get_pokemon_sprite(mon.get("species_id", 0), size=64)
+        if big_sprite is not None:
+            _blit_rgba(canvas, big_sprite, px + pw - 72, py + 8)
         cv2.putText(canvas, f"{mon.get('name','?')}  Lv{mon.get('level',0)}",
                     (px + 12, py + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.52,
                     (0, 230, 118), 1, cv2.LINE_AA)
@@ -809,6 +900,28 @@ def draw_team_overlay(canvas, party, ui, x0, y0, w, h):
             cv2.putText(canvas, f"- {mv.get('name', mv.get('id','?'))}",
                         (px + 20, py + 136 + j * 15),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.36, (200, 208, 220), 1, cv2.LINE_AA)
+
+        # EXP-Balken: Fortschritt zum naechsten Level. Gen-3-Wachstumsrate ist
+        # aus der Party-Struktur nicht direkt dekodiert - Starter sind bekannt
+        # "medium slow", fuer alles andere "medium fast" (n^3) als verbreitete
+        # Naeherung fuer fruehe Gen-1-Wildpokemon. Nicht exakt fuer jede
+        # Spezies, aber deutlich naeher als gar keine Anzeige.
+        level = int(mon.get("level", 0))
+        exp_cur = int(mon.get("experience", 0))
+        exp_lo = _exp_for_level(level, mon.get("species_id", 0))
+        exp_hi = _exp_for_level(level + 1, mon.get("species_id", 0))
+        exp_ratio = 0.0
+        if exp_hi > exp_lo:
+            exp_ratio = max(0.0, min(1.0, (exp_cur - exp_lo) / (exp_hi - exp_lo)))
+        ey = py + ph - 22
+        cv2.putText(canvas, "EXP", (px + 12, ey - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.34, (150, 160, 180), 1, cv2.LINE_AA)
+        ebx0, ebx1 = px + 46, px + pw - 12
+        cv2.rectangle(canvas, (ebx0, ey - 10), (ebx1, ey - 2), (40, 44, 54), -1)
+        efw = int((ebx1 - ebx0) * exp_ratio)
+        if efw > 0:
+            cv2.rectangle(canvas, (ebx0, ey - 10), (ebx0 + efw, ey - 2),
+                          (120, 230, 90), -1)
 
 
 def make_team_click_handler(ui):
@@ -881,6 +994,13 @@ def main():
     action_history = []
     watcher_gameplay_ready = False
     watcher_in_battle = 0
+    # V17.2: gBattleTypeFlags/in_battle-Byte allein erkennen gewoehnliche
+    # Wildkaempfe offenbar nicht zuverlaessig (per Screenshot bestaetigt: echter
+    # Kampf sichtbar, Flag trotzdem 0). pokemon_env.py hat dafuer schon einen
+    # Fallback ueber sich aenderende Gegner-Party-Daten - hier nachgebaut.
+    watcher_enemy_party_cache = []
+    watcher_enemy_hp_min = {}
+    watcher_last_enemy_seen_step = -999
     watcher_loc = {
         "valid": False,
         "trusted": False,
@@ -1022,7 +1142,7 @@ def main():
     watcher_has_starter = False
     watcher_has_target_starter = False
     watcher_starter_species = 0
-    watcher_starter_obtained_step = None
+    watcher_starter_obtained_step = 0
     watcher_stuck_counter = 0
     watcher_last_progress_signature = None
     watcher_interaction_anchor = None
@@ -1034,10 +1154,15 @@ def main():
     watcher_intro_last_thumb = None
     watcher_intro_same_screen_steps = 0
     watcher_intro_novelty_reward_total = 0.0
-    watcher_intro_complete_rewarded = False
+    # V17.2: derselbe Fix wie in pokemon_env.py - der Startpunkt liegt schon
+    # nach Intro/Treppe/Hausausgang, diese Uebergaenge werden nie mehr live
+    # beobachtet. Ohne den Fix feuert der volle Meilenstein-Bonus (+100/+300
+    # /1000 etc.) faelschlich jede einzelne Episode am Step 1 neu, statt nur
+    # einmal zu gelten - genau der Reward-Ausschlag, den man am Anfang sieht.
+    watcher_intro_complete_rewarded = True
 
-    watcher_left_house_rewarded = False
-    watcher_stairs_done = False
+    watcher_left_house_rewarded = True
+    watcher_stairs_done = True
     watcher_initial_indoor_room = None
     watcher_house_rooms = set()
     watcher_lab_room = None
@@ -1328,7 +1453,42 @@ def main():
             or info.get("battle_flags", 0)
             or 0
         )
-        in_battle = 1 if (int(info.get("in_battle", 0) or 0) or _btf) else 0
+        # V17.2: Fallback wie in pokemon_env.py - gBattleTypeFlags/in_battle-Byte
+        # allein haben in einem beobachteten Wildkampf faelschlich 0 gezeigt,
+        # obwohl der Kampfbildschirm eindeutig sichtbar war. Sich aendernde
+        # Gegner-Party-Daten (KP-Verlust etc.) sind ein zusaetzliches, von den
+        # Flags unabhaengiges Signal.
+        try:
+            _watcher_enemy_party = read_enemy_party(env)
+        except Exception:
+            _watcher_enemy_party = []
+        if _watcher_enemy_party:
+            _old_fp = tuple(
+                (int(m.get("slot", -1)), int(m.get("species_id", 0)),
+                 int(m.get("personality", 0)), int(m.get("cur_hp", 0)))
+                for m in watcher_enemy_party_cache
+            )
+            _new_fp = tuple(
+                (int(m.get("slot", -1)), int(m.get("species_id", 0)),
+                 int(m.get("personality", 0)), int(m.get("cur_hp", 0)))
+                for m in _watcher_enemy_party
+            )
+            if _old_fp and _new_fp != _old_fp:
+                watcher_last_enemy_seen_step = total_steps
+            watcher_enemy_party_cache = _watcher_enemy_party
+            for m in _watcher_enemy_party:
+                _key = (int(m.get("slot", -1)), int(m.get("species_id", 0)),
+                        int(m.get("personality", 0)))
+                _hp = int(m.get("cur_hp", 0))
+                if _key not in watcher_enemy_hp_min:
+                    watcher_enemy_hp_min[_key] = _hp
+                elif _hp < watcher_enemy_hp_min[_key]:
+                    watcher_last_enemy_seen_step = total_steps
+                    watcher_enemy_hp_min[_key] = _hp
+        watcher_enemy_present = (total_steps - watcher_last_enemy_seen_step) <= 96
+        in_battle = 1 if (
+            int(info.get("in_battle", 0) or 0) or _btf or watcher_enemy_present
+        ) else 0
         if previous_battle_state == 0 and in_battle == 1:
             watcher_battle_stats["started"] += 1
             save_watcher_battle_stats(watcher_battle_stats)
@@ -1705,7 +1865,13 @@ def main():
                     watcher_next_outdoor_map_rewarded = True
 
                 map_key = (bank, map_id)
-                if map_key not in watcher_visited_maps:
+                # V17.2: ohne in_battle-Sperre wuerde der automatische
+                # Pokecenter-Teleport nach einem Total-K.O. als "neue Map"
+                # durchgehen und faelschlich Reward geben - der Watcher hatte
+                # bisher gar keine Absicherung dagegen (anders als
+                # pokemon_env.py, das zusaetzlich noch den Party-Wipe direkt
+                # am Kampfende abfaengt).
+                if map_key not in watcher_visited_maps and in_battle == 0:
                     watcher_visited_maps.add(map_key)
                     # V16: einmal pro Episode fuer eine neue Map. Einzelne
                     # Koordinaten/Felder bleiben immer reward-neutral.
@@ -1879,20 +2045,25 @@ def main():
             # Watcher-Anti-Loop-Reset:
             # Neue Modellversionen uebernehmen sonst denselben festgefahrenen
             # Emulatorzustand (z.B. PC -> Itemfach -> raus -> rein).
-            # V10.31: Wenn der Watcher schon einen Starter hat, ist ein
-            # Ruecksetzer auf den Spielanfang teuer (10 min Intro nochmal) und
-            # bringt ihn nur wieder an dieselbe schwere Stelle. In dieser Phase
-            # deutlich geduldiger sein - er soll den Weg aus Alabastia lernen,
-            # nicht alle 1800 Schritte neu anfangen.
-            _stuck_cap = 2500 if party_has_starter else 900
-            _room_cap = 6000 if party_has_starter else 1800
+            # V17.1: Seit dem Savestate-Start (StartGame.state, nach Intro und
+            # Starterwahl) ist ein Reset kein 10-Minuten-Intro-Nachspielen mehr,
+            # sondern ein sofortiger Sprung zurueck zum Startpunkt. Die alten
+            # grosszuegigen Gnadenfristen (2500/6000/8000/6000 Schritte) waren
+            # fuer das teure Cold-Boot-Reset gedacht und liessen Episoden ohne
+            # echten Fortschritt beliebig lange weiterlaufen (beobachtet:
+            # 51819 Route-Schritte / 7128 Kampf-Schritte in einer Episode ohne
+            # jede Terminierung). party_has_starter ist mit dem Savestate-Start
+            # ausserdem immer True, die alte Fallunterscheidung greift also nie
+            # mehr - beide Zweige werden auf die deutlich engeren Werte gesetzt.
+            _stuck_cap = 900
+            _room_cap = 1800
             # V15.3: Der Room-Cap allein greift nicht, wenn der Watcher zwischen
             # 2-3 Raeumen pendelt (Labor <-> Flur <-> Labor) - watcher_room_steps
             # wird dabei staendig auf 0 zurueckgesetzt, ohne dass je ein Starter
             # geholt wird. Absolute Notbremse unabhaengig vom Raumwechsel.
             _no_starter_hard_cap = (
                 not party_has_starter
-                and route_steps - watcher_episode_start_route_step >= 8000
+                and route_steps - watcher_episode_start_route_step >= 1800
             )
             # Dieselbe Raum-Pendel-Luecke gibt es auch MIT Starter: Labor
             # verlassen (bank!=3) haengt fest, weil watcher_room_steps beim
@@ -1903,7 +2074,7 @@ def main():
                 party_has_starter
                 and bank != 3
                 and watcher_starter_obtained_step is not None
-                and route_steps - watcher_starter_obtained_step >= 6000
+                and route_steps - watcher_starter_obtained_step >= 1800
             )
             _interaction_spam_reset = (
                 watcher_interaction_count >= INTERACTION_SPAM_RESET_AT
@@ -1951,7 +2122,10 @@ def main():
                 watcher_has_starter = False
                 watcher_has_target_starter = False
                 watcher_starter_species = 0
-                watcher_starter_obtained_step = None
+                watcher_starter_obtained_step = 0
+                watcher_enemy_party_cache = []
+                watcher_enemy_hp_min = {}
+                watcher_last_enemy_seen_step = -999
                 watcher_episode_start_route_step = route_steps
                 watcher_stuck_counter = 0
                 watcher_room_steps = 0
@@ -1961,13 +2135,13 @@ def main():
                 watcher_intro_last_thumb = None
                 watcher_intro_same_screen_steps = 0
                 watcher_intro_novelty_reward_total = 0.0
-                watcher_intro_complete_rewarded = False
+                watcher_intro_complete_rewarded = True
                 watcher_last_progress_signature = None
                 watcher_interaction_anchor = None
                 watcher_interaction_count = 0
 
-                watcher_left_house_rewarded = False
-                watcher_stairs_done = False
+                watcher_left_house_rewarded = True
+                watcher_stairs_done = True
                 watcher_gameplay_ready = False
                 watcher_initial_indoor_room = None
                 watcher_house_rooms = set()
@@ -2154,8 +2328,8 @@ def main():
                     else str(_ls)
                 )
                 brain = (
-                    f"BRAIN (live) | Learner {_ls_txt} Steps | Champion v{loaded_version:06d} "
-                    f"| {brain_reload_count}x nachgeladen"
+                    f"Live Brain v{loaded_version:06d} geladen | "
+                    f"Learner {_ls_txt} Steps | Update #{brain_reload_count}"
                 )
             else:
                 brain = (
@@ -2166,7 +2340,7 @@ def main():
 
             cv2.putText(
                 canvas,
-                f"{brain} | Pokemon FireRed AI by Alex",
+                brain,
                 (16, 26),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.62,
@@ -2190,10 +2364,18 @@ def main():
                 cv2.LINE_AA
             )
 
+            # V17: Titel/Statuszeile ragten bisher ab GAME_PANEL_W+18 in die
+            # Team-Spalte hinein (die Karte selbst beginnt erst bei MAP_X0)
+            # und ueberlappten ausserdem den langen gruenen Header-Text links.
+            # Jetzt ueber die tatsaechliche Kartenflaeche zentriert.
+            map_title = "LiveMap"
+            (title_w, _), _ = cv2.getTextSize(
+                map_title, cv2.FONT_HERSHEY_SIMPLEX, 0.64, 2
+            )
             cv2.putText(
                 canvas,
-                "LIVE MAP TILING",
-                (GAME_PANEL_W + 18, 32),
+                map_title,
+                (MAP_X0 + (MAP_PANEL_W - title_w) // 2, 32),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.64,
                 (255, 255, 255),
@@ -2202,19 +2384,23 @@ def main():
             )
 
             if map_meta:
+                # V17.2: Warp-Zaehlung raus - wurde auf der Karte ohnehin
+                # falsch dargestellt, nicht mehr gemessen/gezeichnet.
                 map_text = (
                     f"{map_meta.get('tiles', 0)} Felder | "
                     f"{map_meta.get('edges', 0)} Kanten | "
-                    f"{map_meta.get('transitions', 0)} Warps | "
                     f"{watcher_mapping_event}"
                 )
             else:
                 map_text = "Live Map Tiling wartet ..."
 
+            (text_w, _), _ = cv2.getTextSize(
+                map_text, cv2.FONT_HERSHEY_SIMPLEX, 0.46, 1
+            )
             cv2.putText(
                 canvas,
                 map_text,
-                (GAME_PANEL_W + 18, 60),
+                (MAP_X0 + max(18, (MAP_PANEL_W - text_w) // 2), 60),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.46,
                 (210, 215, 225),

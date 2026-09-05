@@ -290,7 +290,7 @@ def _aggregate_training_stats(instances):
     }
 
     # V83_REQUIRED_COUNTERS
-    for _k in ('v8_starter_episodes', 'v8_starter_success', 'v8_battle_episodes', 'v8_battle_success', 'v8_level_episodes', 'v8_level_success', 'v8_badge_episodes', 'v8_badge_success', 'v2_full_starter', 'v7_full_badge1', 'enemy_faints', 'enemy_damage_hp'):
+    for _k in ('v8_starter_episodes', 'v8_starter_success', 'v8_battle_episodes', 'v8_battle_success', 'v8_level_episodes', 'v8_level_success', 'v8_badge_episodes', 'v8_badge_success', 'v2_full_starter', 'v7_full_badge1', 'enemy_faints', 'enemy_damage_hp', 'party_wipes'):
         run_totals.setdefault(_k, 0)
 
     for inst in agents:
@@ -1587,8 +1587,18 @@ def index():
         .watcher-page-head b{color:#00e676;font-size:14px}
         .watcher-page-head span{display:block;color:#8f98ad;font-size:10px;margin-top:2px}
         .watcher-page-head a{color:#7c8db5;font-size:10px;white-space:nowrap}
-        .wt-stream-wrap{width:100%;max-width:600px;margin:0 auto 16px;overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:8px;border:1px solid #293148}
-        #watcher-stream{width:100%;display:block;image-rendering:pixelated}
+        /* V17.2: das rohe Composite-Bild ist Spiel+Team+LiveMap nebeneinander
+           (1458x638, siehe watch.py GAME_PANEL_W+TEAM_PANEL_W+MAP_PANEL_W).
+           Im Web brauchen wir nur Spiel+Team (838px) - die LiveMap rechts
+           macht das Layout kaputt (v.a. mobil) und wird hier nicht gebraucht.
+           Container mit fester Seitenzahl (838:638) schneidet den Rest per
+           overflow:hidden ab; das Bild selbst wird proportional so breit
+           skaliert, dass genau der 838px-Ausschnitt die Containerbreite
+           fuellt - funktioniert responsiv auf Desktop UND Mobil ohne
+           gesonderten Breakpoint. */
+        .wt-stream-wrap{width:100%;max-width:420px;margin:0 auto 16px;overflow:hidden;position:relative;aspect-ratio:838/638;border-radius:8px;border:1px solid #293148;background:#0b0e14}
+        @media(min-width:601px){.wt-stream-wrap{max-width:760px}}
+        #watcher-stream{position:absolute;left:0;top:0;width:calc(100% * 1458 / 838);max-width:none;height:auto;display:block;image-rendering:pixelated}
         .wt-picker-head{display:flex;justify-content:space-between;align-items:center;margin:2px 0 8px}
         .wt-picker-head b{color:#fff;font-size:12px}
         .wt-picker-head span{color:#7f879b;font-size:10px}
@@ -1616,12 +1626,7 @@ def index():
           .watcher-page{padding:10px}
           .wt-grid{grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:5px}
           .wt-dgrid{grid-template-columns:repeat(3,1fr)}
-          .wt-stream-wrap{margin-bottom:12px}
-          /* Das Composite-Bild (Spiel+Team+Map) ist sehr breit/flach - bei
-             voller Breite auf dem Handy wird alles unleserlich klein. Statt
-             stur zu quetschen: feste Mindestbreite, seitlich scrollbar, dazu
-             per Meta-Viewport jetzt auch Pinch-Zoom erlaubt. */
-          #watcher-stream{min-width:700px;width:700px}
+          .wt-stream-wrap{margin-bottom:12px;max-width:100%}
         }
         #mapper-view { display:none; overflow-y:auto; padding:18px; box-sizing:border-box; }
         .mapper-grid { display:grid; grid-template-columns:minmax(360px,1fr) minmax(360px,1fr); gap:16px; }
@@ -3068,6 +3073,7 @@ def index():
                 ['🗺️',Number(state.world_depth||0),FLEET_DEPTH_NAMES[Number(state.world_depth||0)]||'Weltstufe'],
                 ['⚔️',Number(battle.started||0).toLocaleString('de-DE'),'Kämpfe gesamt'],
                 ['💥',Number(rt.enemy_faints||0).toLocaleString('de-DE'),'Gegner-K.O.'],
+                ['☠️',Number(rt.party_wipes||0).toLocaleString('de-DE'),'Eigene K.O. (Party wiped)'],
                 ['🩸',Number(rt.enemy_damage_hp||0).toLocaleString('de-DE'),'Schaden-HP'],
                 ['🏁',Number((state.champion_speed||{}).best_stage_steps||0)>0
                     ? Number(state.champion_speed.best_stage_steps).toLocaleString('de-DE')

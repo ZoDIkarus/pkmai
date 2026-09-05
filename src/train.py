@@ -23,7 +23,7 @@ from pokemon_env import PokemonFireRedEnv
 # Das ergibt 25.600 Samples pro PPO-Update und laesst Rewards innerhalb langer
 # Intro-/Navigationsfolgen wesentlich weiter zurueckwirken.
 # Sichtbar gerendert wird nur der unabhaengige Watcher; Rendering trainiert nicht.
-NUM_ENVS = 50
+NUM_ENVS = 60
 
 # Endlos-Training: laeuft in Bloecken weiter, bis du Ctrl+C drueckst.
 # TRAIN_CHUNK_TIMESTEPS ist nur die Groesse eines learn()-Blocks.
@@ -37,6 +37,10 @@ TOTAL_TIMESTEPS = 100_000_000
 SAVE_EVERY_TIMESTEPS = 250_000
 
 # PPO
+# Experiment 2026-09-05 beendet: 0.0005 zeigte nach 2+ Mio. Steps ohne
+# Champion-Fortschritt echte Verschlechterung (alle 60 Agenten exakt Level 6,
+# kaum noch Kaempfe, viel weniger Route-1-Ankuenfte als vorher) - zurueck auf
+# den seit V11 bewaehrten Wert.
 LEARNING_RATE = 7.5e-05
 # 512 x 50 Envs = 25.600 Rollout-Samples, exakt 100 Minibatches à 256.
 PPO_N_STEPS = 512
@@ -171,6 +175,7 @@ def make_env(
     shared_transitions,
     shared_progress,
     shared_lock,
+    shared_species,
     n_envs=NUM_ENVS,
 ):
     def _init():
@@ -181,6 +186,7 @@ def make_env(
             shared_transitions=shared_transitions,
             shared_progress=shared_progress,
             shared_lock=shared_lock,
+            shared_species=shared_species,
             n_envs=n_envs,
         )
     return _init
@@ -1136,6 +1142,10 @@ def main():
     shared_edges = manager.dict(seed_edges)
     shared_maps = manager.dict(seed_maps)
     shared_transitions = manager.dict(seed_transitions)
+    # V17.2: welche Spezies wurden fleet-weit schon mindestens einmal gefangen.
+    # Bewusst nicht aus alten Laeufen geseedet - jeder Full-Reset soll die
+    # Erstfang-Boni wieder frisch vergeben koennen.
+    shared_species = manager.dict()
 
     # V15: persistierter world_stage-Rekord (1=Alabastia .. 9=Orden).
     progress_file = os.path.join(
@@ -1179,6 +1189,7 @@ def main():
                 shared_transitions,
                 shared_progress,
                 shared_lock,
+                shared_species,
                 NUM_ENVS,
             )
             for i in range(NUM_ENVS)

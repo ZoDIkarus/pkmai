@@ -219,6 +219,22 @@ def render():
         f"     Falscher Starter aktuell: {n_wrong}"
     )
 
+    # 3b) K.O.-Bilanz: wie oft stirbt die Flotte gerade (Party-Wipe),
+    # gegen wie oft sie selbst K.O.s landet - fleet-weite Summe ueber
+    # reward_stats.run_stats aus allen Instanz-JSONs.
+    party_wipes = 0
+    enemy_faints = 0
+    for d in all_agents:
+        rs = (d.get("reward_stats") or {}).get("run_stats") or {}
+        party_wipes += int(rs.get("party_wipes", 0) or 0)
+        enemy_faints += int(rs.get("enemy_faints", 0) or 0)
+    out.append("-" * WIDTH)
+    out.append("  ☠️ K.O.-BILANZ (Summe ueber die Flotte)")
+    out.append(
+        f"     Eigene Party K.O. (wiped): {fmt(party_wipes)}   |   "
+        f"Gegner-K.O.: {fmt(enemy_faints)}"
+    )
+
     # 4) WATCHER: der sichtbare Einzel-Lauf.
     if watcher:
         wbs = watcher.get("battle_stats") or {}

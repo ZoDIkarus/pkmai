@@ -3,7 +3,7 @@ numpy
 opencv-python
 stable-baselines3
 stable-retro
-ray[rllib]==2.58.0
+ray[default,rllib]==2.58.0
 torch
 fastapi
 uvicorn

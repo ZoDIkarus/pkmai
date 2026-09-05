@@ -2003,6 +2003,7 @@ header{padding-right:85px!important}
 #watcher-view .wt-stream-wrap{aspect-ratio:1200/680;max-width:1000px}
 #watcher-stream{width:100%;position:static}
 .leaflet-container{background:#202124!important}
+.map-name-label{background:rgba(10,14,20,.75);color:#cfe0cf;font:700 11px/1.3 -apple-system,BlinkMacSystemFont,sans-serif;padding:2px 7px;border-radius:4px;white-space:nowrap;border:1px solid rgba(127,135,155,.4);width:auto!important;height:auto!important;pointer-events:none}
 .room-map-canvas{background:#202124}
 .alex-watcher-title{padding:12px;color:#00e676;font-size:12px;font-weight:700;border-bottom:1px solid #283142}
 #alex-watcher-column #detail-panel{border-top:1px solid #283142!important}
@@ -2490,19 +2491,39 @@ header{padding:6px!important;gap:4px!important}
             probe.src = '/map.png?probe=' + Date.now();
         })();
 
+        // V17.3: X/Y aus echten, haeufig bestaetigten Transitions in
+        // /api/global_mapping berechnet (nicht geraten), damit Ausgang einer
+        // Map und Eingang der naechsten wirklich aneinanderliegen statt
+        // versetzt zu sein - z.B. Pallet-Nordausgang bei lokal x=12-13 traf
+        // in 70 Beispielen zuverlaessig auf Route-1-Suedeingang bei
+        // ebenfalls x=12-13, aber die alten Offsets hatten Route 1 um 90
+        // Einheiten nach rechts verschoben. Route 2/Wald/Marmoria sind nur
+        // X-abgeglichen (auf denselben Korridor) - fuer eine pixelgenaue
+        // Y-Ausrichtung fehlen dort noch genug Transitions-Samples, weil
+        // die Flotte den Cut-Zaun auf Route 2 bisher kaum erreicht.
         const MAP_OFFSETS = {
-            '3,0': [1410, 2320],
-            '3,19': [1500, 1850],
-            '3,1': [1500, 1350],
-            '3,20': [1500, 950],
-            '3,2': [1500, 480],
-            '1,0': [1500, 700],
-            '4,0': [1410, 2320],
-            '4,1': [1410, 2320],
-            '4,2': [1580, 2490],
-            '4,3': [1590, 2320],
-            '5,0': [1350, 1350],
-            '5,1': [1650, 1350],
+            '3,0': [1410, 2320],   // Pallet Town (outdoor, Referenzpunkt)
+            '3,19': [1410, 1850],  // Route 1
+            '3,1': [1272, 1388],   // Viridian City (outdoor)
+            '3,20': [1410, 950],   // Route 2
+            '3,2': [1410, 480],    // Pewter/Marmoria City (outdoor)
+            '1,0': [1410, 700],    // Viridian Forest
+
+            // Innenraeume: ringsum in freien Feldern neben der jeweiligen
+            // Stadt verteilt statt auf ihr gestapelt.
+            '4,0': [1190, 2320],   // Alabastia - Reds Haus, Erdgeschoss (West)
+            '4,1': [1190, 2170],   // Alabastia - Reds Haus, Obergeschoss
+            '4,2': [1630, 2320],   // Alabastia - Haus des Rivalen (Ost)
+            '4,3': [1410, 2540],   // Alabastia - Professor Eichs Labor (Sued)
+
+            // Vertania-Gebaeude um die (jetzt verschobene) Stadt herum -
+            // gleiche relative Position wie zuvor, nur mitverschoben.
+            '5,0': [1032, 1388],   // Vertania City - Wohnhaus (West)
+            '5,1': [1512, 1388],   // Vertania City - Arena (Ost)
+            '5,2': [1032, 1568],   // Vertania City - Schule (Suedwest)
+            '5,3': [1512, 1568],   // Vertania City - Pokemon-Markt (Suedost)
+            '5,4': [1272, 1608],   // Vertania City - Center, Erdgeschoss (Sued)
+            '5,5': [1272, 1458],   // Vertania City - Center, Obergeschoss
         };
 
         let agentMarkers = {};
@@ -2521,6 +2542,15 @@ header{padding:6px!important;gap:4px!important}
         let agentStepDots = {};
         let globalWarpLayer = L.layerGroup().addTo(map);
         let globalMappingSignature = "";
+
+        // V17.3: ersetzt die Pfad-Linien (fielen nach recent_path-Cap von
+        // 300 Punkten immer wieder weg) durch dauerhafte gruene Quadrate je
+        // besuchter Kachel - waechst nur, wird nie entfernt. Dazu ein
+        // beschrifteter Rahmen je entdeckter Map ("Pallet Town" etc.).
+        let globalTileLayer = L.layerGroup().addTo(map);
+        let globalTileDrawn = new Set();
+        let mapNameLayers = {};
+        let mapNameSignatures = {};
 
         function agentColor(id) {
             if (Number(id) === 120) return '#00e676';
@@ -2594,6 +2624,91 @@ header{padding:6px!important;gap:4px!important}
             ]);
         }
         map.on('resize', recomputeDynamicMapBounds);
+
+        // V17.3: dauerhafte gruene Quadrate statt Pfad-Linien (siehe oben) -
+        // eine Kachel wird nie wieder entfernt, sobald sie einmal besucht
+        // wurde. Zusaetzlich ein beschrifteter, gestrichelter Rahmen je
+        // entdeckter Map ("Pallet Town" etc.) um die bisher bekannte
+        // Ausdehnung dieser Map - "billig" aus denselben Tile-Daten
+        // abgeleitet, keine echten Kartenbilder noetig.
+        function updateGlobalTileCoverage() {
+            const tiles = latestGlobalMapping.tiles || [];
+            if (!tiles.length) return;
+
+            const boxes = {};
+            tiles.forEach(t => {
+                if (!Array.isArray(t) || t.length !== 4) return;
+                const key = `${Number(t[0])},${Number(t[1])}`;
+                if (!MAP_OFFSETS[key]) return;
+                const x = Number(t[2]), y = Number(t[3]);
+
+                const tileKey = `${key}:${x}:${y}`;
+                if (!globalTileDrawn.has(tileKey)) {
+                    globalTileDrawn.add(tileKey);
+                    const a = getLeafletCoords(t[0], t[1], x, y);
+                    const b2 = getLeafletCoords(t[0], t[1], x + 1, y + 1);
+                    L.rectangle([
+                        [Math.min(a[0], b2[0]), Math.min(a[1], b2[1])],
+                        [Math.max(a[0], b2[0]), Math.max(a[1], b2[1])]
+                    ], {
+                        stroke: false,
+                        fill: true,
+                        fillColor: '#00e676',
+                        fillOpacity: 0.35,
+                        interactive: false
+                    }).addTo(globalTileLayer);
+                }
+
+                if (!boxes[key]) {
+                    boxes[key] = {
+                        bank: Number(t[0]), mapId: Number(t[1]),
+                        minX: x, maxX: x, minY: y, maxY: y
+                    };
+                } else {
+                    const b = boxes[key];
+                    b.minX = Math.min(b.minX, x); b.maxX = Math.max(b.maxX, x);
+                    b.minY = Math.min(b.minY, y); b.maxY = Math.max(b.maxY, y);
+                }
+            });
+
+            Object.entries(boxes).forEach(([key, b]) => {
+                const signature = `${b.minX}:${b.minY}:${b.maxX}:${b.maxY}`;
+                if (mapNameSignatures[key] === signature) return;
+                mapNameSignatures[key] = signature;
+
+                if (mapNameLayers[key]) {
+                    mapNameLayers[key].forEach(l => map.removeLayer(l));
+                }
+
+                const a = getLeafletCoords(b.bank, b.mapId, b.minX, b.minY);
+                const c = getLeafletCoords(b.bank, b.mapId, b.maxX + 1, b.maxY + 1);
+                const bounds = [
+                    [Math.min(a[0], c[0]), Math.min(a[1], c[1])],
+                    [Math.max(a[0], c[0]), Math.max(a[1], c[1])]
+                ];
+                const outline = L.rectangle(bounds, {
+                    color: '#7f879b',
+                    weight: 1,
+                    fill: false,
+                    dashArray: '4,4',
+                    interactive: false
+                }).addTo(map);
+
+                const name = (typeof placeName === 'function')
+                    ? placeName(b.bank, b.mapId)
+                    : `Bank ${b.bank} / Map ${b.mapId}`;
+                const labelMarker = L.marker([bounds[1][0], bounds[0][1]], {
+                    icon: L.divIcon({
+                        className: 'map-name-label',
+                        html: name,
+                        iconAnchor: [0, 0]
+                    }),
+                    interactive: false
+                }).addTo(map);
+
+                mapNameLayers[key] = [outline, labelMarker];
+            });
+        }
 
         async function updateMapperMapOverlays(force=false) {
             try {
@@ -2678,7 +2793,12 @@ header{padding:6px!important;gap:4px!important}
 
         function refreshWatcherStream() {
             const img = document.getElementById(currentTab === 'map' ? 'alex-watcher-stream' : 'watcher-stream');
-            if (img) img.src = (currentTab === 'map' ? '/watcher-emulator.jpg?ts=' : '/watcher.jpg?ts=') + Date.now();
+            if (!img) return;
+            img.src = (currentTab === 'map' ? '/watcher-emulator.jpg?ts=' : '/watcher.jpg?ts=') + Date.now();
+            // V17.3: ein einzelner fehlgeschlagener Abruf (Datei mitten im
+            // atomaren Replace) durfte das Bild nicht einfrieren lassen, bis
+            // die Seite manuell neu geladen wird - sofort erneut versuchen.
+            img.onerror = () => setTimeout(refreshWatcherStream, 150);
         }
 
         // --- klickbare Agenten-Liste + Live-Stats (Watcher- UND Status-Tab) ---
@@ -2854,84 +2974,19 @@ header{padding:6px!important;gap:4px!important}
         window.addEventListener('resize', _remeasureMap);
         window.addEventListener('orientationchange', _remeasureMap);
 
-        async function updateSkeleton() {
-            try {
-                const res = await fetch('/api/skeleton?t=' + Date.now());
-                const sk = await res.json();
-                const seen = new Set();
-
-                (sk.maps || []).forEach(m => {
-                    const key = `${m.bank},${m.map_id}`;
-                    seen.add(key);
-
-                    const p1 = getLeafletCoords(
-                        m.bank, m.map_id, m.min_x, m.min_y
-                    );
-                    const p2 = getLeafletCoords(
-                        m.bank, m.map_id, m.max_x + 1, m.max_y + 1
-                    );
-
-                    const bounds = [
-                        [Math.min(p1[0], p2[0]), Math.min(p1[1], p2[1])],
-                        [Math.max(p1[0], p2[0]), Math.max(p1[1], p2[1])]
-                    ];
-
-                    const label =
-                        `Bank ${m.bank} / Map ${m.map_id}<br>` +
-                        `${m.width_tiles}×${m.height_tiles} Tiles<br>` +
-                        `${(m.agents || []).length} Agents`;
-
-                    if (!skeletonRects[key]) {
-                        skeletonRects[key] = L.rectangle(bounds, {
-                            color: '#ffd54f',
-                            weight: 1.5,
-                            opacity: 0.8,
-                            fillColor: '#ffd54f',
-                            fillOpacity: 0.035,
-                            dashArray: '6,5',
-                            // V11.5: NICHT klickbar -> Klicks gehen zu den
-                            // Agenten-Markern durch, die Umrandungen liegen
-                            // optisch hinter den Agenten.
-                            interactive: false
-                        }).bindTooltip(label).addTo(map);
-                        skeletonRects[key].bringToBack();
-                    } else {
-                        skeletonRects[key].setBounds(bounds);
-                        skeletonRects[key].setTooltipContent(label);
-                    }
-                });
-
-                Object.keys(skeletonRects).forEach(key => {
-                    if (!seen.has(key)) {
-                        map.removeLayer(skeletonRects[key]);
-                        delete skeletonRects[key];
-                    }
-                });
-
-                skeletonTransitionLines.forEach(line => map.removeLayer(line));
-                skeletonTransitionLines = [];
-
-                (sk.transitions || []).forEach(t => {
-                    const fromKey = `${t.from_bank},${t.from_map}`;
-                    const toKey = `${t.to_bank},${t.to_map}`;
-                    const a = skeletonRects[fromKey];
-                    const b = skeletonRects[toKey];
-                    if (!a || !b) return;
-
-                    const ca = a.getBounds().getCenter();
-                    const cb = b.getBounds().getCenter();
-                    const line = L.polyline([ca, cb], {
-                        color: '#ffca28',
-                        weight: 1,
-                        opacity: 0.25,
-                        dashArray: '3,6',
-                        interactive: false
-                    }).addTo(map);
-                    skeletonTransitionLines.push(line);
-                });
-            } catch(e) {}
+        // V17.3: die gelb gestrichelten "Skeleton"-Kartenrahmen + Verbindungs-
+        // linien liefen unabhaengig von den neuen gruenen Tile-Quadraten und
+        // Namensrahmen und sorgten fuer verwirrende doppelte/ueberlagerte
+        // Umrandungen. Auf Wunsch abgeschaltet - bestehende Layer einmalig
+        // entfernt, keine Interval-Aktualisierung mehr.
+        function updateSkeleton() {
+            Object.keys(skeletonRects).forEach(key => {
+                map.removeLayer(skeletonRects[key]);
+                delete skeletonRects[key];
+            });
+            skeletonTransitionLines.forEach(line => map.removeLayer(line));
+            skeletonTransitionLines = [];
         }
-        setInterval(updateSkeleton, 5000);
         updateSkeleton();
 
         function getSelectedInstance() {
@@ -3427,7 +3482,9 @@ header{padding:6px!important;gap:4px!important}
             const track = document.getElementById('fleet-depth-track');
             if(track){
                 let h='';
-                for(let i=1;i<=7;i++){
+                // V17.3: war bei 7 (Vertania-Wald) gekappt - Marmoria (8) und
+                // erster Orden (9) fehlten komplett in der Anzeige.
+                for(let i=1;i<=9;i++){
                     const cls = i<wd ? 'on' : (i===wd ? 'cur' : '');
                     h += `<i class="${cls}" title="${FLEET_DEPTH_NAMES[i]||''}"></i>`;
                 }
@@ -3467,14 +3524,28 @@ header{padding:6px!important;gap:4px!important}
         }
 
         async function loadTrainingGraphs() {
+            // V17.3: /api/state und /api/history liefen als EIN Promise.all -
+            // ein einzelner langsamer/fehlgeschlagener History-Abruf (z.B.
+            // direkt nach einem Webserver-Neustart) verhinderte dann auch das
+            // sofortige Rendern der Fleet-/Weltstufen-Karte, obwohl deren
+            // Daten laengst da waren. Jetzt unabhaengig, damit ein Ausfall
+            // beim einen den anderen nicht mit runterreisst.
+            let state = {};
             try {
-                const [sr,hr]=await Promise.all([
-                    fetch('/api/state?t='+Date.now()),
-                    fetch('/api/history?t='+Date.now())
-                ]);
-                const state=await sr.json();
-                const histPayload=await hr.json();
-                const hist=histPayload.history||[];
+                const sr = await fetch('/api/state?t='+Date.now());
+                state = await sr.json();
+            } catch (e) {
+                console.error('State load failed', e);
+            }
+            let hist = [];
+            try {
+                const hr = await fetch('/api/history?t='+Date.now());
+                const histPayload = await hr.json();
+                hist = histPayload.history || [];
+            } catch (e) {
+                console.error('History load failed', e);
+            }
+            try {
                 updateJourneySkills(state);
                 const st=state.training_stats||{};
                 const rates=st.beginning_success_rates||{};
@@ -3769,6 +3840,7 @@ header{padding:6px!important;gap:4px!important}
                 setLiveMap('live-warps', '—');
                 setLiveMap('live-edges', Number(latestGlobalMapping.edges.length).toLocaleString());
                 recomputeDynamicMapBounds();
+                updateGlobalTileCoverage();
 
                 const signature =
                     `${latestGlobalMapping.tiles.length}:` +
@@ -4107,45 +4179,26 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                             delete agentStepDots[inst.id];
                         }
 
-                        const isNaturalFull = (
-                            String(inst.training_objective || inst.agent_role || '') === 'full'
-                            && String(inst.episode_start || '') === 'beginning'
-                        );
-                        const renderPath = isWatcher || isNaturalFull || showAgentPaths;
-                        const path = renderPath && Array.isArray(inst.path) ? inst.path : [];
-                        const segs = [];
-                        let curSeg = [];
-                        let last = null;
+                        // V17.3: Linien aus recent_path (max. 300 Punkte) fielen
+                        // nach 300 Schritten am Anfang immer wieder weg - fuer
+                        // den Watcher (laeuft dauerhaft) sah das wie "Linie
+                        // verschwindet" aus. Keine Pfad-Linien mehr; besuchte
+                        // Kacheln werden stattdessen dauerhaft als gruene
+                        // Quadrate in updateGlobalTileCoverage() markiert.
+                        const path = Array.isArray(inst.path) ? inst.path : [];
                         const dots = [];
 
-                        path.forEach(pt => {
-                            if (!pt || pt.length < 4) return;
-                            const pb = Number(pt[0]);
-                            const pm = Number(pt[1]);
-                            const px = Number(pt[2]);
-                            const py = Number(pt[3]);
-                            const pos = getLeafletCoords(pb, pm, px, py);
-
-                            if (last) {
-                                const sameMap =
-                                    last.bank === pb && last.map === pm;
-                                const oneTile =
-                                    Math.abs(px - last.x) + Math.abs(py - last.y) === 1;
-
-                                if (!sameMap || !oneTile) {
-                                    if (curSeg.length > 1) segs.push(curSeg);
-                                    curSeg = [];
-                                }
-                            }
-
-                            curSeg.push(pos);
-
-                            // Bei Fokus: jeden einzelnen RAM-Schritt als Punkt zeigen.
-                            if (
-                                selectedAgentId !== null
-                                && Number(inst.id) === Number(selectedAgentId)
-                                && isWatcher
-                            ) {
+                        if (
+                            selectedAgentId !== null
+                            && Number(inst.id) === Number(selectedAgentId)
+                            && isWatcher
+                        ) {
+                            path.forEach(pt => {
+                                if (!pt || pt.length < 4) return;
+                                const pos = getLeafletCoords(
+                                    Number(pt[0]), Number(pt[1]),
+                                    Number(pt[2]), Number(pt[3])
+                                );
                                 dots.push(
                                     L.circleMarker(pos, {
                                         radius: 2.2,
@@ -4156,20 +4209,7 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                                         interactive: false
                                     }).addTo(map)
                                 );
-                            }
-
-                            last = {bank:pb, map:pm, x:px, y:py};
-                        });
-                        if (curSeg.length > 1) segs.push(curSeg);
-
-                        if (renderPath && segs.length > 0) {
-                            // Standard: Watcher + echte Full-Runs ab Spielstart.
-                            // Savestate-Rollen erscheinen nur nach dem Schalter.
-                            agentPolylines[inst.id] = L.polyline(segs, {
-                                color: markerColor,
-                                weight: 2.5,
-                                opacity: 0.8
-                            }).addTo(map);
+                            });
                         }
                         agentStepDots[inst.id] = dots;
                     } else {

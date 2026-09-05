@@ -48,12 +48,27 @@ def evaluation_module(root):
 def make_evaluation_env(root, navigation=((), (), ()), n_envs=60):
     module = evaluation_module(root)
     edges, maps, transitions = navigation
+    # V17.4: shared_tiles darf NICHT leer starten wie shared_species - sonst
+    # meldet der isolierte Watcher fuer JEDE Kachel, die er selbst seit
+    # Prozessstart zum ersten Mal betritt, "new_tile_global", obwohl die
+    # echte Flotte dort laengst war (Meldung im Stream: "bekommt staendig
+    # tile global +2"). Es gibt keine persistierte Tile-Historie, aber jede
+    # bekannte Kante verbindet zwei tatsaechlich betretene Kacheln - aus den
+    # ohnehin schon geladenen Kanten (load_global_navigation_memory) lassen
+    # sich beide Endpunkte ableiten und ergeben eine realistische Naeherung
+    # der von der Flotte bereits gesehenen Kacheln.
+    tiles = set()
+    for e in edges:
+        if len(e) == 6:
+            bank, map_id, x1, y1, x2, y2 = e
+            tiles.add((bank, map_id, x1, y1))
+            tiles.add((bank, map_id, x2, y2))
     return module.PokemonFireRedEnv(
         rank=0, n_envs=n_envs,
         shared_edges=dict.fromkeys(edges, 1), shared_maps=dict.fromkeys(maps, 1),
         shared_transitions=dict.fromkeys(transitions, 1),
         shared_progress={'max_world_stage': 0}, shared_species={},
-        shared_tiles={},
+        shared_tiles=dict.fromkeys(tiles, 1),
     )
 
 

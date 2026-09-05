@@ -114,6 +114,33 @@ def get_dashboard_language():
                         media_type="application/javascript", headers={"Cache-Control": "no-cache"})
 
 
+# Reale Orden-Sprites (Kanto 1-8, vom Nutzer in assets/ui/ abgelegt) statt
+# Emoji-Platzhalter. Whitelist statt generischem Static-Mount, damit ueber
+# diese Route keine beliebigen Dateien aus assets/ui/ erreichbar sind.
+BADGE_FILES = {
+    1: "01_boulder_badge.png",
+    2: "02_cascade_badge.png",
+    3: "03_thunder_badge.png",
+    4: "04_rainbow_badge.png",
+    5: "05_soul_badge.png",
+    6: "06_marsh_badge.png",
+    7: "07_volcano_badge.png",
+    8: "08_earth_badge.png",
+}
+
+
+@app.get("/badges/{badge_id}.png")
+def get_badge_png(badge_id: int):
+    filename = BADGE_FILES.get(badge_id)
+    if not filename:
+        return Response(status_code=404)
+    path = os.path.join(ASSETS_DIR, "ui", filename)
+    if not os.path.exists(path):
+        return Response(status_code=404)
+    return FileResponse(path, media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/mapper.jpg")
 def get_mapper_jpeg():
     if os.path.exists(MAPPER_FRAME_FILE):
@@ -1453,6 +1480,7 @@ def index():
         .badge-bar { display: flex; align-items: center; gap: 5px; background: #0e1017; padding: 4px 8px; border-radius: 20px; border: 1px solid #232738; }
         .badge-slot{width:28px;height:28px;border-radius:9px;background:linear-gradient(145deg,#202432,#10131c);border:1px solid #353b50;display:flex;align-items:center;justify-content:center;font-size:14px;filter:grayscale(1);opacity:.34;transform:scale(.94);transition:.25s;box-shadow:inset 0 0 10px rgba(0,0,0,.45)}
         .badge-slot.active{filter:none;opacity:1;transform:scale(1);border-color:#ffd54f;background:linear-gradient(145deg,#3b3420,#17191f);box-shadow:0 0 13px rgba(255,213,79,.5)}
+        .badge-icon{width:100%;height:100%;object-fit:contain;padding:3px;box-sizing:border-box}
         .live-global{position:absolute;top:16px;right:16px;z-index:950;min-width:245px;background:rgba(12,14,20,.91);border:1px solid #2b3143;border-radius:12px;padding:10px;backdrop-filter:blur(10px);box-shadow:0 10px 28px rgba(0,0,0,.48)}
         .live-global-title{display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:800;color:#00e676;margin-bottom:8px;letter-spacing:.4px}
         .live-dot{width:8px;height:8px;border-radius:50%;background:#00e676;display:inline-block;box-shadow:0 0 8px #00e676;margin-right:5px}
@@ -2062,14 +2090,14 @@ header{padding:6px!important;gap:4px!important}
             </div>
 
             <div class="badge-bar" title="Kanto Orden">
-                <div class="badge-slot" id="badge-1" title="Felsorden">🪨</div>
-                <div class="badge-slot" id="badge-2" title="Quellorden">💧</div>
-                <div class="badge-slot" id="badge-3" title="Donnerorden">⚡</div>
-                <div class="badge-slot" id="badge-4" title="Farborden">🌿</div>
-                <div class="badge-slot" id="badge-5" title="Seelenorden">☠️</div>
-                <div class="badge-slot" id="badge-6" title="Sumpforden">🔮</div>
-                <div class="badge-slot" id="badge-7" title="Vulkanorden">🔥</div>
-                <div class="badge-slot" id="badge-8" title="Erdorden">🌍</div>
+                <div class="badge-slot" id="badge-1" title="Felsorden"><img class="badge-icon" src="/badges/1.png" alt="Felsorden"></div>
+                <div class="badge-slot" id="badge-2" title="Quellorden"><img class="badge-icon" src="/badges/2.png" alt="Quellorden"></div>
+                <div class="badge-slot" id="badge-3" title="Donnerorden"><img class="badge-icon" src="/badges/3.png" alt="Donnerorden"></div>
+                <div class="badge-slot" id="badge-4" title="Farborden"><img class="badge-icon" src="/badges/4.png" alt="Farborden"></div>
+                <div class="badge-slot" id="badge-5" title="Seelenorden"><img class="badge-icon" src="/badges/5.png" alt="Seelenorden"></div>
+                <div class="badge-slot" id="badge-6" title="Sumpforden"><img class="badge-icon" src="/badges/6.png" alt="Sumpforden"></div>
+                <div class="badge-slot" id="badge-7" title="Vulkanorden"><img class="badge-icon" src="/badges/7.png" alt="Vulkanorden"></div>
+                <div class="badge-slot" id="badge-8" title="Erdorden"><img class="badge-icon" src="/badges/8.png" alt="Erdorden"></div>
             </div>
 
             <!-- AGENTEN FILTER INPUT -->

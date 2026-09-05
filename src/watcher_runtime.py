@@ -109,7 +109,10 @@ def _event_color(amount):
 
 def render_console(screen, data, events):
     """Neutral charcoal UI; game pixels retain their original colors."""
-    canvas = np.full((680, 1200, 3), 24, dtype=np.uint8)
+    # V17.3: 680 -> 570 - die Reward-Tabelle rechts braucht seit dem
+    # 4-Zeilen-Kuerzen keine 680px Hoehe mehr, das Fenster wird dadurch
+    # insgesamt kompakter fuers Streaming.
+    canvas = np.full((570, 1200, 3), 24, dtype=np.uint8)
     canvas[64:544, :720] = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_RGB2BGR),
                                     (720, 480), interpolation=cv2.INTER_NEAREST)
 
@@ -176,14 +179,16 @@ def render_console(screen, data, events):
           740, 158, (110, 114, 122), .28)
 
     # -- reward events table ---------------------------------------------
-    tx0, ty0, tx1, ty1 = 728, 172, 1192, 650
+    # V17.3: 4 Zeilen weniger (16 -> 12), damit die Tabelle und damit das
+    # ganze Fenster kompakter fuers Streaming wird.
+    tx0, ty0, tx1, ty1 = 728, 172, 1192, 542
     panel(tx0, ty0, tx1, ty1, fill=(33, 33, 36))
     cv2.rectangle(canvas, (tx0, ty0), (tx1, ty0 + 26), (36, 50, 40), -1)
     label('REWARD EVENTS', tx0 + 12, ty0 + 18, (170, 225, 170), .48)
     label('newest first', tx1 - 92, ty0 + 18, (110, 130, 115), .36)
 
     row_h = 27
-    visible = list(reversed(events[-16:]))
+    visible = list(reversed(events[-12:]))
     if not visible:
         label('No reward events yet this episode.', tx0 + 16, ty0 + 48,
               (120, 125, 135), .4)
@@ -201,8 +206,8 @@ def render_console(screen, data, events):
         if amount is not None:
             right_label(f"{amount:+.2f}", tx1 - 12, y + 18, col, .4, 1)
 
-    label('Q / Esc to close.', 20, 578, (150, 150, 150))
-    label(f"Last reset: {data.get('last_reset', '-')}", 20, 604, (150, 150, 150))
+    label('Q / Esc to close.', 20, 556, (150, 150, 150), .38)
+    label(f"Last reset: {data.get('last_reset', '-')}", 220, 556, (150, 150, 150), .38)
     return canvas
 
 
@@ -219,7 +224,7 @@ def run(api):
     signal.signal(signal.SIGTERM, request_stop)
     window = 'PKMAI / Alex Watcher'
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window, 1200, 680)
+    cv2.resizeWindow(window, 1200, 570)
     model = None
     signature = None
     last_model_check = last_publish = 0

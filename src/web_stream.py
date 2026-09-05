@@ -2000,7 +2000,7 @@ padding:12px!important;margin:0!important;box-sizing:border-box}
 #alex-watcher-column .v8-agent-party{display:none}
 #language-toggle{position:fixed;right:10px;top:8px;z-index:5001;background:#303236;color:#eee;border:1px solid #555;border-radius:5px;padding:6px;cursor:pointer}
 header{padding-right:85px!important}
-#watcher-view .wt-stream-wrap{aspect-ratio:1200/680;max-width:1000px}
+#watcher-view .wt-stream-wrap{aspect-ratio:1200/570;max-width:1000px}
 #watcher-stream{width:100%;position:static}
 .leaflet-container{background:#202124!important}
 .map-name-label{background:rgba(10,14,20,.75);color:#cfe0cf;font:700 11px/1.3 -apple-system,BlinkMacSystemFont,sans-serif;padding:2px 7px;border-radius:4px;white-space:nowrap;border:1px solid rgba(127,135,155,.4);width:auto!important;height:auto!important;pointer-events:none}

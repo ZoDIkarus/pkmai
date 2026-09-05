@@ -203,44 +203,67 @@ class RoleAllocationTests(unittest.TestCase):
             roles[role] += 1
         return roles
 
-    def test_v16_uses_full_agents_plus_a_few_frontier_scouts(self):
-        # V17.3: FRONTIER_SCOUT_SLOTS feste Slots bekommen die eigene Rolle
-        # "scout" (im Dashboard filterbar) statt jede Episode komplett neu
-        # ab Pallet Town zu spielen - der Rest bleibt bei vollstaendigen
-        # Champion-vergleichbaren "full"-Laeufen. "scout" ist ein
-        # brandneuer String, der in keiner alten Rollen-Pruefung sonst im
-        # Code vorkommt und dadurch ueberall automatisch wie "full"
-        # behandelt wird, ausser wo explizit ergaenzt (episode_limit etc.).
-        roles = Counter()
-        for rank in range(50):
-            env = bare_env(rank=rank, n_envs=50)
-            role, _ = env._agent_role()
-            roles[role] += 1
-        scouts = PokemonFireRedEnv.FRONTIER_SCOUT_SLOTS
-        self.assertEqual(
-            roles, Counter({"full": 50 - scouts, "scout": scouts})
-        )
-
-    def test_scout_slots_resume_from_deepest_checkpoint(self):
-        # Die letzten FRONTIER_SCOUT_SLOTS Slots sollen vom tiefsten
-        # gespeicherten Checkpoint weiterspielen statt jede Episode wieder
-        # komplett ab Pallet Town zu beginnen - alle anderen Slots bleiben
-        # bei "beginning". Rolle bleibt "full" fuer alle (siehe
-        # test_v16_uses_only_full_agents) - nur der Startpunkt weicht ab.
+    def test_scouts_appear_only_once_a_stage_has_a_valid_checkpoint(self):
+        # V17.4: kein fester Scout-Sockel mehr, der schon vor dem ersten
+        # echten Checkpoint existiert - "scout" gibt es erst, sobald es
+        # ueberhaupt eine validierte Stage-Front zum Bedienen gibt. Jede
+        # zusaetzliche validierte Stage bringt FRONTIER_SCOUT_SLOTS weitere
+        # Scouts, bestehende werden nicht umgewidmet (siehe naechster Test).
         scouts = PokemonFireRedEnv.FRONTIER_SCOUT_SLOTS
         n = 50
 
-        def scout_env(rank):
-            env = bare_env(rank=rank, n_envs=n, saved_milestones=["stage_5"])
-            env._discover_saved_milestones = lambda: ["stage_5"]
-            env._champion_full_starter_ready = lambda: True
-            env._best_progress_milestone = lambda: "stage_5"
+        def role_env(rank, stage_cps):
+            env = bare_env(rank=rank, n_envs=n)
+            env._valid_stage_checkpoints = lambda: dict(stage_cps)
             return env
 
-        self.assertEqual(scout_env(n - 1)._choose_episode_start(), "stage_5")
-        self.assertEqual(scout_env(n - scouts)._choose_episode_start(), "stage_5")
+        roles = Counter(
+            role_env(r, {})._agent_role()[0] for r in range(n)
+        )
+        self.assertEqual(roles, Counter({"full": n}))
+
+        roles = Counter(
+            role_env(r, {2: "stage_2"})._agent_role()[0] for r in range(n)
+        )
+        self.assertEqual(roles, Counter({"full": n - scouts, "scout": scouts}))
+
+        roles = Counter(
+            role_env(r, {2: "stage_2", 6: "stage_6"})._agent_role()[0]
+            for r in range(n)
+        )
         self.assertEqual(
-            scout_env(n - scouts - 1)._choose_episode_start(), "beginning"
+            roles, Counter({"full": n - 2 * scouts, "scout": 2 * scouts})
+        )
+
+    def test_scout_pairs_stay_pinned_to_their_own_stage(self):
+        # Frueher wanderten ALLE Scouts sofort zur neuesten Front, sobald sie
+        # einen Checkpoint bekam - die alte Front wurde komplett verwaisen
+        # gelassen. Jetzt behalten die urspruenglichen (aeussersten) Slots
+        # ihre alte, niedrigere Stage; NEUE Slots (naeher am Sockel) bedienen
+        # die neu hinzugekommene, hoehere Stage.
+        scouts = PokemonFireRedEnv.FRONTIER_SCOUT_SLOTS
+        n = 50
+        stage_cps = {2: "stage_2", 6: "stage_6"}
+
+        def scout_env(rank):
+            env = bare_env(rank=rank, n_envs=n)
+            env._valid_stage_checkpoints = lambda: dict(stage_cps)
+            env._discover_saved_milestones = lambda: list(stage_cps.values())
+            env._champion_full_starter_ready = lambda: True
+            return env
+
+        self.assertEqual(scout_env(n - 1)._choose_episode_start(), "stage_2")
+        self.assertEqual(
+            scout_env(n - scouts)._choose_episode_start(), "stage_2"
+        )
+        self.assertEqual(
+            scout_env(n - scouts - 1)._choose_episode_start(), "stage_6"
+        )
+        self.assertEqual(
+            scout_env(n - 2 * scouts)._choose_episode_start(), "stage_6"
+        )
+        self.assertEqual(
+            scout_env(n - 2 * scouts - 1)._choose_episode_start(), "beginning"
         )
 
     def roles_at(self, stage):

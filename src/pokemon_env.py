@@ -69,10 +69,14 @@ class PokemonFireRedEnv(gym.Env):
     # vollen Lauf ab Spielanfang (inkl. Intro) - genau das, woran der Champion
     # gemessen wird. Kein Ueberfitting auf einzelne Resume-States mehr.
     FULL_ONLY_MODE = True
-    # V17.3: feste Anzahl Slots, die statt eines kompletten Laufs ab Pallet
-    # Town vom tiefsten gespeicherten Stage-Checkpoint aus weiterspielen
-    # (siehe _agent_role()). Bewusst klein gehalten, damit der Loewenanteil
-    # der Flotte weiterhin vollstaendige Champion-vergleichbare Laeufe liefert.
+    # V17.3: Anzahl Scout-Slots PRO validierter Stage, die statt eines
+    # kompletten Laufs ab Pallet Town vom Stage-Checkpoint aus weiterspielen
+    # (siehe _agent_role() / _scout_assigned_stage()). Bewusst klein
+    # gehalten, damit der Loewenanteil der Flotte weiterhin vollstaendige
+    # Champion-vergleichbare Laeufe liefert.
+    # V17.4: gilt jetzt PRO STAGE, nicht mehr als fester Gesamtwert - jede
+    # neu validierte Stage bekommt ihre eigenen FRONTIER_SCOUT_SLOTS Scouts
+    # dazu, bestehende Stages behalten ihre. 2 Stages -> 4 Scouts insgesamt.
     FRONTIER_SCOUT_SLOTS = 2
     PROGRESS_STALL_TIMEOUT = 12000
     POST_STARTER_STALL_TIMEOUT = 12000
@@ -173,8 +177,12 @@ class PokemonFireRedEnv(gym.Env):
     #     Zwischenstufe, die bei jedem Reset neu farmbar waere.
     NEW_TILE_REWARD = 2.0
     EPISODE_TILE_REWARD = 0.05
-    NEW_MAP_REWARD = 500.0
-    EPISODE_NEW_MAP_REWARD = 25.0
+    # V17.4: kein fleet-weiter Einmal-Jackpot mehr fuer die allererste Map-
+    # Entdeckung (ehem. NEW_MAP_REWARD=500, ging strukturell nur an einen
+    # einzigen Agenten je Map) - jetzt EIN Wert pro Run, fuer JEDEN Agenten
+    # gleich. Route/Gebaeude 100, echte Stadt 250 (siehe CITY_EPISODE_REWARD
+    # unten).
+    EPISODE_NEW_MAP_REWARD = 100.0
     NEW_GLOBAL_DEPTH_REWARD = 1000.0
     # V17.2: Wenn ein Agent den bisher tiefsten world_stage ueberhaupt (ueber
     # ALLE Agenten und Episoden seit dem letzten Reset) als Erster erreicht,
@@ -227,6 +235,11 @@ class PokemonFireRedEnv(gym.Env):
     # bei -25, damit Fliehen weiterhin klar schlechter ist als Kaempfen.
     ENEMY_FAINT_REWARD = 2.0
     LEVEL_GAIN_REWARD = 10.0
+    # V17.4: erster echter Orden-Reward als benannte Konstante statt
+    # hartcodierter Inline-Zahl - gilt pro gewonnenem Orden (jede Episode
+    # neu, kein Fleet-Claim: die Party wird bei jedem Reset zurueckgesetzt,
+    # der Orden muss also in jedem Run neu erkaempft werden).
+    BADGE_EARNED_REWARD = 2000.0
     # Kleiner, von der Party-Level-Summe komplett unabhaengiger Anreiz, das
     # Center ueberhaupt aufzusuchen. Nur einmal pro Episode (Flag oben), keine
     # Kopplung an Levelsumme/Party-Groesse - kann also nie durch PC-Box-
@@ -255,11 +268,12 @@ class PokemonFireRedEnv(gym.Env):
     POST_WIPE_REWARD_COOLDOWN_STEPS = 40
     WILD_TRAINING_MAPS = {(3, 19), (3, 20), (1, 0)}
     # V17.3: Warps/Tueren waren bisher komplett neutral ("reine Kartendaten").
-    # Jetzt zweistufig wie Kanten/Maps: global (fleet-weit erster Fund eines
-    # bestimmten Warps ueberhaupt) vs. im Run (schon bekannt, aber neu fuer
-    # diesen Agenten/diese Episode).
+    # V17.4: kein Run-Bonus mehr fuer laengst bekannte Warps (0.0) - nur noch
+    # der fleet-weite Einmal-Fund einer bislang unbekannten Tuer zahlt (100).
+    # Ein bekannter Warp ist "frei" (kostet nichts), gibt aber auch nichts
+    # mehr - Tueren sollen kein wiederholbarer Farm-Loop sein.
     NEW_TRANSITION_REWARD = 100.0
-    EPISODE_TRANSITION_REWARD = 10.0
+    EPISODE_TRANSITION_REWARD = 0.0
     REPLAY_MAP_REWARD = 25.0
     REPLAY_EDGE_REWARD = 0.0
     REPLAY_TRANSITION_REWARD = 0.0
@@ -384,7 +398,7 @@ class PokemonFireRedEnv(gym.Env):
     # Stadt vorstossen statt nur beim einmaligen globalen Fund belohnt zu
     # werden.
     CITY_MAPS = {STAGE_PALLET, STAGE_VIRIDIAN, STAGE_PEWTER}
-    CITY_EPISODE_REWARD = 100.0
+    CITY_EPISODE_REWARD = 250.0
     WORLD_ROLES = ("progress", "battle", "level", "badge", "full", "scout")
 
     def __init__(
@@ -2246,6 +2260,36 @@ class PokemonFireRedEnv(gym.Env):
             pass
         return default
 
+    def _scout_assigned_stage(self):
+        """Welche Stage-Checkpoint-Nummer dieser Rank als Scout bedient, oder
+        None wenn der Rank kein Scout ist.
+
+        V17.4: Vorher wanderten ALLE Scouts immer zur TIEFSTEN Front - sobald
+        eine neue Stage einen Checkpoint bekam, gaben die Scouts die alte
+        Front komplett auf. Jetzt bekommt JEDE validierte Stage ihre EIGENEN
+        FRONTIER_SCOUT_SLOTS Scouts: die aeltesten (niedrigsten) Stages
+        behalten ihre Scouts dauerhaft, neue Stages bekommen ZUSAETZLICHE
+        Scout-Slots statt bestehende umzuwidmen. 2 validierte Stages -> 4
+        Scouts, 3 Stages -> 6 usw. Die Zuordnung ist stabil ueber die Zeit:
+        Slot-Paare zaehlen vom FLOTTENENDE (n-1, n-2, ...) nach unten, neue
+        Stages werden an sorted(stages) hinten angehaengt, veraendern also
+        nie den Index bereits bedienter, aelterer Stages.
+        """
+        stage_cps = self._valid_stage_checkpoints()
+        if not stage_cps:
+            return None
+        stages = sorted(stage_cps.keys())
+        n = self.n_envs
+        slot = self.rank % n
+        total_scout_slots = self.FRONTIER_SCOUT_SLOTS * len(stages)
+        if slot < n - total_scout_slots:
+            return None
+        slots_from_end = (n - 1) - slot
+        stage_index = slots_from_end // self.FRONTIER_SCOUT_SLOTS
+        if stage_index >= len(stages):
+            return None
+        return stages[stage_index]
+
     def _agent_role(self):
         # V11 SEQUENTIELLES SKILL-BOOTCAMP:
         # Ein Skill nach dem anderen. Fast die ganze Flotte uebt die aktuelle
@@ -2270,11 +2314,16 @@ class PokemonFireRedEnv(gym.Env):
         # Dadurch faellt "scout" ueberall dort, wo Reward-Code nach Rolle
         # unterscheidet, automatisch auf dasselbe Verhalten wie "full"
         # zurueck - ausser an der einen Stelle (episode_limit unten), wo es
-        # explizit ergaenzt wurde, damit auch Scouts das normale
-        # 12.000-Schritte-Limit behalten statt versehentlich 32768 zu bekommen.
+        # explizit ergaenzt wurde, damit Scouts ihr eigenes, kuerzeres
+        # SCOUT_EPISODE_STEPS-Limit bekommen statt versehentlich das lange
+        # "full"-Limit oder gar 32768 zu erben.
         if getattr(self, "FULL_ONLY_MODE", False):
-            if slot >= n - self.FRONTIER_SCOUT_SLOTS:
-                return "scout", f"Frontier Scout {slot + 1:03d}"
+            assigned_stage = self._scout_assigned_stage()
+            if assigned_stage is not None:
+                return (
+                    "scout",
+                    f"Frontier Scout S{assigned_stage} {slot + 1:03d}"
+                )
             return "full", f"Full Journey {slot + 1:03d}"
 
         s = self._skill_vault_scores()
@@ -2395,8 +2444,18 @@ class PokemonFireRedEnv(gym.Env):
         # Marmoria) bekamen dadurch praktisch nie gezielte Uebung. Die
         # "scout"-Rolle (siehe _agent_role()) resumt jetzt vom tiefsten
         # validierten Checkpoint statt neu ab Spielanfang.
+        #
+        # V17.4: jede Stage hat jetzt ihre EIGENEN Scouts (siehe
+        # _scout_assigned_stage()) statt dass alle immer zur tiefsten Front
+        # wandern - hier also den PASSENDEN Checkpoint fuer die diesem Rank
+        # zugewiesene Stage laden, nicht pauschal den tiefsten.
         if getattr(self, "FULL_ONLY_MODE", False):
             if role == "scout":
+                assigned_stage = self._scout_assigned_stage()
+                if assigned_stage is not None:
+                    stage_cps = self._valid_stage_checkpoints()
+                    if assigned_stage in stage_cps:
+                        return stage_cps[assigned_stage]
                 return self._best_progress_milestone()
             return "beginning"
 
@@ -4286,9 +4345,10 @@ class PokemonFireRedEnv(gym.Env):
 
         if badges > self.last_badges:
             badge_gain = badges - self.last_badges
-            reward += badge_gain * 2500.0
+            badge_reward = badge_gain * self.BADGE_EARNED_REWARD
+            reward += badge_reward
             self.reward_event_counts["badge"] += badge_gain
-            reward_events.append(f"badge:+{badge_gain * 2500}")
+            reward_events.append(f"badge:+{badge_reward:.0f}")
             self.last_badges = badges
             self.last_progress_advance_step = self.route_steps
             if self.training_objective == "badge":
@@ -4332,18 +4392,20 @@ class PokemonFireRedEnv(gym.Env):
                     self.persistent_known_maps.add(map_key)
                     self.exploration_memory_dirty = True
                     self._nav_target_cache = None
-
-                    _claimed_globally = self._claim_shared(
-                        self.shared_maps, map_key
-                    )
+                    # V17.4: kein fleet-weiter Einmal-Jackpot mehr - nur noch
+                    # EIN Wert pro Run, fuer JEDEN Agenten gleich, egal ob
+                    # die Map fleet-weit brandneu ist oder laengst bekannt.
+                    # Vorher bekam ausschliesslich der EINE Agent, der eine
+                    # Map als Erster ueberhaupt fand, den grossen Bonus (500)
+                    # - alle folgenden Agenten (und derselbe Agent in
+                    # spaeteren Episoden) nur den kleinen Episodenwert. Das
+                    # bremste den Vorstoss nach Norden, sobald die "billigen"
+                    # Erstfunde in Reichweite ausgegangen waren.
+                    # _claim_shared() bleibt fuer die Fleet-Statistik/Karte
+                    # erhalten, entscheidet aber nicht mehr ueber die Hoehe.
+                    self._claim_shared(self.shared_maps, map_key)
                     if _wipe_cooldown_active:
                         reward_events.append("new_map_suppressed_post_wipe:+0")
-                    elif _claimed_globally:
-                        self.last_progress_advance_step = self.route_steps
-                        reward += self.NEW_MAP_REWARD
-                        reward_events.append(
-                            f"new_map_global:+{self.NEW_MAP_REWARD:.2f}"
-                        )
                     else:
                         _map_reward = (
                             self.CITY_EPISODE_REWARD
@@ -4358,7 +4420,7 @@ class PokemonFireRedEnv(gym.Env):
                         )
                 elif not _wipe_cooldown_active and (
                     bank == self.OVERWORLD_BANK or map_key in self.CITY_MAPS
-                ):
+                ) and self.training_objective != "scout":
                     # V17.3: nur draussen. Innenraeume rund um den fixen
                     # Savestate-Start (Reds Haus, Rivalenhaus, Eichs Labor)
                     # sind JEDEM Agenten in JEDER Episode sofort bekannt -
@@ -4367,10 +4429,15 @@ class PokemonFireRedEnv(gym.Env):
                     # ueberhaupt Route 1 erreicht wird. Live beobachtet:
                     # Agenten "duempelten im Haus rum" statt loszulaufen,
                     # gerade seit Episoden nach einem Wipe nicht mehr enden.
-                    # Echte Staedte zahlen bewusst mehr (100 statt 25) und
-                    # JEDE Episode neu, nicht nur beim einmaligen globalen
-                    # Fund - Ziel: schneller/haeufiger bis zur naechsten
-                    # Stadt vorstossen.
+                    # Echte Staedte zahlen bewusst mehr und JEDE Episode neu,
+                    # nicht nur beim einmaligen globalen Fund - Ziel:
+                    # schneller/haeufiger bis zur naechsten Stadt vorstossen.
+                    # V17.4: Scouts ausgenommen - die resumen jede Episode
+                    # per Savestate mitten in fremdem Terrain und liefen
+                    # gezielt zurueck ins laengst bekannte Alabastia/Vertania,
+                    # nur um dort den Wiederholungs-Bonus fuer eine Stadt
+                    # abzugreifen, die sie schon x-mal besucht haben - das
+                    # bremste den Vorstoss nach vorn staerker als es half.
                     _map_reward = (
                         self.CITY_EPISODE_REWARD
                         if map_key in self.CITY_MAPS

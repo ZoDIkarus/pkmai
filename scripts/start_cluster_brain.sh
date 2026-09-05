@@ -7,6 +7,7 @@ ray start --head \
   --node-ip-address="$RAY_NODE_IP" \
   --port="${RAY_HEAD_PORT:-6379}" \
   --node-manager-port="${RAY_NODE_MANAGER_PORT:-10001}" \
+  --ray-client-server-port="${RAY_CLIENT_SERVER_PORT:-10004}" \
   --object-manager-port="${RAY_OBJECT_MANAGER_PORT:-10002}" \
   --runtime-env-agent-port="${RAY_RUNTIME_ENV_PORT:-10003}" \
   --dashboard-host=0.0.0.0 \

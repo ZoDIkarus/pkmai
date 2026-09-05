@@ -8,7 +8,7 @@ All containers use normal Docker networking. PKMAI's network-facing services bin
 |---|---|---|
 | `pkmai-web` | Dashboard | `8001 -> 8000` |
 | `pkmai-cluster-master` | Authenticated worker registry | `8765` |
-| `pkmai-cluster-brain` | Ray head / PPO learner | `6379`, `8265`, `10001-10003`, `11000-11100` |
+| `pkmai-cluster-brain` | Ray head / PPO learner | `6379`, `8265`, `10001-10004`, `11000-11100` |
 | `pkmai-cluster-worker` | Ray rollout node | `10001-10003`, `11000-11100` on the worker host |
 | `pkmai-trainer` | Legacy local SB3 trainer | no published port |
 
@@ -73,7 +73,7 @@ docker logs -f pkmai-cluster-worker
 
 The brain uses a configurable pool of 64 pending Ray env-runners by default. Ray schedules them only when worker CPUs are available, so new remote workers can join without changing code. To choose another upper bound before a controlled brain restart, set `PKMAI_CLUSTER_ENV_RUNNERS` in the brain host environment.
 
-The worker must be able to reach the brain host ports `6379`, `8765`, `10001-10003` and `11000-11100` over the VPN. Do not publish these ports to a public interface.
+The worker must be able to reach the brain host ports `6379`, `8765`, `10001-10004` and `11000-11100` over the VPN. Do not publish these ports to a public interface.
 
 ### Ten-emulator worker pool
 

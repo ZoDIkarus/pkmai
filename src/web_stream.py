@@ -2537,14 +2537,21 @@ header{padding:6px!important;gap:4px!important}
             '1,0': [1210, 300],    // Viridian Forest (Schaetzung, noch keine Daten)
             '3,2': [1410, 100],    // Pewter/Marmoria City (Schaetzung, noch keine Daten)
 
-            // Innenraeume symmetrisch um Alabastia verteilt: Reds Haus
-            // (F1/F2 uebereinander) im Westen, Rivalenhaus im Osten im
-            // selben Abstand wie Reds Haus, Eichs Labor darunter (1 Kachel
-            // Abstand) - spiegelt Reds Haus F1->F2 auf der Ostseite.
-            '4,0': [1190, 2320],   // Alabastia - Reds Haus F1 (West)
-            '4,1': [1190, 2452],   // Alabastia - Reds Haus F2 (darunter, 1 Kachel Abstand)
-            '4,2': [1630, 2320],   // Alabastia - Haus des Rivalen (Ost, gleicher Abstand wie Reds Haus West)
-            '4,3': [1630, 2452],   // Alabastia - Professor Eichs Labor (unter dem Rivalenhaus, 1 Kachel Abstand)
+            // Innenraeume um Alabastia verteilt: Abstand ist NICHT mehr eine
+            // gespiegelte Schaetzung, sondern aus /api/global_mapping direkt
+            // gemessen. Alabastia (3,0) selbst deckt real x=2..21 ab, d.h.
+            // seine echte Ost-Kante liegt bei 1410 + 22*TILE_UNIT = 1674
+            // (dieselbe +1-Randkachel-Konvention wie bei getLeafletCoords(
+            // maxX+1, maxY+1) oben). Reds Haus (4,0) deckt selbst x=1..12 ab
+            // (eigene Breite ~13 Kacheln), Rivalenhaus (4,2) x=0..12 -
+            // beide Gebaeude bekommen denselben, klar benannten
+            // BUILDING_GAP von 4 Kacheln Luft zur echten Stadt-Kante, statt
+            // nur am Anker-Punkt vorbeizuschrammen (das fuehrte vorher dazu,
+            // dass das Rivalenhaus sichtbar in Alabastia hineinragte).
+            '4,0': [1206, 2320],   // Alabastia - Reds Haus F1 (West, 4 Kacheln Abstand zur Stadt)
+            '4,1': [1206, 2452],   // Alabastia - Reds Haus F2 (darunter, 1 Kachel Abstand)
+            '4,2': [1722, 2320],   // Alabastia - Haus des Rivalen (Ost, 4 Kacheln Abstand zur Stadt)
+            '4,3': [1722, 2452],   // Alabastia - Professor Eichs Labor (unter dem Rivalenhaus, 1 Kachel Abstand)
 
             // Vertania-Gebaeude um die (jetzt verschobene) Stadt herum -
             // gleiche relative Position wie zuvor, nur mitverschoben.
@@ -4158,7 +4165,13 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                     const isSelected = Number(inst.id) === Number(selectedAgentId);
                     const keep = isWatcher || isSelected || agentPassesFilter(inst);
 
-                    const shouldRender = keep && isAgentVisible(
+                    // V17.4: direkt nach einem Reset ist die RAM-Position noch
+                    // nicht gueltig (bank/map/x/y = 0) - das mappte bisher auf
+                    // den MAP_OFFSETS-Fallback und erzeugte einen stoerenden
+                    // Punkt direkt neben Pallet Town. Marker erst zeigen,
+                    // sobald eine echte Position ausgelesen wurde.
+                    const hasValidPos = inst.ram_valid !== false;
+                    const shouldRender = keep && hasValidPos && isAgentVisible(
                         inst.id, isWatcher, renderedTrainCount
                     );
 

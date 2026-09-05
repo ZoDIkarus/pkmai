@@ -4966,6 +4966,7 @@ class PokemonFireRedEnv(gym.Env):
                     "id": self.rank,
                     "name": self._agent_role()[1],
                     "agent_role": self._agent_role()[0],
+                    "ram_valid": bool(loc.get("valid", False)),
                     "bank": bank,
                     "map": map_id,
                     "x": x,

@@ -10,6 +10,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
+import re
 import signal
 import time
 
@@ -86,28 +87,109 @@ def telemetry(env, info, reward, episode, model_name, version):
     }
 
 
+_POS = (110, 215, 110)   # BGR green - positive reward
+_NEG = (90, 90, 235)      # BGR red - negative reward
+_NEU = (150, 150, 150)    # BGR gray - zero / unparsed
+_GOLD = (100, 190, 225)   # BGR amber - neutral stat highlight
+
+
+def _parse_event(ev):
+    """Split 'name:+12.34' into ('name', 12.34); returns (ev, None) if unparsed."""
+    m = re.match(r'^(.*):([+-]?\d+(?:\.\d+)?)$', str(ev))
+    if not m:
+        return str(ev), None
+    return m.group(1), float(m.group(2))
+
+
+def _event_color(amount):
+    if amount is None or abs(amount) < 1e-9:
+        return _NEU
+    return _POS if amount > 0 else _NEG
+
+
 def render_console(screen, data, events):
     """Neutral charcoal UI; game pixels retain their original colors."""
     canvas = np.full((680, 1200, 3), 24, dtype=np.uint8)
     canvas[64:544, :720] = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_RGB2BGR),
                                     (720, 480), interpolation=cv2.INTER_NEAREST)
-    def label(text, x, y, color=(205, 205, 205), scale=.48):
+
+    def label(text, x, y, color=(205, 205, 205), scale=.48, weight=1):
         cv2.putText(canvas, str(text), (x, y), cv2.FONT_HERSHEY_SIMPLEX,
-                    scale, color, 1, cv2.LINE_AA)
+                    scale, color, weight, cv2.LINE_AA)
+
+    def right_label(text, x_right, y, color, scale=.4, weight=1):
+        (w, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, weight)
+        label(text, x_right - w, y, color, scale, weight)
+
+    def panel(x0, y0, x1, y1, fill=(38, 42, 50), border=(58, 64, 76)):
+        cv2.rectangle(canvas, (x0, y0), (x1, y1), fill, -1)
+        cv2.rectangle(canvas, (x0, y0), (x1, y1), border, 1)
+
+    def dot(x, y, color, r=4):
+        cv2.circle(canvas, (x, y), r, color, -1, cv2.LINE_AA)
+
     label('ALEX / LIVE WATCHER', 20, 28, (210, 225, 210), .65)
     label(f"FPS {data.get('fps', 0):.1f} / {data.get('target_fps', 300):.0f} target", 420, 28, (205, 205, 205), .55)
-    label(f"{data['model_name']} v{data['model_version']}  |  INFERENCE ONLY", 740, 28)
-    label('TRAINER REWARD ENGINE / isolated evaluation', 740, 64)
-    label(f"Episode {data['episode']}    Reward {data['reward']:+.2f}", 740, 96)
-    label(f"Step {data['step_reward']:+.4f}    Stage {data['world_stage']}", 740, 122)
-    label(f"Route {data['route_steps']}    Battle {data['battle_steps']}", 740, 148)
-    label(('BATTLE' if data['in_battle'] else 'OVERWORLD') + ' / ' + str(data.get('battle_detection', '')), 740, 176, scale=.4)
-    label('REWARD EVENTS', 740, 198, (170, 210, 170))
-    for i, event in enumerate(events[-15:]):
-        label(event[:62], 740, 214 + i * 26, scale=.4)
-    label('Same actions, observations, rewards and episode rules as training.', 20, 578)
-    label('No learning. No fleet bonus claims. Q / Esc to close.', 20, 608)
-    label(f"Last reset: {data.get('last_reset', '-')}", 20, 638)
+
+    # -- status card: model + episode/reward/stage at a glance ----------
+    panel(728, 8, 1192, 186)
+    battle = bool(data['in_battle'])
+    badge_color = _NEG if battle else _POS
+    cv2.rectangle(canvas, (740, 18), (856, 40), badge_color, -1)
+    label('BATTLE' if battle else 'OVERWORLD', 748, 34, (20, 20, 20), .44, 1)
+    label(f"{data['model_name']} v{data['model_version']} - inference only",
+          868, 34, (185, 190, 202), .4)
+    label(str(data.get('battle_detection', ''))[:52], 740, 58, (135, 140, 152), .36)
+
+    dot(748, 82, _POS, 5)
+    label(f"Episode {data['episode']}", 762, 87, (220, 220, 220), .46)
+    reward_col = _POS if data['reward'] >= 0 else _NEG
+    dot(958, 82, reward_col, 5)
+    label(f"Reward {data['reward']:+.2f}", 972, 87, reward_col, .46, 1)
+
+    dot(748, 114, _GOLD, 5)
+    label(f"Stage {data['world_stage']}", 762, 119, (220, 220, 220), .44)
+    dot(898, 114, _GOLD, 5)
+    label(f"Route {data['route_steps']}", 912, 119, (220, 220, 220), .44)
+    dot(1048, 114, _NEG, 5)
+    label(f"Battle {data['battle_steps']}", 1062, 119, (220, 220, 220), .44)
+
+    step_col = _POS if data['step_reward'] >= 0 else _NEG
+    dot(748, 146, step_col, 5)
+    label(f"Step {data['step_reward']:+.4f}", 762, 151, step_col, .42)
+    label('Same actions/observations/rewards/resets as training. No learning.',
+          890, 151, (125, 130, 140), .34)
+    label('TRAINER REWARD ENGINE / isolated evaluation - one-time bonuses are private',
+          740, 174, (120, 125, 135), .34)
+
+    # -- reward events table ---------------------------------------------
+    tx0, ty0, tx1, ty1 = 728, 194, 1192, 650
+    panel(tx0, ty0, tx1, ty1, fill=(30, 33, 39))
+    cv2.rectangle(canvas, (tx0, ty0), (tx1, ty0 + 26), (40, 58, 46), -1)
+    label('REWARD EVENTS', tx0 + 12, ty0 + 18, (170, 225, 170), .48)
+    label('newest first', tx1 - 92, ty0 + 18, (110, 130, 115), .36)
+
+    row_h = 27
+    visible = list(reversed(events[-16:]))
+    if not visible:
+        label('No reward events yet this episode.', tx0 + 16, ty0 + 48,
+              (120, 125, 135), .4)
+    for i, (step, ev) in enumerate(visible):
+        y = ty0 + 26 + i * row_h
+        if y + row_h > ty1:
+            break
+        if i % 2 == 1:
+            cv2.rectangle(canvas, (tx0 + 1, y), (tx1 - 1, y + row_h), (35, 38, 45), -1)
+        name, amount = _parse_event(ev)
+        col = _event_color(amount)
+        dot(tx0 + 16, y + row_h // 2 + 3, col, 4)
+        label(f"S{step}", tx0 + 28, y + 18, (110, 115, 125), .34)
+        label(name[:34], tx0 + 84, y + 18, (205, 208, 215), .38)
+        if amount is not None:
+            right_label(f"{amount:+.2f}", tx1 - 12, y + 18, col, .4, 1)
+
+    label('Q / Esc to close.', 20, 578, (150, 150, 150))
+    label(f"Last reset: {data.get('last_reset', '-')}", 20, 604, (150, 150, 150))
     return canvas
 
 
@@ -180,8 +262,8 @@ def run(api):
                 logger.info(json.dumps(record))
                 if step_events or terminated or truncated:
                     line = f"E{episode} S{env.total_steps} {reward:+.4f} | " + ', '.join(step_events)
-                    events.append(line)
-                    events = events[-40:]
+                    events.extend((env.total_steps, ev) for ev in step_events)
+                    events = events[-60:]
                     print(line, flush=True)
                 elif env.total_steps % 100 == 0:
                     print(f"E{episode} S{env.total_steps} | reward={reward:+.4f} total={env.current_reward:+.2f}", flush=True)

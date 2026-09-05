@@ -4398,21 +4398,25 @@ class PokemonFireRedEnv(gym.Env):
                     self.persistent_known_maps.add(map_key)
                     self.exploration_memory_dirty = True
                     self._nav_target_cache = None
-                    # V17.4: kein fleet-weiter Einmal-Jackpot mehr - nur noch
-                    # EIN Wert pro Run, fuer JEDEN Agenten gleich, egal ob
-                    # die Map fleet-weit brandneu ist oder laengst bekannt.
-                    # Vorher bekam ausschliesslich der EINE Agent, der eine
-                    # Map als Erster ueberhaupt fand, den grossen Bonus (500)
-                    # - alle folgenden Agenten (und derselbe Agent in
-                    # spaeteren Episoden) nur den kleinen Episodenwert. Das
-                    # bremste den Vorstoss nach Norden, sobald die "billigen"
-                    # Erstfunde in Reichweite ausgegangen waren.
-                    # _claim_shared() bleibt fuer die Fleet-Statistik/Karte
-                    # erhalten, entscheidet aber nicht mehr ueber die Hoehe.
-                    self._claim_shared(self.shared_maps, map_key)
+                    # V17.4: kein fleet-weiter Einmal-Jackpot mehr fuer
+                    # Route/Stadt - nur noch EIN Wert pro Run, fuer JEDEN
+                    # Agenten gleich. Vorher bekam ausschliesslich der EINE
+                    # Agent, der eine Map als Erster ueberhaupt fand, den
+                    # grossen Bonus (500) - alle folgenden Agenten (und
+                    # derselbe Agent in spaeteren Episoden) nur den kleinen
+                    # Episodenwert. Das bremste den Vorstoss nach Norden,
+                    # sobald die "billigen" Erstfunde in Reichweite
+                    # ausgegangen waren.
+                    _claimed_globally = self._claim_shared(
+                        self.shared_maps, map_key
+                    )
+                    _is_route_or_city = (
+                        bank == self.OVERWORLD_BANK
+                        or map_key in self.CITY_MAPS
+                    )
                     if _wipe_cooldown_active:
                         reward_events.append("new_map_suppressed_post_wipe:+0")
-                    else:
+                    elif _is_route_or_city:
                         _map_reward = (
                             self.CITY_EPISODE_REWARD
                             if map_key in self.CITY_MAPS
@@ -4423,6 +4427,21 @@ class PokemonFireRedEnv(gym.Env):
                         reward_events.append(
                             "new_map_episode:"
                             f"+{_map_reward:.2f}"
+                        )
+                    elif _claimed_globally:
+                        # V17.4-Fix: Innenraeume (Reds Haus, Rivalenhaus,
+                        # Eichs Labor) sind KEIN Fortschritt - anders als bei
+                        # Route/Stadt soll das nicht "pro Agent einmalig"
+                        # zahlen, sonst kassieren nach jedem Reset alle 60
+                        # Agenten gleichzeitig ihren eigenen persoenlichen
+                        # Erstfund fuer dieselben 4 Raeume um Alabastia. Live
+                        # beobachtet: die ganze Flotte lief deswegen absichtlich
+                        # in die Haeuser statt Richtung Route 1. Jetzt nur noch
+                        # EIN EINZIGES Mal fuer die GESAMTE FLOTTE.
+                        reward += self.EPISODE_NEW_MAP_REWARD
+                        reward_events.append(
+                            "new_building_global:"
+                            f"+{self.EPISODE_NEW_MAP_REWARD:.2f}"
                         )
                 elif not _wipe_cooldown_active and (
                     bank == self.OVERWORLD_BANK or map_key in self.CITY_MAPS

@@ -4117,8 +4117,14 @@ class PokemonFireRedEnv(gym.Env):
             and loc["valid"]
         ):
             self.starter_outdoor_rewarded = True
-            reward += 500.0
-            reward_events.append("starter_outdoor:+500")
+            # V17.3: war 500 - eine echte Huerde ("aus Eichs Labor raus")
+            # in der alten Kaltstart-Architektur. Seit dem Savestate-Start
+            # ist has_target_starter von Episodenbeginn an True und der
+            # erste gueltige Aussen-Schritt kommt praktisch sofort - das
+            # gab bis zu 500 Gratis-Reward jede einzelne Episode, ohne
+            # jeden echten Fortschritt. Auf 25 reduziert (wie replay_map_once).
+            reward += 25.0
+            reward_events.append("starter_outdoor:+25")
             # V10.33: den Weg raus aus dem Labor als Brotkrumen-Spur sichern.
             self._commit_journey_route()
             self.reward_event_counts["starter_outdoor"] = (

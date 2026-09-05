@@ -40,7 +40,9 @@ docker compose --profile watcher up -d dynamic-watcher
 
 It loads `dynamic_policy_best.pt`, reloads when the learner publishes a better
 reward-scored brain, starts every episode from the true initial game state, and
-writes its JPEG stream to `/watcher` on the dashboard.
+writes its JPEG stream to `/watcher` on the dashboard. It samples the published
+policy distribution like the rollout workers rather than repeatedly choosing a
+single greedy action, so the visible emulator receives real policy inputs.
 
 The dynamic brain restores its latest published model before republishing after
 a container restart, so starting the watcher or updating the brain image does

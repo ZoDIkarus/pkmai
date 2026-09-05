@@ -42,12 +42,15 @@ def load_published_policy(path: Path) -> tuple[PKMAIPolicy, int]:
     return policy, int(artifact["version"])
 
 
-def choose_best_action(policy: PKMAIPolicy, observation: dict) -> int:
+def choose_watcher_action(
+    policy: PKMAIPolicy, observation: dict, generator: torch.Generator | None = None
+) -> int:
     image = torch.from_numpy(np.asarray(observation["image"], dtype=np.uint8))[None, ...]
     nav = torch.from_numpy(np.asarray(observation["nav"], dtype=np.float32))[None, ...]
     with torch.no_grad():
         logits, _ = policy(image, nav)
-    return int(torch.argmax(logits, dim=1).item())
+        probabilities = torch.softmax(logits, dim=1)
+    return int(torch.multinomial(probabilities, 1, generator=generator).item())
 
 
 def annotate_frame(screen: np.ndarray, policy_version: int, action: int) -> np.ndarray:
@@ -92,7 +95,7 @@ def main() -> None:
                     print(f"watcher waiting for best brain: {exc}", flush=True)
                     time.sleep(reload_seconds)
                     continue
-            action = choose_best_action(policy, observation)
+            action = choose_watcher_action(policy, observation)
             observation, _, terminated, truncated, _ = env.step(action)
             write_watcher_stream_frame(annotate_frame(env.env.get_screen(), policy_version, action))
             if terminated or truncated:

@@ -38,6 +38,8 @@ class ShellScriptLineEndingTests(unittest.TestCase):
         )
         self.assertIn("depends_on:\n      - cluster-master", worker_section)
         self.assertIn('restart: unless-stopped', worker_section)
+        self.assertIn('PKMAI_WORKER_FLEET_SIZE: "${PKMAI_WORKER_FLEET_SIZE:-10}"', worker_section)
+        self.assertIn("- ./runtime:/app/runtime\n", worker_section)
         self.assertNotIn("container_name:", worker_section)
         self.assertNotIn("PKMAI_WORKER_ID:", worker_section)
 

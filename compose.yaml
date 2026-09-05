@@ -76,10 +76,11 @@ services:
       PKMAI_CLUSTER_MASTER_URL: "http://${PKMAI_CLUSTER_HOST:-127.0.0.1}:8765"
       PKMAI_CLUSTER_KEY_FILE: /app/runtime/cluster/cluster_key.txt
       PKMAI_WORKER_AGENTS: "1"
+      PKMAI_WORKER_FLEET_SIZE: "${PKMAI_WORKER_FLEET_SIZE:-10}"
     depends_on:
       - cluster-master
     volumes:
-      - ./runtime:/app/runtime:ro
+      - ./runtime:/app/runtime
       - ./local:/app/local:ro
     network_mode: host
     cpus: 1.0

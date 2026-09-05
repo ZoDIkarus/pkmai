@@ -38,10 +38,11 @@ Firewall: allow the master port only from trusted VPN subnets. Do not expose it 
 For an all-local rollout pool, use the default loopback host (`127.0.0.1`) and
 the local private ROM/integration files. `cluster-worker` intentionally has no
 fixed container name or worker ID, so Compose can scale it into ten independent
-emulator workers.
+emulator workers. Each scaled hostname maps to a distinct zero-based curriculum
+rank and shares the writable exploration/curriculum runtime volume.
 
 ```bash
-docker compose --profile cluster --profile cluster-local-worker build cluster-master cluster-brain cluster-worker
+docker compose --profile trainer build trainer
 docker compose --profile cluster --profile cluster-local-worker up -d \
   --scale cluster-worker=10 \
   cluster-master cluster-brain cluster-worker

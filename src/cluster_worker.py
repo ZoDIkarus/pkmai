@@ -7,6 +7,7 @@ import io
 import json
 import os
 import platform
+import re
 import socket
 import subprocess
 import time
@@ -29,6 +30,17 @@ WORKER_ID = os.getenv("PKMAI_WORKER_ID", socket.gethostname())
 ACTIVE_AGENTS = max(1, int(os.getenv("PKMAI_WORKER_AGENTS", "1")))
 HEARTBEAT_SECONDS = max(3, int(os.getenv("PKMAI_HEARTBEAT_SECONDS", "10")))
 ROLLOUT_STEPS = max(8, int(os.getenv("PKMAI_ROLLOUT_STEPS", "32")))
+
+
+def worker_rank(hostname: str | None = None, explicit_rank: str | None = None) -> int:
+    configured_rank = explicit_rank if explicit_rank is not None else os.getenv("PKMAI_WORKER_RANK")
+    if configured_rank:
+        try:
+            return max(0, int(configured_rank))
+        except ValueError:
+            pass
+    match = re.search(r"-(\d+)$", hostname or socket.gethostname())
+    return max(0, int(match.group(1)) - 1) if match else 0
 
 
 def build_id() -> str:
@@ -130,8 +142,8 @@ def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: di
 def main() -> None:
     if not KEY_FILE.exists():
         raise SystemExit(f"cluster key file missing: {KEY_FILE}")
-    cpu_count = max(1, os.cpu_count() or 1)
-    env = PokemonFireRedEnv(rank=0, agent_count=cpu_count)
+    fleet_size = max(ACTIVE_AGENTS, int(os.getenv("PKMAI_WORKER_FLEET_SIZE", ACTIVE_AGENTS)))
+    env = PokemonFireRedEnv(rank=worker_rank(), agent_count=fleet_size)
     observation, _ = env.reset()
     registration = request_json("/api/worker/register", payload())
     policy = None

@@ -175,15 +175,20 @@ class PokemonFireRedEnv(gym.Env):
     # und der Agent haengt im Gras fest statt weiterzuziehen. Auf ein Drittel
     # gekuerzt, damit Erkunden strukturell immer die bessere Wahl bleibt.
     ENEMY_DAMAGE_REWARD_PER_HP = 0.15
-    ENEMY_FAINT_REWARD = 10.0
-    LEVEL_GAIN_REWARD = 25.0
+    # V17.3: nochmal deutlich gekuerzt (10/15/25 -> 2/2/10). Live beobachtet:
+    # die Agenten kaempften strukturell mehr als sie erkundeten und kamen
+    # dadurch nicht voran - Kampf-Reward war trotz der V17-Drittelung immer
+    # noch attraktiver als das Risiko, weiterzuziehen. Flucht-Strafe bleibt
+    # bei -25, damit Fliehen weiterhin klar schlechter ist als Kaempfen.
+    ENEMY_FAINT_REWARD = 2.0
+    LEVEL_GAIN_REWARD = 10.0
     # Kleiner, von der Party-Level-Summe komplett unabhaengiger Anreiz, das
     # Center ueberhaupt aufzusuchen. Nur einmal pro Episode (Flag oben), keine
     # Kopplung an Levelsumme/Party-Groesse - kann also nie durch PC-Box-
     # Ein-/Auslagern verzerrt werden wie LEVEL_GAIN_REWARD vorher.
     POKEMON_CENTER_FIRST_HEAL_REWARD = 10.0
     EXPERIENCE_GAIN_REWARD_PER_POINT = 0.0
-    BATTLE_WIN_REWARD = 15.0
+    BATTLE_WIN_REWARD = 2.0
     ENEMY_HP_READ_EVERY = 2
     ENEMY_ACTIVITY_TTL = 96
     FLED_BATTLE_PENALTY = -25.0

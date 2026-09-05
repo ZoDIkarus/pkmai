@@ -2497,17 +2497,21 @@ header{padding:6px!important;gap:4px!important}
         // versetzt zu sein - z.B. Pallet-Nordausgang bei lokal x=12-13 traf
         // in 70 Beispielen zuverlaessig auf Route-1-Suedeingang bei
         // ebenfalls x=12-13, aber die alten Offsets hatten Route 1 um 90
-        // Einheiten nach rechts verschoben. Route 2/Wald/Marmoria sind nur
-        // X-abgeglichen (auf denselben Korridor) - fuer eine pixelgenaue
-        // Y-Ausrichtung fehlen dort noch genug Transitions-Samples, weil
-        // die Flotte den Cut-Zaun auf Route 2 bisher kaum erreicht.
+        // Einheiten nach rechts verschoben. Vertania->Route 2 (8 Samples,
+        // Vertania-Nordausgang x=19-22 trifft auf Route-2-Suedeingang
+        // y=78-79) ergab denselben Fehler in Y: die alte feste Zahl (950)
+        // lag viel zu nah an Vertania - Route 1 und 2 wirkten dadurch am
+        // oberen Kartenrand zusammengequetscht. Wald/Marmoria haben noch
+        // KEINE eigenen Transitions-Samples (die Flotte ist noch nicht so
+        // weit) - deren Position ist eine grobe Schaetzung und wird
+        // korrigiert, sobald echte Daten reinkommen.
         const MAP_OFFSETS = {
             '3,0': [1410, 2320],   // Pallet Town (outdoor, Referenzpunkt)
             '3,19': [1410, 1850],  // Route 1
             '3,1': [1272, 1388],   // Viridian City (outdoor)
-            '3,20': [1410, 950],   // Route 2
-            '3,2': [1410, 480],    // Pewter/Marmoria City (outdoor)
-            '1,0': [1410, 700],    // Viridian Forest
+            '3,20': [1410, 440],   // Route 2 (aus echten Transitions berechnet)
+            '1,0': [1210, 300],    // Viridian Forest (Schaetzung, noch keine Daten)
+            '3,2': [1410, 100],    // Pewter/Marmoria City (Schaetzung, noch keine Daten)
 
             // Innenraeume: ringsum in freien Feldern neben der jeweiligen
             // Stadt verteilt statt auf ihr gestapelt.

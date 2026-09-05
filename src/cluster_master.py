@@ -28,6 +28,7 @@ KEY_FILE = Path(os.getenv("PKMAI_CLUSTER_KEY_FILE", CLUSTER_DIR / "cluster_key.t
 STATE_FILE = CLUSTER_DIR / "workers.json"
 POLICY_FILE = CLUSTER_DIR / "policy.json"
 PORT = int(os.getenv("PKMAI_CLUSTER_PORT", "8765"))
+WORKER_TTL_SECONDS = max(15, int(os.getenv("PKMAI_WORKER_TTL_SECONDS", "60")))
 
 
 def _load_or_create_key() -> str:
@@ -60,6 +61,18 @@ def _save_state() -> None:
     temp = STATE_FILE.with_suffix(".json.tmp")
     temp.write_text(json.dumps(WORKERS, sort_keys=True), encoding="utf-8")
     os.replace(temp, STATE_FILE)
+
+
+def _prune_workers(now: float) -> None:
+    stale = [
+        worker_id
+        for worker_id, row in WORKERS.items()
+        if now - float(row.get("last_seen", 0) or 0) >= WORKER_TTL_SECONDS
+    ]
+    for worker_id in stale:
+        del WORKERS[worker_id]
+    if stale:
+        _save_state()
 
 
 def _check_key(value: str | None) -> None:
@@ -96,6 +109,7 @@ def _record(payload: dict, decision_reason: str) -> dict:
 def health():
     now = time.time()
     with LOCK:
+        _prune_workers(now)
         online = sum(now - float(row.get("last_seen", 0)) < 15 for row in WORKERS.values())
     return {"ok": True, "role": "control-plane", "workers_online": online, "policy_version": _policy_version()}
 
@@ -129,6 +143,7 @@ def cluster(x_pkmai_key: str | None = Header(default=None)):
     _check_key(x_pkmai_key)
     now = time.time()
     with LOCK:
+        _prune_workers(now)
         workers = [dict(row, online=now - float(row.get("last_seen", 0)) < 15) for row in WORKERS.values()]
     return {"policy_version": _policy_version(), "workers": sorted(workers, key=lambda item: item["worker_id"])}
 

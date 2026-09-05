@@ -2010,13 +2010,30 @@ header{padding-right:85px!important}
 #rooms-view,#graphs-view,#watcher-view,#mapper-view,#status-view{position:absolute!important;inset:0;height:100%!important;overflow-y:auto!important;box-sizing:border-box}
 .pkmai-float-tools,#pkmai-hidden-tray{display:none!important}
 .hud-overlay .agent-row{padding:9px 4px}
+/* V17.3: eigene Agenten-Kachel-Sektion fuer die mobile Kartenansicht -
+   auf Desktop unsichtbar, dort erledigt die rechte Sidebar (#hud) das. */
+#mobile-agent-section{display:none}
 @media(max-width:820px){
+/* Desktop ist ein fixes Ein-Bildschirm-Layout (kein Body-Scroll noetig,
+   alles per flex/grid exakt in die Viewport-Hoehe gepresst). Auf dem Handy
+   muss die Seite dagegen ganz normal scrollbar sein, sonst verschwinden
+   Watcher + Agenten-Kacheln unterhalb der Karte komplett unerreichbar. */
+html,body{height:auto!important;overflow:auto!important;overflow-y:auto!important}
+#main-container{overflow:visible!important;flex:none!important}
 header{padding:6px!important;gap:4px!important}
 #brain-summary-row{grid-template-columns:repeat(3,minmax(0,1fr))!important}
 #brain-summary-row>div{padding:6px!important}
 .cn-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 .lth-body{grid-template-columns:1fr}.cn-foot{display:none}
-#map-workspace{grid-template-columns:minmax(0,27%) minmax(0,1fr) minmax(0,23%)}
+/* Handy: Karte oben (volle Breite), dann Watcher, dann Agenten als
+   antippbare Kacheln statt der schmalen Listen-Sidebar. */
+#map-workspace{display:flex!important;flex-direction:column!important;height:auto!important;min-height:0!important;overflow:visible!important}
+#map-column{order:1;flex:none!important;min-width:0}
+#map-column #map-view{height:52vh!important;min-height:300px!important;flex:none!important;width:100%!important}
+#alex-watcher-column{order:2;border-right:0!important;border-bottom:1px solid #283142!important;min-width:0}
+#alex-watcher-column #detail-panel{display:none!important}
+#map-workspace #hud{display:none!important}
+#mobile-agent-section{display:block!important;order:3;padding:8px;border-top:1px solid #283142}
 #map-workspace #hud,#alex-watcher-column #detail-panel{padding:6px!important}
 #map-column .agent-filter-bar{padding:5px!important}
 #map-column .agent-filter-bar select{flex:1 1 40%!important;padding:4px!important;font-size:9px!important}
@@ -2431,16 +2448,23 @@ header{padding:6px!important;gap:4px!important}
         const FIXED_ZOOM = 0.5;
         const TILE_UNIT = 12;
         const MAP_MARGIN_UNITS = 4 * TILE_UNIT;
+        // V17.3: auf dem Handy darf man ein kleines Stueck pinch-zoomen
+        // (sonst wirkt die Karte auf dem kleinen Bildschirm zu winzig/grob),
+        // aber nicht ins Unendliche - Desktop bleibt hart auf FIXED_ZOOM
+        // gesperrt wie bisher.
+        const IS_MOBILE_VIEWPORT = window.innerWidth <= 820;
+        const MAP_MIN_ZOOM = FIXED_ZOOM;
+        const MAP_MAX_ZOOM = IS_MOBILE_VIEWPORT ? FIXED_ZOOM + 1.5 : FIXED_ZOOM;
 
         const map = L.map('map-view', {
             crs: L.CRS.Simple,
             zoomSnap: 0.5,
-            minZoom: FIXED_ZOOM,
-            maxZoom: FIXED_ZOOM,
+            minZoom: MAP_MIN_ZOOM,
+            maxZoom: MAP_MAX_ZOOM,
             zoomControl: false,
             scrollWheelZoom: false,
             doubleClickZoom: false,
-            touchZoom: false,
+            touchZoom: IS_MOBILE_VIEWPORT,
             boxZoom: false,
             keyboard: false,
             dragging: true,
@@ -2822,24 +2846,18 @@ header{padding:6px!important;gap:4px!important}
             // unten am Ende der langen Liste unsichtbar bleibt.
             if (opening) {
                 setTimeout(() => {
-                    const box = currentTab === 'status'
-                        ? document.getElementById('status-agent-detail')
-                        : document.getElementById('wt-detail');
+                    const boxId = currentTab === 'status'
+                        ? 'status-agent-detail'
+                        : currentTab === 'map'
+                        ? 'map-agent-detail'
+                        : 'wt-detail';
+                    const box = document.getElementById(boxId);
                     if (box && !box.hidden) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 }, 30);
             }
         }
-        function renderWatcherTab() {
-            const grid = document.getElementById('wt-grid');
-            if (!grid) return;
-            const list = (latestInstances || []).slice().sort((a, b) => {
-                if (Number(a.id) === 120) return -1;
-                if (Number(b.id) === 120) return 1;
-                return Number(a.id) - Number(b.id);
-            });
-            const cnt = document.getElementById('wt-count');
-            if (cnt) cnt.textContent = list.length + ' aktiv';
-            grid.innerHTML = list.map(d => {
+        function agentChipsHtml(list) {
+            return list.map(d => {
                 const id = Number(d.id);
                 const isW = id === 120;
                 const role = isW ? 'watcher' : (d.training_objective || d.agent_role || '?');
@@ -2854,7 +2872,29 @@ header{padding:6px!important;gap:4px!important}
                     + '<div class="c-meta">S' + stage + ' · L' + lvl + ' · <b style="color:' + (rew >= 0 ? '#5fe08a' : '#ff7a7a') + '">' + (rew >= 0 ? '+' : '') + rew.toFixed(0) + '</b></div>'
                     + '</div>';
             }).join('');
+        }
+        function renderWatcherTab() {
+            const list = (latestInstances || []).slice().sort((a, b) => {
+                if (Number(a.id) === 120) return -1;
+                if (Number(b.id) === 120) return 1;
+                return Number(a.id) - Number(b.id);
+            });
+            const html = agentChipsHtml(list);
+
+            const grid = document.getElementById('wt-grid');
+            if (grid) grid.innerHTML = html;
+            const cnt = document.getElementById('wt-count');
+            if (cnt) cnt.textContent = list.length + ' aktiv';
             renderAgentDetail('wt-detail');
+
+            // V17.3: dieselben Kacheln nochmal fuer die mobile Kartenansicht -
+            // eigene IDs, damit Handy (Karte) und Desktop (Watcher-Tab)
+            // unabhaengig voneinander funktionieren.
+            const mgrid = document.getElementById('map-agent-grid');
+            if (mgrid) mgrid.innerHTML = html;
+            const mcnt = document.getElementById('map-agent-count');
+            if (mcnt) mcnt.textContent = list.length + ' aktiv';
+            renderAgentDetail('map-agent-detail');
         }
         function renderAgentDetail(boxId) {
             const box = document.getElementById(boxId);
@@ -2964,6 +3004,7 @@ header{padding:6px!important;gap:4px!important}
                 updateGlobalMapping(true);
                 updateMapperMapOverlays(true);
                 updateMapperTileCoverage(true);
+                renderWatcherTab();
                 setTimeout(() => map.invalidateSize(), 50);
                 setTimeout(() => map.invalidateSize(), 350);
             }
@@ -4068,7 +4109,7 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                 latestInstances = instances;
                 const _v81cnt = document.getElementById('v81-agent-count');
                 if (_v81cnt) _v81cnt.textContent = instances.filter(i => Number(i.id) !== 120).length;
-                if (currentTab === 'watcher') renderWatcherTab();
+                if (currentTab === 'watcher' || currentTab === 'map') renderWatcherTab();
                 renderStatusDashboard(state);
                 instances.forEach(pushHistory);
                 syncAgentFilterOptions(instances);
@@ -4289,7 +4330,18 @@ setInterval(refreshChampionNight,2000);refreshChampionNight();
   document.getElementById('brain-summary-row').appendChild(document.querySelector('.live-global'));
   center.appendChild(document.getElementById('agent-filter-bar'));
   center.appendChild(document.getElementById('map-view'));
-  workspace.append(left,center,document.getElementById('hud'));
+  // V17.3: nur fuer Handy - Karte/Watcher bleiben auf Desktop-Groesse,
+  // aber darunter erscheinen die Agenten als anklickbare Kacheln (wie im
+  // Status-Tab) statt der schmalen Listen-Sidebar. Eigene IDs statt die
+  // Watcher-Tab-Elemente zu verschieben, damit beide Tabs unabhaengig
+  // funktionieren.
+  const mobileAgents=document.createElement('section');
+  mobileAgents.id='mobile-agent-section';
+  mobileAgents.setAttribute('aria-label','Agenten');
+  mobileAgents.innerHTML='<div class="wt-picker-head"><b>Agenten – antippen für Live-Stats</b><span id="map-agent-count">–</span></div>'
+    + '<div class="wt-detail" id="map-agent-detail" hidden></div>'
+    + '<div class="wt-grid" id="map-agent-grid"></div>';
+  workspace.append(left,center,document.getElementById('hud'),mobileAgents);
   main.prepend(workspace);
   requestAnimationFrame(()=>{map.invalidateSize();recomputeDynamicMapBounds();});
 })();

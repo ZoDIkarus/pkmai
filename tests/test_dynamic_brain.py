@@ -9,6 +9,22 @@ from dynamic_brain import DynamicLearner
 
 
 class DynamicLearnerTests(unittest.TestCase):
+    def test_restores_the_latest_brain_before_republishing_best(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_model = dynamic_brain.MODEL_FILE
+            root = Path(directory)
+            dynamic_brain.MODEL_FILE = root / "dynamic_policy.pt"
+            try:
+                source = DynamicLearner()
+                source.version = 17
+                source.publish()
+                restored = DynamicLearner()
+
+                self.assertTrue(restored.restore_latest())
+                self.assertEqual(restored.version, 17)
+            finally:
+                dynamic_brain.MODEL_FILE = original_model
+
     def test_publishes_a_best_brain_artifact_for_the_watcher(self):
         with tempfile.TemporaryDirectory() as directory:
             original_model = dynamic_brain.MODEL_FILE

@@ -42,6 +42,10 @@ It loads `dynamic_policy_best.pt`, reloads when the learner publishes a better
 reward-scored brain, starts every episode from the true initial game state, and
 writes its JPEG stream to `/watcher` on the dashboard.
 
+The dynamic brain restores its latest published model before republishing after
+a container restart, so starting the watcher or updating the brain image does
+not discard the learned policy.
+
 Firewall: allow the master port only from trusted VPN subnets. Do not expose it through a public interface.
 
 ## Local Windows Docker Desktop host: ten trainers

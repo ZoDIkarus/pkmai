@@ -30,6 +30,18 @@ class DynamicLearner:
         self.version = 0
         self.timesteps = 0
 
+    def restore_latest(self) -> bool:
+        if not MODEL_FILE.is_file():
+            return False
+        artifact = torch.load(MODEL_FILE, map_location="cpu")
+        self.model.load_state_dict(artifact["state_dict"])
+        self.version = int(artifact["version"])
+        try:
+            self.timesteps = int(json.loads(POLICY_FILE.read_text(encoding="utf-8")).get("timesteps", 0))
+        except (OSError, ValueError, KeyError, json.JSONDecodeError):
+            self.timesteps = 0
+        return True
+
     def learn(self, batch: dict[str, np.ndarray]) -> dict[str, float | int]:
         images = torch.from_numpy(np.asarray(batch["images"]))
         nav = torch.from_numpy(np.asarray(batch["nav"], dtype=np.float32))
@@ -91,6 +103,7 @@ def main() -> None:
     learner = DynamicLearner()
     CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
     best_mean_reward = float("-inf")
+    learner.restore_latest()
     learner.publish(best=True)
     while True:
         consumed = 0

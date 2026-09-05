@@ -187,6 +187,18 @@ class PokemonFireRedEnv(gym.Env):
     ENEMY_HP_READ_EVERY = 2
     ENEMY_ACTIVITY_TTL = 96
     FLED_BATTLE_PENALTY = -25.0
+    # V17.2: Ein Party-Wipe beendet die Episode NICHT mehr. FireRed
+    # teleportiert nach einem Wipe automatisch zum letzten Pokemon-Center
+    # (geheilt), die Episode laeuft danach ganz normal weiter - genau wie im
+    # echten Spiel. Vorher zwang jeder Wipe einen Reset auf den
+    # Savestate-Startpunkt zurueck; die Party kam dadurch nie ueber
+    # Level 6-7 hinaus, weil ein laengerer Lauf mit echtem Grinding nie
+    # zustande kam. Die -100-Strafe bleibt, nur der Episodenabbruch faellt
+    # weg. Damit der Teleport zum Pokecenter nicht als "neue Map" +25/+500
+    # durchrutscht, werden Map-/Kanten-Boni fuer POST_WIPE_REWARD_COOLDOWN_
+    # STEPS Route-Schritte nach dem Wipe unterdrueckt (Buchfuehrung/Claims
+    # laufen normal weiter, nur die Auszahlung pausiert).
+    POST_WIPE_REWARD_COOLDOWN_STEPS = 40
     WILD_TRAINING_MAPS = {(3, 19), (3, 20), (1, 0)}
     # Beliebige Warps sind reine Kartendaten, niemals Reward. Nur explizit
     # bestaetigte Story-Uebergaenge (Treppe/Ausgang/Stage) werden einmalig
@@ -495,6 +507,10 @@ class PokemonFireRedEnv(gym.Env):
         # geschrieben wurde (alle 80 Steps) - fast immer leer. Stattdessen
         # rollierendes Log der letzten tatsaechlichen Reward-Ereignisse.
         self.recent_reward_events = []
+        # V17.2: Route-Schritt, bis zu dem Map-/Kanten-Boni nach einem
+        # Party-Wipe unterdrueckt werden (siehe POST_WIPE_REWARD_COOLDOWN_
+        # STEPS). -1 = kein aktiver Wipe-Cooldown.
+        self._post_wipe_reward_cooldown_until = -1
 
         # Persistentes Explorationsgedaechtnis (bleibt ueber Episoden erhalten).
         self.persistent_known_edges = set()
@@ -2598,6 +2614,10 @@ class PokemonFireRedEnv(gym.Env):
         # geschrieben wurde (alle 80 Steps) - fast immer leer. Stattdessen
         # rollierendes Log der letzten tatsaechlichen Reward-Ereignisse.
         self.recent_reward_events = []
+        # V17.2: Route-Schritt, bis zu dem Map-/Kanten-Boni nach einem
+        # Party-Wipe unterdrueckt werden (siehe POST_WIPE_REWARD_COOLDOWN_
+        # STEPS). -1 = kein aktiver Wipe-Cooldown.
+        self._post_wipe_reward_cooldown_until = -1
         self.current_reward = 0.0
         self.last_exploration_coord = None
         self.last_exploration_map = None
@@ -3011,7 +3031,12 @@ class PokemonFireRedEnv(gym.Env):
                 reward_events.append("party_wiped_at_battle_end:-100.0")
                 self.run_stats["party_wipes"] += 1
                 self._save_run_stats()
-                truncated = True
+                # V17.2: Episode laeuft weiter - FireRed heilt die Party
+                # automatisch am letzten Pokemon-Center. Cooldown verhindert,
+                # dass dieser Teleport als "neue Map" belohnt wird.
+                self._post_wipe_reward_cooldown_until = (
+                    self.route_steps + self.POST_WIPE_REWARD_COOLDOWN_STEPS
+                )
                 self.last_stage_timeout = "party_wiped"
                 info["last_stage_timeout"] = "party_wiped"
             # Der letzte Angriff kann Gegner-KP und Battle-Flag im selben
@@ -3212,12 +3237,18 @@ class PokemonFireRedEnv(gym.Env):
                     objective_done = True
                 self._save_run_stats()
 
-            if current_total_hp == 0 and max_total_hp > 0 and not truncated:
+            if (
+                current_total_hp == 0
+                and max_total_hp > 0
+                and self.route_steps >= self._post_wipe_reward_cooldown_until
+            ):
                 reward -= 100.0
                 reward_events.append("party_wiped:-100.0")
                 self.run_stats["party_wipes"] += 1
                 self._save_run_stats()
-                truncated = True
+                self._post_wipe_reward_cooldown_until = (
+                    self.route_steps + self.POST_WIPE_REWARD_COOLDOWN_STEPS
+                )
                 self.last_stage_timeout = "party_wiped"
                 info["last_stage_timeout"] = "party_wiped"
             elif self.last_party_total_hp > 0:
@@ -3439,7 +3470,22 @@ class PokemonFireRedEnv(gym.Env):
         # ---------------------------------------------------------
         # INTRO / NAMENSVERGABE SHAPING
         # ---------------------------------------------------------
-        if not gameplay_ready and self.episode_start == "beginning":
+        # V17.2: "nicht gameplay_ready" heisst nur "Positions-RAM gerade
+        # nicht vertrauenswuerdig" - das gilt fuer JEDES Dialogfenster, Menue
+        # oder jeden Raumwechsel im normalen Spiel, nicht nur fuer das echte
+        # Intro. Seit dem Savestate-Start ist das Intro immer schon erledigt
+        # (intro_complete_rewarded startet auf True), der Block feuerte aber
+        # trotzdem bei jedem "kurz nicht lesbar"-Moment weiter: unverdiente
+        # intro_state-Boni (+2, gedeckelt +20) UND ein 900-Schritte-Anti-
+        # Loop-Abbruch, der eine laengere Dialogszene mitten im echten Spiel
+        # als Intro-Loop missverstehen und die Episode grundlos beenden
+        # konnte. Zusaetzliche Bedingung macht den ganzen Block dauerhaft
+        # inaktiv, sobald das Intro einmal (im Savestate) erledigt ist.
+        if (
+            not gameplay_ready
+            and self.episode_start == "beginning"
+            and not self.intro_complete_rewarded
+        ):
             thumb = self._intro_thumb(raw_screen)
 
             if self.intro_last_thumb is None:
@@ -4133,6 +4179,13 @@ class PokemonFireRedEnv(gym.Env):
 
             _route_roller = self.training_objective in self.WORLD_ROLES
 
+            # V17.2: Der Teleport zum Pokecenter nach einem Party-Wipe darf
+            # nie als "neue Map" bezahlt werden. Buchfuehrung/globaler Claim
+            # laufen unveraendert (die Map gilt danach fuer alle als bekannt),
+            # nur die Auszahlung pausiert waehrend des Cooldowns.
+            _wipe_cooldown_active = (
+                self.route_steps < self._post_wipe_reward_cooldown_until
+            )
             if map_key not in self.visited_maps:
                 self.visited_maps.add(map_key)
                 self.learning_seen_maps.add(map_key)
@@ -4141,7 +4194,12 @@ class PokemonFireRedEnv(gym.Env):
                     self.exploration_memory_dirty = True
                     self._nav_target_cache = None
 
-                    if self._claim_shared(self.shared_maps, map_key):
+                    _claimed_globally = self._claim_shared(
+                        self.shared_maps, map_key
+                    )
+                    if _wipe_cooldown_active:
+                        reward_events.append("new_map_suppressed_post_wipe:+0")
+                    elif _claimed_globally:
                         self.last_progress_advance_step = self.route_steps
                         reward += self.NEW_MAP_REWARD
                         reward_events.append(
@@ -4154,7 +4212,7 @@ class PokemonFireRedEnv(gym.Env):
                             "new_map_episode:"
                             f"+{self.EPISODE_NEW_MAP_REWARD:.2f}"
                         )
-                else:
+                elif not _wipe_cooldown_active:
                     reward += self.EPISODE_NEW_MAP_REWARD
                     reward_events.append(
                         "replay_map_once:"
@@ -4286,10 +4344,15 @@ class PokemonFireRedEnv(gym.Env):
                             self.exploration_memory_dirty = True
                             self._invalidate_navigation_cache()
 
-                            if self._claim_shared(
+                            _claimed_edge_globally = self._claim_shared(
                                 self.shared_edges, edge_key
-                            ):
-                                self.steps_since_new_edge = 0
+                            )
+                            self.steps_since_new_edge = 0
+                            if _wipe_cooldown_active:
+                                reward_events.append(
+                                    "new_edge_suppressed_post_wipe:+0"
+                                )
+                            elif _claimed_edge_globally:
                                 if self.NEW_EDGE_REWARD:
                                     reward += self.NEW_EDGE_REWARD
                                     reward_events.append(
@@ -4302,7 +4365,6 @@ class PokemonFireRedEnv(gym.Env):
                                 # Agent erstmals gelaufen. Positives Imitations-
                                 # signal statt den richtigen Weg neutral zu machen.
                                 local_edge_reward = self.NEW_EDGE_REWARD * 0.20
-                                self.steps_since_new_edge = 0
                                 if local_edge_reward:
                                     reward += local_edge_reward
                                     reward_events.append(

@@ -128,10 +128,16 @@ def render_console(screen, data, events):
     def dot(x, y, color, r=4):
         cv2.circle(canvas, (x, y), r, color, -1, cv2.LINE_AA)
 
-    label('ALEX / LIVE WATCHER', 20, 28, (210, 225, 210), .65)
-    label(f"FPS {data.get('fps', 0):.1f} / {data.get('target_fps', 300):.0f} target", 420, 28, (205, 205, 205), .55)
+    label('ALEX / LIVE WATCHER', 20, 24, (210, 225, 210), .65)
+    label(
+        f"Champion v{data.get('champion_version', 0)}  |  "
+        f"Learner {data.get('learner_steps', 0):,} steps total  |  "
+        f"FPS {data.get('fps', 0):.1f} / {data.get('target_fps', 300):.0f} target",
+        20, 52, (150, 200, 235), .46
+    )
 
-    # -- status card: model + episode/reward/stage at a glance ----------
+    # -- status card: model + episode/reward/stage at a glance, one shared
+    #    3-column grid so every row lines up with the ones below it -------
     panel(728, 8, 1192, 186)
     battle = bool(data['in_battle'])
     badge_color = _NEG if battle else _POS
@@ -141,26 +147,30 @@ def render_console(screen, data, events):
           868, 34, (185, 190, 202), .4)
     label(str(data.get('battle_detection', ''))[:52], 740, 58, (135, 140, 152), .36)
 
-    dot(748, 82, _POS, 5)
-    label(f"Episode {data['episode']}", 762, 87, (220, 220, 220), .46)
+    col = (748, 898, 1048)
     reward_col = _POS if data['reward'] >= 0 else _NEG
-    dot(958, 82, reward_col, 5)
-    label(f"Reward {data['reward']:+.2f}", 972, 87, reward_col, .46, 1)
-
-    dot(748, 114, _GOLD, 5)
-    label(f"Stage {data['world_stage']}", 762, 119, (220, 220, 220), .44)
-    dot(898, 114, _GOLD, 5)
-    label(f"Route {data['route_steps']}", 912, 119, (220, 220, 220), .44)
-    dot(1048, 114, _NEG, 5)
-    label(f"Battle {data['battle_steps']}", 1062, 119, (220, 220, 220), .44)
-
     step_col = _POS if data['step_reward'] >= 0 else _NEG
-    dot(748, 146, step_col, 5)
-    label(f"Step {data['step_reward']:+.4f}", 762, 151, step_col, .42)
+    row1 = (
+        (_POS, f"Episode {data['episode']}", (220, 220, 220)),
+        (reward_col, f"Reward {data['reward']:+.2f}", reward_col),
+        (_GOLD, f"Stage {data['world_stage']}", (220, 220, 220)),
+    )
+    row2 = (
+        (_GOLD, f"Route {data['route_steps']}", (220, 220, 220)),
+        (_NEG, f"Battle {data['battle_steps']}", (220, 220, 220)),
+        (step_col, f"Step {data['step_reward']:+.4f}", step_col),
+    )
+    for x, (dot_color, text, text_color) in zip(col, row1):
+        dot(x, 82, dot_color, 5)
+        label(text, x + 14, 87, text_color, .44)
+    for x, (dot_color, text, text_color) in zip(col, row2):
+        dot(x, 114, dot_color, 5)
+        label(text, x + 14, 119, text_color, .44)
+
     label('Same actions/observations/rewards/resets as training. No learning.',
-          890, 151, (125, 130, 140), .34)
+          740, 149, (125, 130, 140), .34)
     label('TRAINER REWARD ENGINE / isolated evaluation - one-time bonuses are private',
-          740, 174, (120, 125, 135), .34)
+          740, 172, (120, 125, 135), .34)
 
     # -- reward events table ---------------------------------------------
     tx0, ty0, tx1, ty1 = 728, 194, 1192, 650
@@ -216,6 +226,8 @@ def run(api):
     episode = 1
     events = []
     last_reset = '-'
+    learner_steps, champion_version = api.get_trainer_progress()
+    consecutive_errors = 0
     log_path = root / 'watcher_rewards.jsonl'
     print('WATCHER: PokemonFireRedEnv.step | inference only | private reward memory', flush=True)
     print('Same reward rules; global first-discovery bonuses use a separate evaluation registry.', flush=True)
@@ -237,12 +249,30 @@ def run(api):
                             print('MODEL:', Path(path).name, flush=True)
                         except Exception as exc:
                             print('MODEL LOAD:', exc, flush=True)
+                    learner_steps, champion_version = api.get_trainer_progress()
                     last_model_check = start
                 if model is None:
                     cv2.waitKey(100)
                     continue
-                action, _ = model.predict(obs, deterministic=False)
-                obs, reward, terminated, truncated, info = env.step(int(action))
+                try:
+                    action, _ = model.predict(obs, deterministic=False)
+                    obs, reward, terminated, truncated, info = env.step(int(action))
+                except Exception as exc:
+                    # Streaming-Ziel: der Watcher soll nie manuell neu
+                    # gestartet werden muessen. Ein einzelner Emulator-/RAM-
+                    # Ausrutscher darf das Fenster nicht beenden - Episode
+                    # verwerfen und mit einem frischen Reset weitermachen.
+                    consecutive_errors += 1
+                    print(f"STEP ERROR ({consecutive_errors}):", exc, flush=True)
+                    time.sleep(min(5.0, consecutive_errors * 0.5))
+                    try:
+                        obs, info = env.reset()
+                        episode += 1
+                        last_reset = f"recovered after error: {exc}"[:80]
+                    except Exception as reset_exc:
+                        print('RESET AFTER ERROR FAILED:', reset_exc, flush=True)
+                    continue
+                consecutive_errors = 0
                 fps_frames += env.ACTION_HOLD_FRAMES + env.ACTION_RELEASE_FRAMES
                 fps_now = time.monotonic()
                 if fps_now - fps_started >= api.FPS_TITLE_INTERVAL:
@@ -272,6 +302,8 @@ def run(api):
                     data['last_reset'] = last_reset
                     data['fps'] = round(measured_fps, 1)
                     data['target_fps'] = api.TARGET_FPS
+                    data['learner_steps'] = learner_steps
+                    data['champion_version'] = champion_version
                     atomic_json(root / 'instances_data/inst_120.json', data)
                     screen = env.env.get_screen()
                     canvas = render_console(screen, data, events)

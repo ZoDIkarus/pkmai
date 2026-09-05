@@ -30,7 +30,7 @@ LOCAL_DIR = os.path.join(PROJECT_ROOT, "local")
 BASE_DIR = PROJECT_ROOT
 
 # Geschwindigkeit / Anzeige
-TARGET_FPS = 90.0
+TARGET_FPS = 150.0
 GUI_EVERY_FRAMES = 6
 TELEMETRY_INTERVAL = 0.5
 FPS_TITLE_INTERVAL = 0.5
@@ -114,6 +114,18 @@ BEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_best.zip")
 RESUME_MODEL = os.path.join(MODEL_DIR, "pokemon_model_resume.zip")
 VERSION_FILE = os.path.join(RUNTIME_DIR, "model_version.json")
 CHAMPION_FILE = os.path.join(RUNTIME_DIR, "champion_score.json")
+TRAINER_STATUS_FILE = os.path.join(RUNTIME_DIR, "trainer_status.json")
+
+
+def get_trainer_progress():
+    """(learner_steps, champion_version) for the header - lets viewers see
+    the brain keep learning even while the watcher itself only infers."""
+    try:
+        with open(TRAINER_STATUS_FILE, "r") as f:
+            d = json.load(f)
+        return int(d.get("learner_steps", 0) or 0), int(d.get("champion_version", 0) or 0)
+    except Exception:
+        return 0, 0
 SKILL_MODELS = {
     "intro": os.path.join(MODEL_DIR, "pokemon_skill_intro_best.zip"),
     "stairs": os.path.join(MODEL_DIR, "pokemon_skill_stairs_best.zip"),

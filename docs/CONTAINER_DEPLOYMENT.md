@@ -1,24 +1,29 @@
 # PKMAI container deployment
 
-All containers use normal Docker networking. PKMAI's network-facing services bind to host ports on the private VPN interface; do not publish them as `0.0.0.0`.
+The current rollout architecture is Ray-free: the brain learns batches uploaded
+by independent workers. The authenticated cluster master is the only required
+network endpoint for workers. Bind user-facing services only to loopback or a
+private VPN interface; never publish them as `0.0.0.0`.
 
 ## Containers and host ports
 
 | Container | Role | Host port(s) |
 |---|---|---|
 | `pkmai-web` | Dashboard | `8001 -> 8000` |
-| `pkmai-cluster-master` | Authenticated worker registry | `8765` |
-| `pkmai-cluster-brain` | Ray head / PPO learner | `6379`, `8265`, `10001-10003`, `11000-11100` |
-| `pkmai-cluster-worker` | Ray rollout node | `10001-10003`, `11000-11100` on the worker host |
+| `pkmai-cluster-master` | Authenticated worker registry and rollout inbox | `8765` |
+| `pkmai-cluster-brain` | Dynamic PPO batch learner | no published port |
+| `pkmai-cluster-worker` | Independent rollout uploader | outbound access to master only |
 | `pkmai-trainer` | Legacy local SB3 trainer | no published port |
 
 ## VPS / Linux brain host
 
-Use `compose.yaml`. Replace the sample VPN host IP if your site uses another address.
+Use `compose.yaml`. Set the host variables when using a remote VPN deployment.
 
 ```bash
 git checkout sascha
 git pull --ff-only origin sascha
+export PKMAI_CLUSTER_HOST=10.10.15.1
+export PKMAI_WEB_HOST=10.10.15.1
 docker compose --profile trainer build trainer
 docker compose --profile web up -d web
 docker compose --profile cluster up -d cluster-master cluster-brain
@@ -26,14 +31,47 @@ docker compose --profile cluster up -d cluster-master cluster-brain
 
 Dashboard: `http://10.10.15.1:8001/`
 
-Firewall: allow the Ray and master ports only from trusted VPN subnets. Do not expose them through a public interface.
+Firewall: allow the master port only from trusted VPN subnets. Do not expose it through a public interface.
+
+## Local Windows Docker Desktop host: ten trainers
+
+For an all-local rollout pool, use the default loopback host (`127.0.0.1`) and
+the local private ROM/integration files. `cluster-worker` intentionally has no
+fixed container name or worker ID, so Compose can scale it into ten independent
+emulator workers.
+
+```bash
+docker compose --profile cluster --profile cluster-local-worker build cluster-master cluster-brain cluster-worker
+docker compose --profile cluster --profile cluster-local-worker up -d \
+  --scale cluster-worker=10 \
+  cluster-master cluster-brain cluster-worker
+```
+
+The expected CPU reservation is 11.25 CPUs: ten one-CPU rollout workers, one
+brain CPU, and the master. Docker Desktop must be configured with at least 12
+CPUs and enough memory for ten 1 GiB worker limits plus the 2 GiB brain limit.
+
+Verify that all workers have independent identities and actively upload
+rollouts:
+
+```bash
+docker compose --profile cluster --profile cluster-local-worker ps
+docker compose --profile cluster --profile cluster-local-worker logs --tail 50 cluster-worker
+curl -fsS http://127.0.0.1:8765/health
+```
+
+`workers_online` must reach `10`; brain logs must show increasing
+`policy_version` and `timesteps`. Stop the local pool with:
+
+```bash
+docker compose --profile cluster --profile cluster-local-worker down
+```
 
 ## VPS / Linux remote worker
 
 Use `compose.remote-worker.yaml` and an untracked `.worker.env`:
 
 ```text
-PKMAI_RAY_ADDRESS=10.10.15.1:6379
 PKMAI_WORKER_HOST_IP=<worker VPN host IP>
 PKMAI_CLUSTER_MASTER_URL=http://10.10.15.1:8765
 PKMAI_WORKER_ID=<unique worker name>
@@ -70,9 +108,10 @@ docker compose --env-file .worker.env -f compose.remote-worker.yaml up -d worker
 docker logs -f pkmai-cluster-worker
 ```
 
-The brain uses a configurable pool of 64 pending Ray env-runners by default. Ray schedules them only when worker CPUs are available, so new remote workers can join without changing code. To choose another upper bound before a controlled brain restart, set `PKMAI_CLUSTER_ENV_RUNNERS` in the brain host environment.
-
-The worker has `restart: unless-stopped` and exits when its local Raylet dies, so Docker reconnects it to the current brain head. The worker must be able to reach the brain host ports `6379`, `8765`, `10001-10003` and `11000-11100` over the VPN. Do not publish these ports to a public interface.
+The worker has `restart: unless-stopped`; it repeatedly loads the current policy,
+collects rollouts, and uploads batches to the master. Its only required remote
+reachability is the master port `8765` over the VPN. Do not publish it to a
+public interface.
 
 ## Windows worker
 

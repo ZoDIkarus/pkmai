@@ -26,7 +26,7 @@ services:
     volumes:
       - ./runtime:/app/runtime
     ports:
-      - "10.10.15.1:8001:8000"
+      - "${PKMAI_WEB_HOST:-127.0.0.1}:8001:8000"
     cpus: 0.25
     mem_limit: 256m
     memswap_limit: 512m
@@ -38,7 +38,7 @@ services:
     profiles: ["cluster"]
     entrypoint: ["python", "-u", "src/cluster_master.py"]
     environment:
-      PKMAI_CLUSTER_HOST: 10.10.15.1
+      PKMAI_CLUSTER_HOST: "${PKMAI_CLUSTER_HOST:-127.0.0.1}"
       PKMAI_CLUSTER_PORT: "8765"
     volumes:
       - ./runtime:/app/runtime
@@ -70,16 +70,14 @@ services:
 
   cluster-worker:
     image: pkmai-trainer:local
-    container_name: pkmai-cluster-worker
     profiles: ["cluster-local-worker"]
     entrypoint: ["bash", "scripts/start_cluster_worker.sh"]
     environment:
-      RAY_ADDRESS: 10.10.15.1:6379
-      RAY_NODE_IP: 10.10.15.1
-      PKMAI_CLUSTER_MASTER_URL: http://10.10.15.1:8765
+      PKMAI_CLUSTER_MASTER_URL: "http://${PKMAI_CLUSTER_HOST:-127.0.0.1}:8765"
       PKMAI_CLUSTER_KEY_FILE: /app/runtime/cluster/cluster_key.txt
-      PKMAI_WORKER_ID: ai-server-local-worker
       PKMAI_WORKER_AGENTS: "1"
+    depends_on:
+      - cluster-master
     volumes:
       - ./runtime:/app/runtime:ro
       - ./local:/app/local:ro
@@ -88,4 +86,4 @@ services:
     mem_limit: 1g
     memswap_limit: 2g
     shm_size: 512m
-    restart: "no"
+    restart: unless-stopped

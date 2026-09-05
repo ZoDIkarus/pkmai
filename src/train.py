@@ -42,8 +42,11 @@ SAVE_EVERY_TIMESTEPS = 250_000
 # kaum noch Kaempfe, viel weniger Route-1-Ankuenfte als vorher) - zurueck auf
 # den seit V11 bewaehrten Wert.
 LEARNING_RATE = 7.5e-05
-# 512 x 50 Envs = 25.600 Rollout-Samples, exakt 100 Minibatches à 256.
-PPO_N_STEPS = 512
+# V17.3: 512 -> 256, damit PPO doppelt so oft aktualisiert (haeufigeres,
+# frischeres Feedback bei den langen 12.000-Schritte-Episoden) statt auf
+# einem einzigen sehr grossen Rollout zu sitzen. 256 x 60 Envs = 15.360
+# Rollout-Samples, exakt 60 Minibatches à 256.
+PPO_N_STEPS = 256
 PPO_BATCH_SIZE = 256
 PPO_N_EPOCHS = 4
 PPO_GAMMA = 0.995

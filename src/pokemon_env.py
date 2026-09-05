@@ -107,7 +107,10 @@ class PokemonFireRedEnv(gym.Env):
     # laufen/Menu-Camping. Echte Ziele bleiben um Groessenordnungen staerker
     # (Starter ~1550, neue Map 250, Weltstufe >=600).
     INTRO_STEP_COST = 0.0
-    GAMEPLAY_STEP_COST = 0.0
+    # V17.3: winzige, aber von Null verschiedene Zeitgebuehr - jeder Schritt
+    # kostet minimal, damit Herumstehen/Trippeln nicht mehr strikt neutral
+    # ist. Bleibt Groessenordnungen kleiner als jedes echte Ziel.
+    GAMEPLAY_STEP_COST = -0.001
     INTRO_NOVELTY_REWARD = 2.0
     INTRO_NOVELTY_REWARD_CAP = 20.0
     # Meilenstein-Spezialisten (intro/stairs/exit/starter + full vor dem Starter)
@@ -140,7 +143,12 @@ class PokemonFireRedEnv(gym.Env):
     # A/B-getestet 2026-09-05: ohne Kanten-Reward 396 Steps/Sek, mit 437 -
     # der Reward ist NICHT die FPS-Bremse (eher noch minimal schneller mit).
     # Bleibt aktiv, bringt echten Explorationswert ohne Performance-Kosten.
-    NEW_EDGE_REWARD = 1.0
+    # V17.3: explizite zwei Stufen statt eines Multiplikators - "im Run"
+    # (bereits bekannte Kante, aber neu fuer diesen Agenten/diese Episode)
+    # gibt jetzt immer denselben festen kleinen Wert, unabhaengig vom
+    # globalen Betrag.
+    NEW_EDGE_REWARD = 2.0
+    EPISODE_EDGE_REWARD = 0.05
     NEW_MAP_REWARD = 500.0
     EPISODE_NEW_MAP_REWARD = 25.0
     NEW_GLOBAL_DEPTH_REWARD = 1000.0
@@ -215,10 +223,12 @@ class PokemonFireRedEnv(gym.Env):
     # laufen normal weiter, nur die Auszahlung pausiert).
     POST_WIPE_REWARD_COOLDOWN_STEPS = 40
     WILD_TRAINING_MAPS = {(3, 19), (3, 20), (1, 0)}
-    # Beliebige Warps sind reine Kartendaten, niemals Reward. Nur explizit
-    # bestaetigte Story-Uebergaenge (Treppe/Ausgang/Stage) werden einmalig
-    # in ihren eigenen Bloecken belohnt.
-    NEW_TRANSITION_REWARD = 0.0
+    # V17.3: Warps/Tueren waren bisher komplett neutral ("reine Kartendaten").
+    # Jetzt zweistufig wie Kanten/Maps: global (fleet-weit erster Fund eines
+    # bestimmten Warps ueberhaupt) vs. im Run (schon bekannt, aber neu fuer
+    # diesen Agenten/diese Episode).
+    NEW_TRANSITION_REWARD = 100.0
+    EPISODE_TRANSITION_REWARD = 10.0
     REPLAY_MAP_REWARD = 25.0
     REPLAY_EDGE_REWARD = 0.0
     REPLAY_TRANSITION_REWARD = 0.0
@@ -4414,10 +4424,10 @@ class PokemonFireRedEnv(gym.Env):
                             self.learning_seen_edges.add(edge_key)
                             if (
                                 edge_key in self.persistent_known_edges
-                                and self.REPLAY_EDGE_REWARD
+                                and self.EPISODE_EDGE_REWARD
                             ):
-                                reward += self.REPLAY_EDGE_REWARD
-                                reward_events.append(f"replay_edge:+{self.REPLAY_EDGE_REWARD:.2f}")
+                                reward += self.EPISODE_EDGE_REWARD
+                                reward_events.append(f"replay_edge:+{self.EPISODE_EDGE_REWARD:.2f}")
                         visit_count = self.episode_edge_visits.get(
                             edge_key, 0
                         ) + 1
@@ -4452,7 +4462,7 @@ class PokemonFireRedEnv(gym.Env):
                                 # Edge ist global bekannt, aber fuer diesen
                                 # Agent erstmals gelaufen. Positives Imitations-
                                 # signal statt den richtigen Weg neutral zu machen.
-                                local_edge_reward = self.NEW_EDGE_REWARD * 0.20
+                                local_edge_reward = self.EPISODE_EDGE_REWARD
                                 if local_edge_reward:
                                     reward += local_edge_reward
                                     reward_events.append(
@@ -4554,8 +4564,15 @@ class PokemonFireRedEnv(gym.Env):
 
                     if transition_key not in self.learning_seen_transitions:
                         self.learning_seen_transitions.add(transition_key)
-                        if transition_key in self.persistent_known_transitions:
-                            reward_events.append("transition_replay_neutral:+0")
+                        if (
+                            transition_key in self.persistent_known_transitions
+                            and self.EPISODE_TRANSITION_REWARD
+                        ):
+                            reward += self.EPISODE_TRANSITION_REWARD
+                            reward_events.append(
+                                "replay_warp:"
+                                f"+{self.EPISODE_TRANSITION_REWARD:.2f}"
+                            )
                     if (
                         transition_key
                         not in self.persistent_known_transitions
@@ -4567,11 +4584,24 @@ class PokemonFireRedEnv(gym.Env):
                         self._invalidate_navigation_cache()
                         self.steps_since_new_edge = 0
 
-                        self._claim_shared(
+                        if self._claim_shared(
                             self.shared_transitions,
                             transition_key
-                        )
-                        reward_events.append("transition_observed_neutral:+0")
+                        ):
+                            if self.NEW_TRANSITION_REWARD:
+                                reward += self.NEW_TRANSITION_REWARD
+                            reward_events.append(
+                                "new_warp_global:"
+                                f"+{self.NEW_TRANSITION_REWARD:.2f}"
+                            )
+                        elif self.EPISODE_TRANSITION_REWARD:
+                            # Warp ist global bekannt, aber fuer diesen Agent
+                            # erstmals ueberhaupt genutzt.
+                            reward += self.EPISODE_TRANSITION_REWARD
+                            reward_events.append(
+                                "new_warp_local:"
+                                f"+{self.EPISODE_TRANSITION_REWARD:.2f}"
+                            )
 
                         # Sofort fuer alle lokalen Zielabfragen sichtbar.
                         self.shared_transition_snapshot.add(
@@ -4663,12 +4693,12 @@ class PokemonFireRedEnv(gym.Env):
             else:
                 self.stuck_counter += 1
 
+            # V17.3: durchgehend zunehmend negativ statt drei fester Sprungstufen
+            # (0.03/0.12/0.40) - der Druck, aus einer Schleife auszubrechen,
+            # waechst jetzt jeden Schritt weiter statt in Spruengen, bleibt an
+            # denselben Eckpunkten (60/180/400/900 Schritte) aber vergleichbar.
             if in_battle == 0 and self.stuck_counter >= 60:
-                reward -= 0.03
-            if in_battle == 0 and self.stuck_counter >= 180:
-                reward -= 0.12
-            if in_battle == 0 and self.stuck_counter >= 400:
-                reward -= 0.40
+                reward -= 0.001 * (self.stuck_counter - 59)
 
             if in_battle == 0 and self.stuck_counter >= 900:
                 truncated = True

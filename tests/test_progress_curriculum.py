@@ -28,10 +28,12 @@ def bare_env(**overrides):
 
 
 class WorldStageTests(unittest.TestCase):
-    def test_time_is_neutral_but_new_edges_reward_exploration(self):
+    def test_time_has_a_tiny_cost_but_new_edges_reward_exploration(self):
         self.assertEqual(PokemonFireRedEnv.INTRO_STEP_COST, 0.0)
-        self.assertEqual(PokemonFireRedEnv.GAMEPLAY_STEP_COST, 0.0)
-        self.assertEqual(PokemonFireRedEnv.NEW_EDGE_REWARD, 1.0)
+        # V17.3: winzige, aber von Null verschiedene Zeitgebuehr statt
+        # strikt neutraler Bewegung.
+        self.assertEqual(PokemonFireRedEnv.GAMEPLAY_STEP_COST, -0.001)
+        self.assertEqual(PokemonFireRedEnv.NEW_EDGE_REWARD, 2.0)
 
     def test_arbitrary_interiors_never_increase_stage(self):
         env = bare_env(visited_maps={(3, 0), (4, 0), (4, 1), (5, 0)})

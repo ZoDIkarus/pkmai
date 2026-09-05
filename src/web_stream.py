@@ -2514,11 +2514,14 @@ header{padding:6px!important;gap:4px!important}
             '3,2': [1410, 100],    // Pewter/Marmoria City (Schaetzung, noch keine Daten)
 
             // Innenraeume: ringsum in freien Feldern neben der jeweiligen
-            // Stadt verteilt statt auf ihr gestapelt.
+            // Stadt verteilt statt auf ihr gestapelt. Rivalenhaus weiter
+            // nach Sueden, Eichs Labor bewusst NICHT noch weiter unten als
+            // das Rivalenhaus (gleiche Reihe) - der Platz direkt suedlich
+            // davon ist fuer die spaetere Wasser-Route reserviert.
             '4,0': [1190, 2320],   // Alabastia - Reds Haus, Erdgeschoss (West)
             '4,1': [1190, 2170],   // Alabastia - Reds Haus, Obergeschoss
-            '4,2': [1630, 2320],   // Alabastia - Haus des Rivalen (Ost)
-            '4,3': [1410, 2540],   // Alabastia - Professor Eichs Labor (Sued)
+            '4,2': [1650, 2470],   // Alabastia - Haus des Rivalen (Ost, Sued)
+            '4,3': [1410, 2470],   // Alabastia - Professor Eichs Labor (Mitte, gleiche Reihe wie Rivalenhaus)
 
             // Vertania-Gebaeude um die (jetzt verschobene) Stadt herum -
             // gleiche relative Position wie zuvor, nur mitverschoben.

@@ -1135,6 +1135,9 @@ def main():
         {"reason": "Noch kein Reward-Schritt", "amount": 0.0}
     ]
     watcher_has_reward_event = False
+    # V17.2: wie bei pokemon_env.py rollierendes Log statt nur der Events
+    # des einen Steps, in dem die inst_120.json zufaellig geschrieben wird.
+    watcher_recent_reward_events = []
     watcher_seen_coords = set()
     watcher_visited_maps = set()
     watcher_last_level = 0
@@ -2023,6 +2026,12 @@ def main():
 
             watcher_episode_reward += watcher_step_reward
             watcher_has_reward_event = bool(watcher_reward_events)
+            if watcher_has_reward_event:
+                watcher_recent_reward_events.extend(
+                    f"{route_steps}:{event['reason']}:{event['amount']:+.2f}"
+                    for event in watcher_reward_events
+                )
+                watcher_recent_reward_events = watcher_recent_reward_events[-40:]
 
             if WATCHER_REWARD_DEBUG and (
                 watcher_has_reward_event
@@ -2126,6 +2135,7 @@ def main():
                 watcher_enemy_party_cache = []
                 watcher_enemy_hp_min = {}
                 watcher_last_enemy_seen_step = -999
+                watcher_recent_reward_events = []
                 watcher_episode_start_route_step = route_steps
                 watcher_stuck_counter = 0
                 watcher_room_steps = 0
@@ -2216,7 +2226,7 @@ def main():
                     "reward": round(watcher_episode_reward, 2),
                     "step_reward": round(watcher_step_reward, 4),
                     "reward_has_event": bool(watcher_has_reward_event),
-                    "reward_events": watcher_reward_events,
+                    "reward_events": watcher_recent_reward_events,
                     "stuck_counter": watcher_stuck_counter,
                     "level": p1_level,
                     "party": watcher_party,

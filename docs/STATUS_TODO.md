@@ -7,7 +7,52 @@
 
 ---
 
-## 🆕 OFFENE TODOs AUS DER V17-SESSION (2026-09-05, nachts) — ZUERST LESEN
+## 🆕 V17.2-SESSION (2026-09-05, tagsüber) — ZUERST LESEN
+
+Aufbauend auf der V17/V17.1-Nachtsession (siehe Block darunter — die meisten
+Punkte dort sind inzwischen erledigt, im Einzelnen unten markiert). Änderungen
+sind vollständig im README ("Current release") beschrieben, hier nur die
+Kurzfassung + was noch offen ist.
+
+**Erledigt in dieser Session:**
+- LEARNING_RATE-Experiment (`0.0005`) nach 2+ Mio. Steps ohne Fortschritt als
+  gescheitert bewertet, zurück auf `7.5e-05`.
+- `GLOBAL_STAGE_RECORD_REWARD` (+1000, einmalig fleet-weit pro neuer
+  world_stage-Tiefe) ergänzt — `_claim_global_depth()` gab es vorher nur in
+  Statistiken, nie als Reward.
+- Artenvielfalt-Fangreward (+1000 Erstfang je Spezies fleet-weit, -500 pro
+  Wiederholung derselben Art) über neues `shared_species`-Manager-Dict.
+- Watcher: veraltete "teurer Reset"-Anti-Loop-Gnadenfrist (bis 8000 Schritte,
+  aus der Kaltstart-Ära) auf 900/1800 Schritte zurückgesetzt — Watcher-
+  Episoden liefen vorher unbegrenzt lange weiter (beobachtet: 51819
+  Route-Schritte ohne Reset).
+- ✅ **Schiggy-Sprite im Watcher** war bereits aus einer früheren Session
+  behoben (Item unten im V17-Block ist veraltet).
+- ✅ **Watcher-Savestate-Reward-Bug** (intro/stairs/left_house-Flags) war
+  bereits aus einer früheren Session behoben (Item unten im V17-Block ist
+  veraltet).
+- Rollierendes Reward-Event-Log (`recent_reward_events`, ~40 Einträge) statt
+  des bisherigen Ein-Schritt-Schnappschusses beim Anklicken eines Agenten im
+  Dashboard — betraf sowohl `pokemon_env.py` als auch `watch.py`.
+- Web-Dashboard-Weltkarte repariert: fester statt frei zoombarer Zoom, an die
+  aufgedeckte Welt gekoppelte, automatisch mitwachsende Pan-Grenze (200
+  Kacheln unsichtbarer Rand), einklappbares Detail-Panel (behob "links
+  abgeschnitten" — Ursache war eine zu kleine feste `setMaxBounds`-Box, die
+  Leaflet zwang, bis zum Minimalzoom herauszuzoomen).
+- Kompletter Reset (Backup in `brain_backups/V17.2_full_reset_*`) + Neustart.
+
+**Weiterhin offen (unverändert aus der V17-Nacht-Session):**
+- 🔴 Item-/Pokeball-Pickup-Reward (~+15, RAM-Erkennung noch nicht verifiziert)
+- 🔴 Pokeball-Kauf-Reward (Geld-RAM-Adresse für deutsche ROM noch nicht
+  verifiziert, `task_3e5cd4bf`)
+- 🟡 Dashboard-Hintergrundfarbe "zu braun" — Ort im UI weiterhin ungeklärt
+- 🟡 Countdown "noch X Steps bis Timeout" je Agent — noch nicht umgesetzt
+- 🟡 Trainer-Sprite-Pfad-Nachbau + Spielernamen für späteres Online-Training,
+  feste (nicht zoombare) Kartengröße — von Nutzer bewusst zurückgestellt
+
+---
+
+## 🕐 OFFENE TODOs AUS DER V17-SESSION (2026-09-05, nachts)
 
 Diese Punkte sind bewusst NICHT mehr in derselben Session umgesetzt worden,
 damit der frische V17-Trainingslauf (Savestate-Start ab Oaks Labor, dauerhafter

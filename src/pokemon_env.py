@@ -489,6 +489,11 @@ class PokemonFireRedEnv(gym.Env):
         self.learning_seen_edges = set()
         self.learning_seen_transitions = set()
         self.recent_path = []
+        # V17.2: Dashboard-Klick auf einen Agenten zeigte bisher nur die
+        # reward_events des einen Steps, in dem die inst_XX.json zufaellig
+        # geschrieben wurde (alle 80 Steps) - fast immer leer. Stattdessen
+        # rollierendes Log der letzten tatsaechlichen Reward-Ereignisse.
+        self.recent_reward_events = []
 
         # Persistentes Explorationsgedaechtnis (bleibt ueber Episoden erhalten).
         self.persistent_known_edges = set()
@@ -2586,6 +2591,11 @@ class PokemonFireRedEnv(gym.Env):
         self.learning_seen_edges = set()
         self.learning_seen_transitions = set()
         self.recent_path = []
+        # V17.2: Dashboard-Klick auf einen Agenten zeigte bisher nur die
+        # reward_events des einen Steps, in dem die inst_XX.json zufaellig
+        # geschrieben wurde (alle 80 Steps) - fast immer leer. Stattdessen
+        # rollierendes Log der letzten tatsaechlichen Reward-Ereignisse.
+        self.recent_reward_events = []
         self.current_reward = 0.0
         self.last_exploration_coord = None
         self.last_exploration_map = None
@@ -4716,6 +4726,12 @@ class PokemonFireRedEnv(gym.Env):
         info["outdoor_confirm_reads"] = self.outdoor_confirm_reads
         info["last_stage_timeout"] = self.last_stage_timeout
 
+        if reward_events:
+            self.recent_reward_events.extend(
+                f"{self.route_steps}:{ev}" for ev in reward_events
+            )
+            self.recent_reward_events = self.recent_reward_events[-40:]
+
         # Auch sehr kurze Spezialisten-Episoden publizieren. Sonst bleibt im
         # Dashboard nach einem Neustart die alte Party/Rolle stehen, wenn der
         # neue Lauf schon vor dem regulaeren 80-Step-Punkt endet.
@@ -4825,7 +4841,7 @@ class PokemonFireRedEnv(gym.Env):
                     ),
                     "curriculum_states": len(self.saved_milestones),
                     "milestone_saved": milestone_saved,
-                    "reward_events": reward_events,
+                    "reward_events": self.recent_reward_events,
                     "persistent_exploration": {
                         "known_edges": len(self.persistent_known_edges),
                         "known_maps": len(self.persistent_known_maps),

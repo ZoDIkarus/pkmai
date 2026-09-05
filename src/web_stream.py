@@ -1796,8 +1796,10 @@ def index():
         .detail-panel {
             position: absolute;
             left: 20px;
-            bottom: 20px;
+            top: 20px;
             width: 390px;
+            max-height: calc(100% - 40px);
+            overflow-y: auto;
             background: rgba(21,24,33,0.94);
             border: 1px solid #232738;
             border-radius: 10px;
@@ -1806,7 +1808,16 @@ def index():
             box-shadow: 0 8px 24px rgba(0,0,0,0.6);
             backdrop-filter: blur(8px);
         }
-        .detail-title { display:flex; justify-content:space-between; align-items:center; color:#00e676; font-weight:700; margin-bottom:8px; }
+        /* V17.2: verdeckte bisher dauerhaft die linke Kartenhaelfte ("links
+           abgeschnitten"). Eingeklappt bleibt nur die Titelzeile sichtbar. */
+        .detail-panel.collapsed { max-height: none; overflow: visible; width: auto; }
+        .detail-panel.collapsed > *:not(.detail-title) { display: none; }
+        .detail-collapse-btn {
+            background: #232738; color: #aaa; border: none; border-radius: 6px;
+            width: 22px; height: 22px; cursor: pointer; font-size: 12px; line-height: 1;
+        }
+        .detail-collapse-btn:hover { color: #fff; background: #2f344a; }
+        .detail-title { display:flex; justify-content:space-between; align-items:center; gap:8px; color:#00e676; font-weight:700; margin-bottom:8px; }
         .detail-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(70px,1fr)); gap:6px; margin-bottom:8px; }
         .detail-stat { background:#0e1017; border:1px solid #232738; border-radius:6px; padding:6px; text-align:center; }
         .detail-stat .v { font-size:13px; font-weight:700; color:#fff; }
@@ -2127,7 +2138,8 @@ def index():
         <div class="detail-panel" id="detail-panel">
             <div class="detail-title">
                 <span id="detail-name">Watcher</span>
-                <span id="detail-room" style="font-size:9px;color:#777;">-</span>
+                <span id="detail-room" style="font-size:9px;color:#777;flex:1">-</span>
+                <button class="detail-collapse-btn" id="detail-collapse-btn" onclick="toggleDetailPanel()" title="Ein-/ausklappen (Karte freigeben)">▾</button>
             </div>
             <div class="detail-stats">
                 <div class="detail-stat"><div class="v" id="detail-steps">0</div><div class="k">Steps</div></div>
@@ -2251,6 +2263,27 @@ def index():
             updateDashboard();
         }
 
+        // V17.2: das Detail-Panel deckte dauerhaft die linke Kartenhaelfte
+        // ab. Eingeklappt bleibt nur die Titelzeile, Karte ist voll sichtbar.
+        function applyDetailPanelCollapsed(collapsed) {
+            const panel = document.getElementById('detail-panel');
+            const btn = document.getElementById('detail-collapse-btn');
+            if (panel) panel.classList.toggle('collapsed', collapsed);
+            if (btn) btn.textContent = collapsed ? '▸' : '▾';
+        }
+        let detailPanelCollapsed = false;
+        try {
+            detailPanelCollapsed = localStorage.getItem('pkmai_detail_collapsed') === '1';
+        } catch (_) {}
+        function toggleDetailPanel() {
+            detailPanelCollapsed = !detailPanelCollapsed;
+            applyDetailPanelCollapsed(detailPanelCollapsed);
+            try {
+                localStorage.setItem('pkmai_detail_collapsed', detailPanelCollapsed ? '1' : '0');
+            } catch (_) {}
+        }
+        applyDetailPanelCollapsed(detailPanelCollapsed);
+
         // ---------- Agenten-Filter ----------
         const agentFilter = { role:'', map:'', starter:'', stage:'', sort:'' };
 
@@ -2324,23 +2357,56 @@ def index():
             fill('af-stage', new Set(instances.map(i => String(i.story_stage || '')).filter(Boolean)));
         }
 
+        // V17.2: Karte hatte einen festen setMaxBounds-Kasten (4000x4000
+        // Einheiten), der bei jedem Container-Seitenverhaeltnis kleiner ist
+        // als der fitBounds-Zielausschnitt. Leaflet erzwingt dann, dass die
+        // gesamte maxBounds-Flaeche NIE kleiner als der sichtbare Viewport
+        // ist - und zoomt dafuer bis auf minZoom (-3) heraus. Ergebnis: die
+        // eigentliche Karte schrumpft auf ein paar Pixel in der Bildmitte,
+        // alles drumherum wirkt "abgeschnitten"/leer. Fix: fester, nicht
+        // veraenderbarer Zoom (kein Herauszoomen mehr moeglich) + eine
+        // maxBounds-Box, die sich an der tatsaechlich aufgedeckten Welt
+        // orientiert statt an einem geratenen Fixwert.
+        const FIXED_ZOOM = 0;
+        const TILE_UNIT = 12;
+        const MAP_MARGIN_TILES = 200;
+        const MAP_MARGIN_UNITS = MAP_MARGIN_TILES * TILE_UNIT;
+
         const map = L.map('map-view', {
             crs: L.CRS.Simple,
-            minZoom: -3,
-            maxZoom: 3,
-            zoomControl: true,
+            minZoom: FIXED_ZOOM,
+            maxZoom: FIXED_ZOOM,
+            zoomControl: false,
+            scrollWheelZoom: false,
+            doubleClickZoom: false,
+            touchZoom: false,
+            boxZoom: false,
+            keyboard: false,
+            dragging: true,
+            inertia: true,
             attributionControl: false
         });
         const bounds = [[0, 0], [3000, 3000]];
-        map.setMaxBounds([[-500,-500],[3500,3500]]);
-        map.fitBounds([[900, 1100], [2600, 2050]]);
+        // Start = Alabastia/Oaks Labor (der Savestate-Startpunkt jeder
+        // Episode), nicht irgendein geratener Punkt - dort haelt sich die
+        // Flotte zu Beginn eines Laufs am meisten auf.
+        const START_CENTER = [680, 1500];
+        map.setView(START_CENTER, FIXED_ZOOM);
+
+        // Waechst automatisch mit, sobald Agenten neue Maps/Kanten aufdecken
+        // (siehe recomputeDynamicMapBounds weiter unten) - bis dahin ein
+        // Startwert rund um Alabastia/Route 1, damit man sich nach dem
+        // Verschieben nie "verlaufen" kann, bevor die erste Live-Antwort da ist.
+        map.setMaxBounds([
+            [START_CENTER[0] - MAP_MARGIN_UNITS - 600, START_CENTER[1] - MAP_MARGIN_UNITS - 300],
+            [START_CENTER[0] + MAP_MARGIN_UNITS + 600, START_CENTER[1] + MAP_MARGIN_UNITS + 300]
+        ]);
 
         // Beim ersten Laden ist der Container u.U. noch 0px hoch (CSS/Layout
         // noch nicht fertig) -> Leaflet rendert dann eine 0x0-Karte. Nach dem
-        // Layout neu vermessen und einpassen. Wichtig fuer Handy.
+        // Layout neu vermessen. Wichtig fuer Handy.
         function _initMapSize() {
             map.invalidateSize();
-            map.fitBounds([[900, 1100], [2600, 2050]]);
         }
         window.addEventListener('load', () => {
             _initMapSize();
@@ -2423,6 +2489,51 @@ def index():
             const px = base[0] + (x * 12);
             const py = base[1] + (y * 12);
             return [3000 - py, px];
+        }
+
+        // V17.2: Statt einer geratenen Fixgroesse wird die pannbare Flaeche
+        // aus den tatsaechlich bekannten Kanten/Tiles/Agentenpositionen neu
+        // berechnet - mit MAP_MARGIN_TILES (200) Rand drumherum, den man
+        // sieht, aber nicht als Inhalt, nur zum Verschieben. So kann man die
+        // Karte nie mehr komplett aus dem Bild schieben (musste man vorher
+        // "suchen"), und der Rand waechst automatisch mit, sobald die Flotte
+        // eine neue Map aufdeckt.
+        function recomputeDynamicMapBounds() {
+            let b = null;
+            const extend = (latlng) => {
+                b = b ? b.extend(latlng) : L.latLngBounds(latlng, latlng);
+            };
+            const knownKey = (bank, mapId) => MAP_OFFSETS.hasOwnProperty(
+                Number(bank) + ',' + Number(mapId)
+            );
+
+            (latestGlobalMapping.edges || []).forEach(e => {
+                if (!Array.isArray(e) || e.length !== 6) return;
+                if (!knownKey(e[0], e[1])) return;
+                extend(getLeafletCoords(e[0], e[1], e[2], e[3]));
+                extend(getLeafletCoords(e[0], e[1], e[4], e[5]));
+            });
+            (latestGlobalMapping.tiles || []).forEach(t => {
+                if (!Array.isArray(t) || t.length !== 4) return;
+                if (!knownKey(t[0], t[1])) return;
+                extend(getLeafletCoords(t[0], t[1], t[2], t[3]));
+            });
+            (latestInstances || []).forEach(i => {
+                if (!knownKey(i.bank, i.map)) return;
+                extend(getLeafletCoords(i.bank, i.map, i.x, i.y));
+            });
+
+            if (!b || !b.isValid()) {
+                // Noch keine Live-Daten da - Startbereich Alabastia/Route 1.
+                extend(getLeafletCoords(3, 0, 0, 0));
+                extend(getLeafletCoords(3, 19, 20, 40));
+            }
+
+            const sw = b.getSouthWest(), ne = b.getNorthEast();
+            map.setMaxBounds([
+                [sw.lat - MAP_MARGIN_UNITS, sw.lng - MAP_MARGIN_UNITS],
+                [ne.lat + MAP_MARGIN_UNITS, ne.lng + MAP_MARGIN_UNITS]
+            ]);
         }
 
         async function updateMapperMapOverlays(force=false) {
@@ -3596,6 +3707,7 @@ def index():
                 setLiveMap('live-maps', Number(latestGlobalMapping.maps.length).toLocaleString());
                 setLiveMap('live-warps', '—');
                 setLiveMap('live-edges', Number(latestGlobalMapping.edges.length).toLocaleString());
+                recomputeDynamicMapBounds();
 
                 const signature =
                     `${latestGlobalMapping.tiles.length}:` +

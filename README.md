@@ -6,7 +6,70 @@ PKMAI is an experimental reinforcement-learning project that trains a PPO agent 
 
 ## Current release
 
-**V16 — Clean Full-Brain Generations** (2026-09-04)
+**V17.2 — Savestate-Start, Fleet-Rekorde, Artenvielfalt** (2026-09-05)
+
+Seit V17 beginnt jede Episode nicht mehr am kalten Spielanfang, sondern an
+einem festen, manuell erspielten Savestate (`StartGame.state`) kurz nach
+Intro, Namensvergabe und Starterwahl (PWhiddy-Stil). Das Nachspielen der
+~10-minütigen Introsequenz entfällt für jede der 60 parallelen Umgebungen bei
+jedem Reset — der gesamte Trainingshorizont geht in echte Weltexploration statt
+in wiederholtes Intro-Abspulen.
+
+### Was sich seit V16 geändert hat
+
+- **Savestate statt Kaltstart:** `env.load_state("StartGame", ...)` ersetzt den
+  Kaltboot-Snapshot in `pokemon_env.py` und `watch.py`. Intro-/Treppen-/
+  Hausausgangs- und Paket-Flags starten als bereits erledigt, damit kein
+  Reset mehr fälschlich am alten Intro-Timeout (1800 Schritte) abbricht.
+- **60 parallele Umgebungen** (`NUM_ENVS`), synchron mit `PPO_N_STEPS=512` →
+  30.720 Samples/Update. `ACTION_HOLD_FRAMES=9` / `ACTION_RELEASE_FRAMES=5`
+  (empirisch gegen 12/6 verifiziert: identische Bewegungszuverlässigkeit,
+  +7–13 % Steps/Sekunde).
+- **Persistenter, nicht farmbarer Kanten-Reward:** `NEW_EDGE_REWARD=1.0` für
+  jede fleet-weit erstmals gelaufene Kachel-Kante (`_claim_shared`, genau
+  einmal über alle Agenten und Episoden). Bereits bekannte Kanten geben dem
+  einzelnen Agenten höchstens einmal `+0.20` (Imitationssignal), nie erneut.
+- **Fleet-Rekord-Bonus (neu in V17.2):** `GLOBAL_STAGE_RECORD_REWARD=1000`.
+  Wer als Erster im gesamten Brain einen neuen `world_stage`-Tiefenrekord
+  erreicht (Route 2, Vertania-Wald, Marmoria, erster Orden), bekommt diesen
+  Bonus einmalig fleet-weit — zusätzlich zum bestehenden, pro Episode und
+  Agent wiederholbaren `NEW_GLOBAL_DEPTH_REWARD=1000 × Stufenanstieg`.
+- **Artenvielfalt-Fangbonus (neu in V17.2):** erste je Spezies fleet-weit
+  gefangene Pokémon geben `+1000` (`shared_species`, ebenfalls `_claim_shared`-
+  geschützt); jeder weitere Fang derselben Art kostet `-500`. Verhindert
+  Farmen häufiger Wildpokémon (Taubsi, Raupy) und belohnt seltene Funde wie
+  Pikachu im Vertania-Wald.
+- **Kampf-Rebalance:** `ENEMY_DAMAGE_REWARD_PER_HP=0.15`,
+  `ENEMY_FAINT_REWARD=10`, `BATTLE_WIN_REWARD=15` (von 0,5/30/50 gekürzt,
+  damit Dauerkämpfen im Wildgras Exploration nicht mehr strukturell schlägt).
+  `FLED_BATTLE_PENALTY=-25`, kompletter Party-K.O. `-100` und sofortiges
+  Episodenende (auch direkt beim Kampfende erkannt, nicht erst beim
+  nächsten HP-Sample — verhindert einen Exploit, bei dem der automatische
+  Pokémon-Center-Teleport nach einem Wipe als "neue Map" belohnt wurde).
+- **Reproduzierbarkeits-Schwelle:** `STAGE_RELIABILITY_FRACTION=0.12` — ein
+  neuer world_stage zählt für Champion-Aufstiege erst, wenn mindestens 12 %
+  aller vollständigen Läufe ihn erreichen. Verhindert Champion-Beförderungen
+  durch einen einzelnen glücklichen Ausreißer-Run.
+- **Watcher-Anti-Loop korrigiert:** die alten, für teure Kaltstart-Resets
+  gedachten Gnadenfristen (bis zu 8000 Schritte) ließen den sichtbaren
+  Watcher-Lauf nach dem Savestate-Umbau unbegrenzt weiterlaufen, ohne je zu
+  terminieren. Auf 900/1800 Schritte zurückgesetzt.
+- **Dashboard-Weltkarte repariert:** eine zu klein bemessene feste
+  `setMaxBounds`-Box zwang Leaflet, bis auf den Minimalzoom
+  herauszuzoomen, egal welches Seitenverhältnis der Browser hatte — die
+  Karte war dadurch faktisch unsichtbar ("links abgeschnitten"). Jetzt fester,
+  nicht veränderbarer Zoom (nur noch verschiebbar, nicht mehr zoombar) und
+  eine an die tatsächlich aufgedeckte Welt gekoppelte, automatisch
+  mitwachsende Grenze mit 200 Kacheln unsichtbarem Rand — die Karte lässt
+  sich dadurch nie mehr komplett aus dem Bild schieben.
+- **Rollierendes Reward-Event-Log:** ein Klick auf einen Agenten im
+  Dashboard zeigte bisher nur die Reward-Events des einen Schritts, in dem
+  zufällig die Instanzdatei geschrieben wurde (alle 80 Schritte) — fast immer
+  leer. Jetzt ein echtes Log der letzten ~40 tatsächlichen Ereignisse.
+- `LEARNING_RATE=7.5e-05` (ein Experiment mit `0.0005` wurde nach über 2 Mio.
+  Steps ohne Champion-Fortschritt als gescheitert bewertet und zurückgesetzt).
+
+### Vorheriges V16 — Clean Full-Brain Generations (2026-09-04)
 
 V16 beginnt nach einem vollständigen, gesicherten Reset aller alten Modelle,
 Statistiken, Karten- und Curriculum-Daten. Der Stand unmittelbar vor dem Reset
@@ -258,18 +321,23 @@ PPO-Modell und sämtliche Bildkarten liegen ausschließlich unter
 validierten Trainings-Savestates nur für seinen Start und veröffentlicht außer
 seiner Web-Telemetrie nichts in die Daten des Haupt-Learners.
 
-Current PPO settings in V15:
+Current PPO settings in V17.2 (`src/train.py`):
 
 | Setting | Value |
 | --- | ---: |
 | Learning rate | `7.5e-05` |
-| Environments | `32` |
-| Steps per environment | `128` |
-| Rollout size | `4096` |
+| Environments | `60` |
+| Steps per environment | `512` |
+| Rollout size | `30720` |
 | Batch size | `256` |
 | Epochs | `4` |
 | Gamma | `0.995` |
-| Entropy coefficient | `0.05` |
+| GAE lambda | `0.98` |
+| Entropy coefficient | `0.02` |
+
+> Ältere Abschnitte unten (Mapper-Beschreibung, „Adaptive agent roles" mit 120
+> Envs) stammen aus früheren Architekturversionen und sind teils veraltet —
+> maßgeblich sind immer der aktuelle Code und die Angaben oben.
 
 ## Adaptive agent roles
 

@@ -160,14 +160,20 @@ class PokemonFireRedEnv(gym.Env):
     TARGET_STARTER_SPECIES = 7
     STARTER_SPECIES = {1, 4, 7}
     WRONG_STARTER_PENALTY = -500.0
-    # V17.2: Faenge sollen Artenvielfalt lernen statt immer dieselbe haeufige
+    # V17.3: Faenge sollen Artenvielfalt lernen statt immer dieselbe haeufige
     # Spezies (Taubsi/Rattfratz/Raupy) zu wiederholen. Species-ID = Pokedex-
     # Nummer (Gen3-interne SPECIES_-Konstanten entsprechen 1:1 der Nummer fuer
     # alle Kanto/Johto-Spezies, z.B. Pikachu = 25). _claim_shared() zahlt den
-    # grossen Bonus nur einmal ueber die ganze Flotte; jeder weitere Fang
-    # derselben Art kostet danach, statt neutral (0) zu sein.
-    SPECIES_CAUGHT_FIRST_REWARD = 1000.0
-    SPECIES_CAUGHT_DUPLICATE_PENALTY = -500.0
+    # Bonus nur einmal ueber die ganze Flotte; jeder weitere Fang derselben
+    # Art ist danach neutral (0), keine Strafe mehr.
+    SPECIES_CAUGHT_FIRST_REWARD = 100.0
+    SPECIES_CAUGHT_DUPLICATE_PENALTY = 0.0
+    # Pikachu ist im Vertania-Wald selten und nicht der reguelaere Weg
+    # vorwaerts - ein eigener, deutlich groesserer Einmal-Bonus obendrauf,
+    # nur fuer genau diese Art an genau diesem Ort.
+    PIKACHU_SPECIES_ID = 25
+    PIKACHU_FOREST_MAP = (1, 0)
+    PIKACHU_FOREST_CAUGHT_REWARD = 1000.0
     # Kaempfe sind unbegrenzt wiederholbar (Wildgras respawnt), anders als
     # Kanten/Maps/Stufen, die pro Fleet-Leben nur einmal zahlen. Auf dem alten
     # Niveau (0.5/30/50) waere ein Kampf ~80-100 Reward in 20-40 Schritten -
@@ -327,6 +333,13 @@ class PokemonFireRedEnv(gym.Env):
         STAGE_FOREST: 7,
         STAGE_PEWTER: 8,
     }
+    # V17.3: Ankunft in einer echten Stadt zaehlt JEDE Episode, nicht nur
+    # beim allerersten Fleet-Fund - Routen bleiben beim generischen
+    # EPISODE_NEW_MAP_REWARD. Ziel: schneller/haeufiger bis zur naechsten
+    # Stadt vorstossen statt nur beim einmaligen globalen Fund belohnt zu
+    # werden.
+    CITY_MAPS = {STAGE_PALLET, STAGE_VIRIDIAN, STAGE_PEWTER}
+    CITY_EPISODE_REWARD = 100.0
     WORLD_ROLES = ("progress", "battle", "level", "badge", "full")
 
     def __init__(
@@ -3182,11 +3195,29 @@ class PokemonFireRedEnv(gym.Env):
                             f"species_caught_first:{new_species}:"
                             f"+{self.SPECIES_CAUGHT_FIRST_REWARD:.0f}"
                         )
-                    else:
+                    elif self.SPECIES_CAUGHT_DUPLICATE_PENALTY:
                         reward += self.SPECIES_CAUGHT_DUPLICATE_PENALTY
                         reward_events.append(
                             f"species_caught_dup:{new_species}:"
                             f"{self.SPECIES_CAUGHT_DUPLICATE_PENALTY:.0f}"
+                        )
+                    # V17.3: Pikachu ist im Vertania-Wald selten und kein
+                    # Fortschrittsweg - eigener, viel groesserer Einmal-Bonus
+                    # obendrauf, unabhaengig vom generischen Fang-Claim oben
+                    # (eigener Registry-Key "pikachu_forest" statt der
+                    # species_id, damit sich beide Boni nicht gegenseitig
+                    # verbrauchen).
+                    if (
+                        new_species == self.PIKACHU_SPECIES_ID
+                        and (bank, map_id) == self.PIKACHU_FOREST_MAP
+                        and self._claim_shared(
+                            self.shared_species, "pikachu_forest"
+                        )
+                    ):
+                        reward += self.PIKACHU_FOREST_CAUGHT_REWARD
+                        reward_events.append(
+                            "pikachu_forest_first:"
+                            f"+{self.PIKACHU_FOREST_CAUGHT_REWARD:.0f}"
                         )
                 else:
                     reward_events.append("caught_pokemon:+0")
@@ -3263,10 +3294,6 @@ class PokemonFireRedEnv(gym.Env):
                     reward += hp_reward
                     reward_events.append(f"took_damage:{hp_reward:.1f}")
                 elif hp_diff > 0:
-                    # Heilung ist Mittel zum Weiterkommen, kein eigenes Ziel.
-                    hp_reward = 0.0
-                    reward_events.append("healed:+0")
-
                     if (
                         not self.pokemon_center_healed_this_episode
                         and in_battle == 0
@@ -3274,6 +3301,12 @@ class PokemonFireRedEnv(gym.Env):
                         and current_total_hp == max_total_hp
                         and self.last_party_total_hp < max_total_hp
                     ):
+                        # V17.3: erster Komplett-Heal dieser Episode - genau
+                        # das Signal, das nur ein Pokemon-Center liefert
+                        # (Items/Kampfattacken heilen fast nie exakt bis
+                        # max_hp UND ausserhalb des Kampfes). Zusaetzlich
+                        # ein einmaliger Flotten-Bonus fuers allererste Mal
+                        # ueberhaupt, RAM-basiert statt geraten.
                         self.pokemon_center_healed_this_episode = True
                         if self.POKEMON_CENTER_FIRST_HEAL_REWARD:
                             reward += self.POKEMON_CENTER_FIRST_HEAL_REWARD
@@ -3281,6 +3314,22 @@ class PokemonFireRedEnv(gym.Env):
                             "pokemon_center_first_heal:"
                             f"+{self.POKEMON_CENTER_FIRST_HEAL_REWARD:.1f}"
                         )
+                        if self._claim_shared(
+                            self.shared_species, "pokemon_center_ever"
+                        ):
+                            reward += self.POKEMON_CENTER_VISIT_GLOBAL_REWARD
+                            reward_events.append(
+                                "pokemon_center_visit_global:"
+                                f"+{self.POKEMON_CENTER_VISIT_GLOBAL_REWARD:.0f}"
+                            )
+                    else:
+                        # Jede weitere Heilung (auch Items/Kampfattacken):
+                        # proportional zur tatsaechlich wiederhergestellten
+                        # HP, symmetrisch zur Schadensstrafe (-0.1/HP) statt
+                        # pauschal neutral.
+                        hp_reward = hp_diff * 0.1
+                        reward += hp_reward
+                        reward_events.append(f"healed_partial:+{hp_reward:.1f}")
 
             # Auch nach der ersten Baseline und bei unveraenderter Party
             # aktualisieren; sonst blieben die vorgeschlagenen Werte bei 0.
@@ -4217,13 +4266,20 @@ class PokemonFireRedEnv(gym.Env):
                             f"new_map_global:+{self.NEW_MAP_REWARD:.2f}"
                         )
                     else:
-                        reward += self.EPISODE_NEW_MAP_REWARD
+                        _map_reward = (
+                            self.CITY_EPISODE_REWARD
+                            if map_key in self.CITY_MAPS
+                            else self.EPISODE_NEW_MAP_REWARD
+                        )
+                        reward += _map_reward
                         self.last_progress_advance_step = self.route_steps
                         reward_events.append(
                             "new_map_episode:"
-                            f"+{self.EPISODE_NEW_MAP_REWARD:.2f}"
+                            f"+{_map_reward:.2f}"
                         )
-                elif not _wipe_cooldown_active and bank == self.OVERWORLD_BANK:
+                elif not _wipe_cooldown_active and (
+                    bank == self.OVERWORLD_BANK or map_key in self.CITY_MAPS
+                ):
                     # V17.3: nur draussen. Innenraeume rund um den fixen
                     # Savestate-Start (Reds Haus, Rivalenhaus, Eichs Labor)
                     # sind JEDEM Agenten in JEDER Episode sofort bekannt -
@@ -4232,10 +4288,19 @@ class PokemonFireRedEnv(gym.Env):
                     # ueberhaupt Route 1 erreicht wird. Live beobachtet:
                     # Agenten "duempelten im Haus rum" statt loszulaufen,
                     # gerade seit Episoden nach einem Wipe nicht mehr enden.
-                    reward += self.EPISODE_NEW_MAP_REWARD
+                    # Echte Staedte zahlen bewusst mehr (100 statt 25) und
+                    # JEDE Episode neu, nicht nur beim einmaligen globalen
+                    # Fund - Ziel: schneller/haeufiger bis zur naechsten
+                    # Stadt vorstossen.
+                    _map_reward = (
+                        self.CITY_EPISODE_REWARD
+                        if map_key in self.CITY_MAPS
+                        else self.EPISODE_NEW_MAP_REWARD
+                    )
+                    reward += _map_reward
                     reward_events.append(
                         "replay_map_once:"
-                        f"+{self.EPISODE_NEW_MAP_REWARD:.2f}"
+                        f"+{_map_reward:.2f}"
                     )
 
             # Jede Policy lernt einen echten lokalen Stage-Anstieg. Der grosse

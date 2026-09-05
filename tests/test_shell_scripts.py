@@ -18,6 +18,9 @@ class ShellScriptLineEndingTests(unittest.TestCase):
 
         self.assertIn('RAY_WORKER_CPUS="${PKMAI_WORKER_CPUS%%.*}"', worker_script)
         self.assertIn('--num-cpus="$RAY_WORKER_CPUS"', worker_script)
+        self.assertIn(
+            '--ray-client-server-port="${RAY_CLIENT_SERVER_PORT:-10004}"', worker_script
+        )
 
     def test_cluster_brain_uses_a_distinct_ray_client_port(self):
         brain_script = (PROJECT_ROOT / "scripts" / "start_cluster_brain.sh").read_text(

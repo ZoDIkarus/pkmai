@@ -9,7 +9,7 @@ All containers use normal Docker networking. PKMAI's network-facing services bin
 | `pkmai-web` | Dashboard | `8001 -> 8000` |
 | `pkmai-cluster-master` | Authenticated worker registry | `8765` |
 | `pkmai-cluster-brain` | Ray head / PPO learner | `6379`, `8265`, `10001-10004`, `11000-11100` |
-| `pkmai-cluster-worker` | Ray rollout node | `10001-10003`, `11000-11100` on the worker host |
+| `pkmai-cluster-worker` | Ray rollout node | `10001-10004`, `11000-11100` on the worker host |
 | `pkmai-trainer` | Legacy local SB3 trainer | no published port |
 
 ## VPS / Linux brain host

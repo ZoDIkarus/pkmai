@@ -2537,15 +2537,14 @@ header{padding:6px!important;gap:4px!important}
             '1,0': [1210, 300],    // Viridian Forest (Schaetzung, noch keine Daten)
             '3,2': [1410, 100],    // Pewter/Marmoria City (Schaetzung, noch keine Daten)
 
-            // Innenraeume: ringsum in freien Feldern neben der jeweiligen
-            // Stadt verteilt statt auf ihr gestapelt. Rivalenhaus weiter
-            // nach Sueden, Eichs Labor bewusst NICHT noch weiter unten als
-            // das Rivalenhaus (gleiche Reihe) - der Platz direkt suedlich
-            // davon ist fuer die spaetere Wasser-Route reserviert.
-            '4,0': [1190, 2320],   // Alabastia - Reds Haus, Erdgeschoss (West)
-            '4,1': [1190, 2170],   // Alabastia - Reds Haus, Obergeschoss
-            '4,2': [1650, 2470],   // Alabastia - Haus des Rivalen (Ost, Sued)
-            '4,3': [1410, 2470],   // Alabastia - Professor Eichs Labor (Mitte, gleiche Reihe wie Rivalenhaus)
+            // Innenraeume symmetrisch um Alabastia verteilt: Reds Haus
+            // (F1/F2 uebereinander) im Westen, Rivalenhaus im Osten im
+            // selben Abstand wie Reds Haus, Eichs Labor darunter (1 Kachel
+            // Abstand) - spiegelt Reds Haus F1->F2 auf der Ostseite.
+            '4,0': [1190, 2320],   // Alabastia - Reds Haus F1 (West)
+            '4,1': [1190, 2452],   // Alabastia - Reds Haus F2 (darunter, 1 Kachel Abstand)
+            '4,2': [1630, 2320],   // Alabastia - Haus des Rivalen (Ost, gleicher Abstand wie Reds Haus West)
+            '4,3': [1630, 2452],   // Alabastia - Professor Eichs Labor (unter dem Rivalenhaus, 1 Kachel Abstand)
 
             // Vertania-Gebaeude um die (jetzt verschobene) Stadt herum -
             // gleiche relative Position wie zuvor, nur mitverschoben.

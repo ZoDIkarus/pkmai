@@ -13,12 +13,13 @@ services:
       PKMAI_CLUSTER_KEY_FILE: /app/local/cluster_key.txt
       PKMAI_WORKER_ID: ${PKMAI_WORKER_ID:-remote-worker}
       PKMAI_WORKER_AGENTS: ${PKMAI_WORKER_AGENTS:-1}
+      PKMAI_WORKER_CPUS: ${PKMAI_WORKER_CPUS:-1}
       RAY_DISABLE_DOCKER_CPU_WARNING: "1"
     volumes:
       - ./local:/app/local:ro
     network_mode: host
-    cpus: 1.0
-    mem_limit: 1g
-    memswap_limit: 2g
+    cpus: ${PKMAI_WORKER_CPUS:-1.0}
+    mem_limit: ${PKMAI_WORKER_MEMORY_LIMIT:-1g}
+    memswap_limit: ${PKMAI_WORKER_MEMORY_SWAP_LIMIT:-2g}
     shm_size: 512m
     restart: "no"

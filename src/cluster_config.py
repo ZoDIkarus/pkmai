@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+from collections.abc import Mapping
 
 
 class ClusterCompatibilityError(ValueError):
@@ -15,6 +16,24 @@ class ClusterCompatibilityError(ValueError):
 class ClusterSettings:
     environment_signature: str
     version_window: int = 2
+
+
+@dataclass(frozen=True)
+class ClusterRuntimeSettings:
+    env_runners: int = 64
+    agents_per_runner: int = 1
+
+
+def load_cluster_runtime_settings(
+    environment: Mapping[str, str],
+) -> ClusterRuntimeSettings:
+    """Read the brain's rollout topology from its explicit deployment settings."""
+    return ClusterRuntimeSettings(
+        env_runners=max(1, int(environment.get("PKMAI_CLUSTER_ENV_RUNNERS", "64"))),
+        agents_per_runner=max(
+            1, int(environment.get("PKMAI_CLUSTER_AGENTS_PER_RUNNER", "1"))
+        ),
+    )
 
 
 @dataclass(frozen=True)

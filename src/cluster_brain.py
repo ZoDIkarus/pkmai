@@ -15,7 +15,7 @@ from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.models import ModelCatalog
 from ray.tune.registry import register_env
 
-from cluster_config import build_environment_signature
+from cluster_config import build_environment_signature, load_cluster_runtime_settings
 from pokemon_env import PokemonFireRedEnv
 from gymnasium import spaces
 from rllib_model import PKMAIDictCNN
@@ -71,7 +71,7 @@ def publish_policy(
 def main() -> None:
     CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
     CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
-    env_runners = max(1, int(os.getenv("PKMAI_CLUSTER_ENV_RUNNERS", "64")))
+    runtime_settings = load_cluster_runtime_settings(os.environ)
     checkpoint_every = max(1, int(os.getenv("PKMAI_CLUSTER_CHECKPOINT_EVERY", "10")))
     register_env("pkmai_cluster_env", make_cluster_env)
     ModelCatalog.register_custom_model("pkmai_dict_cnn", PKMAIDictCNN)
@@ -79,7 +79,14 @@ def main() -> None:
 
     config = (
         PPOConfig()
-        .environment("pkmai_cluster_env", env_config={"agent_count": 1})
+        .environment(
+            "pkmai_cluster_env",
+            env_config={
+                "agent_count": (
+                    runtime_settings.env_runners * runtime_settings.agents_per_runner
+                )
+            },
+        )
         .framework("torch")
         .training(model={"custom_model": "pkmai_dict_cnn"})
         .api_stack(
@@ -87,8 +94,8 @@ def main() -> None:
             enable_env_runner_and_connector_v2=False,
         )
         .env_runners(
-            num_env_runners=env_runners,
-            num_envs_per_env_runner=1,
+            num_env_runners=runtime_settings.env_runners,
+            num_envs_per_env_runner=runtime_settings.agents_per_runner,
             sample_timeout_s=30,
             create_env_on_local_worker=False,
         )

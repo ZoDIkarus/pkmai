@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -8,6 +9,17 @@ import web_stream
 
 
 class ClusterStatusApiTests(unittest.TestCase):
+    def test_web_bind_settings_default_to_external_port_8001(self):
+        original_host = os.environ.pop("PKMAI_WEB_HOST", None)
+        original_port = os.environ.pop("PKMAI_WEB_PORT", None)
+        try:
+            self.assertEqual(web_stream.web_bind_settings(), ("0.0.0.0", 8001))
+        finally:
+            if original_host is not None:
+                os.environ["PKMAI_WEB_HOST"] = original_host
+            if original_port is not None:
+                os.environ["PKMAI_WEB_PORT"] = original_port
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         root = Path(self.directory.name)

@@ -9,7 +9,7 @@ private VPN interface; never publish them as `0.0.0.0`.
 
 | Container | Role | Host port(s) |
 |---|---|---|
-| `pkmai-web` | Dashboard | `8001 -> 8000` |
+| `pkmai-web` | Dashboard | `8001 -> 8001` |
 | `pkmai-cluster-master` | Authenticated worker registry and rollout inbox | `8765` |
 | `pkmai-cluster-brain` | Dynamic PPO batch learner | no published port |
 | `pkmai-cluster-worker` | Independent rollout uploader | outbound access to master only |

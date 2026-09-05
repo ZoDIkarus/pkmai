@@ -30,6 +30,11 @@ CLUSTER_DIR = os.path.join(RUNTIME_DIR, "cluster")
 CLUSTER_POLICY_FILE = os.path.join(CLUSTER_DIR, "policy.json")
 CLUSTER_WORKERS_FILE = os.path.join(CLUSTER_DIR, "workers.json")
 
+
+def web_bind_settings() -> tuple[str, int]:
+    return os.getenv("PKMAI_WEB_BIND_HOST", "0.0.0.0"), int(os.getenv("PKMAI_WEB_PORT", "8001"))
+
+
 def _live_learner_steps(fallback=0):
     try:
         with open(TRAINER_STATUS_FILE, "r") as f:
@@ -3076,4 +3081,5 @@ setInterval(refreshChampionNight,2000);refreshChampionNight();
     """
 
 if __name__ == '__main__':
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning")
+    host, port = web_bind_settings()
+    uvicorn.run(app, host=host, port=port, log_level="warning")

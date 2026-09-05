@@ -23,10 +23,12 @@ services:
     container_name: pkmai-web
     profiles: ["web"]
     entrypoint: ["python", "-u", "src/web_stream.py"]
+    environment:
+      PKMAI_WEB_PORT: "${PKMAI_WEB_PORT:-8001}"
     volumes:
       - ./runtime:/app/runtime
     ports:
-      - "${PKMAI_WEB_HOST:-127.0.0.1}:8001:8000"
+      - "${PKMAI_WEB_HOST:-0.0.0.0}:${PKMAI_WEB_PORT:-8001}:${PKMAI_WEB_PORT:-8001}"
     cpus: 0.25
     mem_limit: 256m
     memswap_limit: 512m

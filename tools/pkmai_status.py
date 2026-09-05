@@ -193,31 +193,11 @@ def render():
     out.append("-" * WIDTH)
     out.append(f"  🗺️ WELT        Stufe {depth}: {stage_names.get(depth, '?')}{wall}")
 
-    # 3) SCHIGGI: der aktuelle Flaschenhals, live aus den full-Agenten.
+    # V17.2: die SCHIGGI-Sektion (Starter-Erfolgsquote) ist seit dem
+    # Savestate-Start ueberfluessig geworden - der Starter ist bereits Teil
+    # des fixen Episodenstarts und liegt praktisch immer bei ~100 %. War
+    # reiner Log-Ballast ("Falscher Starter aktuell: 0" jede Sekunde).
     all_agents = list(instances.values())
-    n_have = sum(1 for d in all_agents if d.get("has_target_starter"))
-    n_wrong = sum(
-        1 for d in all_agents
-        if d.get("has_starter") and not d.get("has_target_starter")
-    )
-    agent_count = len(all_agents)
-    live_pct = (100.0 * n_have / agent_count) if agent_count else 0.0
-    champion_full = int(m.get("full_episodes", 0) or 0)
-    champion_permille = int(m.get("full_starter_permille", 0) or 0)
-    champion_squirtle = round(champion_full * champion_permille / 1000)
-    out.append("-" * WIDTH)
-    out.append("  🐣 SCHIGGI")
-    out.append(
-        f"     Aktueller Lauf:          {n_have}/{agent_count} ({live_pct:.1f} %)"
-    )
-    if champion_full:
-        out.append(
-            f"     Letzte Champion-Prüfung: {champion_squirtle}/{champion_full} "
-            f"({champion_permille / 10:.1f} %)"
-        )
-    out.append(
-        f"     Falscher Starter aktuell: {n_wrong}"
-    )
 
     # 3b) K.O.-Bilanz: wie oft stirbt die Flotte gerade (Party-Wipe),
     # gegen wie oft sie selbst K.O.s landet - fleet-weite Summe ueber

@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 import uvicorn
 
 from cluster_config import (
@@ -19,6 +19,8 @@ from cluster_config import (
     build_environment_signature,
     validate_worker_registration,
 )
+from rollout_protocol import decode_rollout, write_rollout
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = PROJECT_ROOT / "runtime"
@@ -27,6 +29,7 @@ CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
 KEY_FILE = Path(os.getenv("PKMAI_CLUSTER_KEY_FILE", CLUSTER_DIR / "cluster_key.txt"))
 STATE_FILE = CLUSTER_DIR / "workers.json"
 POLICY_FILE = CLUSTER_DIR / "policy.json"
+ROLLOUT_INBOX = CLUSTER_DIR / "rollout_inbox"
 PORT = int(os.getenv("PKMAI_CLUSTER_PORT", "8765"))
 WORKER_TTL_SECONDS = max(15, int(os.getenv("PKMAI_WORKER_TTL_SECONDS", "60")))
 
@@ -105,6 +108,15 @@ def _record(payload: dict, decision_reason: str) -> dict:
     return record
 
 
+def store_rollout_upload(worker_id: str, batch) -> Path:
+    return write_rollout(ROLLOUT_INBOX, worker_id, batch)
+
+
+def store_rollout_payload(worker_id: str, payload: bytes) -> tuple[Path, int]:
+    batch = decode_rollout(payload)
+    return store_rollout_upload(worker_id, batch), int(len(batch["actions"]))
+
+
 @app.get("/health")
 def health():
     now = time.time()
@@ -136,6 +148,20 @@ def heartbeat(payload: dict, x_pkmai_key: str | None = Header(default=None)):
     _check_key(x_pkmai_key)
     _record(payload, "online")
     return {"ok": True, "policy_version": _policy_version()}
+
+
+@app.post("/api/rollout/{worker_id}")
+async def rollout_upload(
+    worker_id: str,
+    request: Request,
+    x_pkmai_key: str | None = Header(default=None),
+):
+    _check_key(x_pkmai_key)
+    try:
+        _, samples = store_rollout_payload(worker_id, await request.body())
+    except (ValueError, KeyError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=f"invalid rollout: {exc}") from exc
+    return {"accepted": True, "samples": samples}
 
 
 @app.get("/api/cluster")

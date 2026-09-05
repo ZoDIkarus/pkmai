@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Remote PKMAI rollout-node registration and heartbeat client."""
+"""Independent PKMAI rollout worker; no Ray runtime or optimizer state."""
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import platform
@@ -13,13 +14,21 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from cluster_config import build_environment_signature
+import numpy as np
+import torch
+from torch.distributions import Categorical
 
-MASTER_URL = os.getenv("PKMAI_CLUSTER_MASTER_URL", "http://10.10.15.112:8765").rstrip("/")
+from cluster_config import build_environment_signature
+from dynamic_policy import PKMAIPolicy
+from pokemon_env import PokemonFireRedEnv
+from rollout_protocol import encode_rollout
+
+MASTER_URL = os.getenv("PKMAI_CLUSTER_MASTER_URL", "http://10.10.15.1:8765").rstrip("/")
 KEY_FILE = Path(os.getenv("PKMAI_CLUSTER_KEY_FILE", "local/cluster_key.txt"))
 WORKER_ID = os.getenv("PKMAI_WORKER_ID", socket.gethostname())
 ACTIVE_AGENTS = max(1, int(os.getenv("PKMAI_WORKER_AGENTS", "1")))
 HEARTBEAT_SECONDS = max(3, int(os.getenv("PKMAI_HEARTBEAT_SECONDS", "10")))
+ROLLOUT_STEPS = max(8, int(os.getenv("PKMAI_ROLLOUT_STEPS", "32")))
 
 
 def build_id() -> str:
@@ -43,57 +52,114 @@ def payload(policy_version: int = 0) -> dict:
     }
 
 
-def request(path: str, body: dict) -> dict:
-    key = KEY_FILE.read_text(encoding="utf-8").strip()
-    data = json.dumps(body).encode("utf-8")
+def _key() -> str:
+    return KEY_FILE.read_text(encoding="utf-8").strip()
+
+
+def request_json(path: str, body: dict) -> dict:
     req = Request(
         f"{MASTER_URL}{path}",
-        data=data,
+        data=json.dumps(body).encode("utf-8"),
         method="POST",
-        headers={"Content-Type": "application/json", "X-PKMAI-Key": key},
+        headers={"Content-Type": "application/json", "X-PKMAI-Key": _key()},
     )
-    with urlopen(req, timeout=10) as response:
+    with urlopen(req, timeout=15) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-def raylet_alive() -> bool:
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            if b"raylet" in (entry / "cmdline").read_bytes():
-                return True
-        except OSError:
-            continue
-    return False
+def request_bytes(path: str) -> bytes:
+    req = Request(f"{MASTER_URL}{path}", headers={"X-PKMAI-Key": _key()})
+    with urlopen(req, timeout=30) as response:
+        return response.read()
+
+
+def upload_rollout(batch: dict[str, np.ndarray]) -> dict:
+    req = Request(
+        f"{MASTER_URL}/api/rollout/{WORKER_ID}",
+        data=encode_rollout(batch),
+        method="POST",
+        headers={"Content-Type": "application/octet-stream", "X-PKMAI-Key": _key()},
+    )
+    with urlopen(req, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def choose_action(policy: PKMAIPolicy, observation: dict) -> tuple[int, float, float]:
+    image = torch.from_numpy(np.asarray(observation["image"], dtype=np.uint8))[None, ...]
+    nav = torch.from_numpy(np.asarray(observation["nav"], dtype=np.float32))[None, ...]
+    with torch.no_grad():
+        logits, values = policy(image, nav)
+        distribution = Categorical(logits=logits)
+        action = distribution.sample()
+    return int(action.item()), float(distribution.log_prob(action).item()), float(values.item())
+
+
+def load_policy() -> tuple[PKMAIPolicy, int]:
+    artifact = torch.load(io.BytesIO(request_bytes("/api/policy")), map_location="cpu")
+    policy = PKMAIPolicy()
+    policy.load_state_dict(artifact["state_dict"])
+    policy.eval()
+    return policy, int(artifact["version"])
+
+
+def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: dict) -> tuple[dict[str, np.ndarray], dict]:
+    rows = {name: [] for name in ("images", "nav", "actions", "rewards", "dones", "log_probs", "values")}
+    for _ in range(ROLLOUT_STEPS):
+        action, log_prob, value = choose_action(policy, observation)
+        next_observation, reward, terminated, truncated, _ = env.step(action)
+        rows["images"].append(np.asarray(observation["image"], dtype=np.uint8))
+        rows["nav"].append(np.asarray(observation["nav"], dtype=np.float32))
+        rows["actions"].append(action)
+        rows["rewards"].append(float(reward))
+        done = bool(terminated or truncated)
+        rows["dones"].append(done)
+        rows["log_probs"].append(log_prob)
+        rows["values"].append(value)
+        observation = env.reset()[0] if done else next_observation
+    return {
+        "images": np.asarray(rows["images"], dtype=np.uint8),
+        "nav": np.asarray(rows["nav"], dtype=np.float32),
+        "actions": np.asarray(rows["actions"], dtype=np.int64),
+        "rewards": np.asarray(rows["rewards"], dtype=np.float32),
+        "dones": np.asarray(rows["dones"], dtype=np.bool_),
+        "log_probs": np.asarray(rows["log_probs"], dtype=np.float32),
+        "values": np.asarray(rows["values"], dtype=np.float32),
+    }, observation
 
 
 def main() -> None:
     if not KEY_FILE.exists():
         raise SystemExit(f"cluster key file missing: {KEY_FILE}")
+    cpu_count = max(1, os.cpu_count() or 1)
+    env = PokemonFireRedEnv(rank=0, agent_count=cpu_count)
+    observation, _ = env.reset()
+    registration = request_json("/api/worker/register", payload())
+    policy = None
+    version = int(registration.get("policy_version", -1))
+    last_heartbeat = 0.0
     try:
-        registration = request("/api/worker/register", payload())
-    except HTTPError as exc:
-        raise SystemExit(f"registration rejected: {exc.read().decode('utf-8', 'replace')}") from exc
-    except URLError as exc:
-        raise SystemExit(f"master unavailable: {exc.reason}") from exc
-    version = int(registration["policy_version"])
-    if not registration.get("accepted"):
-        if registration.get("reason") != "policy_reload_required":
-            raise SystemExit(f"registration not accepted: {registration.get('reason')}")
-        print(f"policy reload required; adopting version={version}", flush=True)
-    else:
-        print(f"registered worker={WORKER_ID} policy_version={version}", flush=True)
-    while True:
-        if not raylet_alive():
-            raise SystemExit("local raylet is not running; worker will restart")
-        time.sleep(HEARTBEAT_SECONDS)
-        try:
-            response = request("/api/worker/heartbeat", payload(version))
-        except (HTTPError, URLError, TimeoutError) as exc:
-            print(f"heartbeat failed; retrying: {exc}", flush=True)
-            continue
-        version = int(response.get("policy_version", version))
+        while True:
+            try:
+                response = request_json("/api/worker/heartbeat", payload(version))
+                target_version = int(response.get("policy_version", version))
+                if policy is None or target_version != version:
+                    policy, version = load_policy()
+                    print(f"loaded policy version={version}", flush=True)
+                last_heartbeat = time.monotonic()
+            except (HTTPError, URLError, TimeoutError, OSError) as exc:
+                print(f"master/policy unavailable; retrying: {exc}", flush=True)
+                time.sleep(HEARTBEAT_SECONDS)
+                continue
+            batch, observation = collect_rollout(env, policy, observation)
+            try:
+                response = upload_rollout(batch)
+                print(f"uploaded samples={response.get('samples', 0)} policy={version}", flush=True)
+            except (HTTPError, URLError, TimeoutError, OSError) as exc:
+                print(f"rollout upload failed; retrying: {exc}", flush=True)
+            if time.monotonic() - last_heartbeat >= HEARTBEAT_SECONDS:
+                continue
+    finally:
+        env.close()
 
 
 if __name__ == "__main__":

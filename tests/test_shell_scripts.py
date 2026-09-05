@@ -11,26 +11,21 @@ class ShellScriptLineEndingTests(unittest.TestCase):
             with self.subTest(script=script.name):
                 self.assertNotIn(b"\r", script.read_bytes())
 
-    def test_cluster_worker_advertises_the_configured_cpu_capacity_to_ray(self):
-        worker_script = (PROJECT_ROOT / "scripts" / "start_cluster_worker.sh").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn('RAY_WORKER_CPUS="${PKMAI_WORKER_CPUS%%.*}"', worker_script)
-        self.assertIn('--num-cpus="$RAY_WORKER_CPUS"', worker_script)
-        self.assertIn(
-            '--ray-client-server-port="${RAY_CLIENT_SERVER_PORT:-10004}"', worker_script
-        )
-
-    def test_cluster_brain_uses_a_distinct_ray_client_port(self):
+    def test_cluster_brain_starts_the_dynamic_batch_learner(self):
         brain_script = (PROJECT_ROOT / "scripts" / "start_cluster_brain.sh").read_text(
             encoding="utf-8"
         )
 
-        self.assertIn('--node-manager-port="${RAY_NODE_MANAGER_PORT:-10001}"', brain_script)
-        self.assertIn(
-            '--ray-client-server-port="${RAY_CLIENT_SERVER_PORT:-10004}"', brain_script
+        self.assertIn("src/dynamic_brain.py", brain_script)
+        self.assertNotIn("ray start", brain_script)
+
+    def test_cluster_worker_starts_without_a_ray_runtime(self):
+        worker_script = (PROJECT_ROOT / "scripts" / "start_cluster_worker.sh").read_text(
+            encoding="utf-8"
         )
+
+        self.assertIn("src/cluster_worker.py", worker_script)
+        self.assertNotIn("ray start", worker_script)
 
 
 if __name__ == "__main__":

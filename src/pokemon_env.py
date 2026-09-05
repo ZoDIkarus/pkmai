@@ -4445,7 +4445,9 @@ class PokemonFireRedEnv(gym.Env):
                         )
                 elif not _wipe_cooldown_active and (
                     bank == self.OVERWORLD_BANK or map_key in self.CITY_MAPS
-                ) and self.training_objective != "scout":
+                ) and self.training_objective != "scout" and (
+                    map_key != self.STAGE_PALLET
+                ):
                     # V17.3: nur draussen. Innenraeume rund um den fixen
                     # Savestate-Start (Reds Haus, Rivalenhaus, Eichs Labor)
                     # sind JEDEM Agenten in JEDER Episode sofort bekannt -
@@ -4463,6 +4465,19 @@ class PokemonFireRedEnv(gym.Env):
                     # nur um dort den Wiederholungs-Bonus fuer eine Stadt
                     # abzugreifen, die sie schon x-mal besucht haben - das
                     # bremste den Vorstoss nach vorn staerker als es half.
+                    # V17.4-Fix: Alabastia (Pallet Town) selbst ist EBENFALLS
+                    # ausgenommen. Der feste Savestate startet "full"-Agenten
+                    # in Eichs Labor (Bank 4/Map 3), direkt nach Paketabgabe -
+                    # Pallet Town liegt buchstaeblich 1-2 Schritte vor der
+                    # Tuer und ist als CITY_MAP selbst reward-berechtigt.
+                    # Ohne diesen Ausschluss zahlte das JEDE einzelne Episode
+                    # automatisch +250 quasi nur fuers Rauslaufen, ganz ohne
+                    # echte Erkundung - live beobachtet direkt bei
+                    # Episodenstart (starter_outdoor + replay_map_once:+250
+                    # binnen der ersten ~200 Steps, bei praktisch JEDEM
+                    # Agenten). Ein erster Versuch, stattdessen die exakte
+                    # Episoden-Startmap zu tracken, griff nicht, weil die
+                    # Startmap Eichs Labor ist, nicht Pallet Town selbst.
                     _map_reward = (
                         self.CITY_EPISODE_REWARD
                         if map_key in self.CITY_MAPS

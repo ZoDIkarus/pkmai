@@ -8,8 +8,8 @@ All containers use normal Docker networking. PKMAI's network-facing services bin
 |---|---|---|
 | `pkmai-web` | Dashboard | `8001 -> 8000` |
 | `pkmai-cluster-master` | Authenticated worker registry | `8765` |
-| `pkmai-cluster-brain` | Ray head / PPO learner | `6379`, `8265`, `10001-10004`, `11000-11100` |
-| `pkmai-cluster-worker` | Ray rollout node | `10001-10004`, `11000-11100` on the worker host |
+| `pkmai-cluster-brain` | Ray head / PPO learner | `6379`, `8265`, `10001-10003`, `11000-11100` |
+| `pkmai-cluster-worker` | Ray rollout node | `10001-10003`, `11000-11100` on the worker host |
 | `pkmai-trainer` | Legacy local SB3 trainer | no published port |
 
 ## VPS / Linux brain host
@@ -38,7 +38,6 @@ PKMAI_WORKER_HOST_IP=<worker VPN host IP>
 PKMAI_CLUSTER_MASTER_URL=http://10.10.15.1:8765
 PKMAI_WORKER_ID=<unique worker name>
 PKMAI_WORKER_AGENTS=1
-PKMAI_WORKER_CPUS=1.0
 ```
 
 Clone the exact `sascha` branch first:
@@ -73,32 +72,7 @@ docker logs -f pkmai-cluster-worker
 
 The brain uses a configurable pool of 64 pending Ray env-runners by default. Ray schedules them only when worker CPUs are available, so new remote workers can join without changing code. To choose another upper bound before a controlled brain restart, set `PKMAI_CLUSTER_ENV_RUNNERS` in the brain host environment.
 
-The worker must be able to reach the brain host ports `6379`, `8765`, `10001-10004` and `11000-11100` over the VPN. Do not publish these ports to a public interface.
-
-### Ten-emulator worker pool
-
-The brain, not the worker heartbeat, determines how many Ray rollout
-environments exist. To use one remote worker for ten simultaneous emulator
-environments, deploy the brain with these explicit values and restart only the
-brain service:
-
-```text
-PKMAI_CLUSTER_ENV_RUNNERS=10
-PKMAI_CLUSTER_AGENTS_PER_RUNNER=1
-```
-
-Give that worker ten Ray CPU slots and report the matching capacity:
-
-```text
-PKMAI_WORKER_AGENTS=10
-PKMAI_WORKER_CPUS=10.0
-PKMAI_WORKER_MEMORY_LIMIT=10g
-PKMAI_WORKER_MEMORY_SWAP_LIMIT=12g
-```
-
-The worker still requires its own local ROM integration and `cluster_key.txt`.
-`PKMAI_WORKER_AGENTS` is registry telemetry; it does not create emulators by
-itself.
+The worker has `restart: unless-stopped` and exits when its local Raylet dies, so Docker reconnects it to the current brain head. The worker must be able to reach the brain host ports `6379`, `8765`, `10001-10003` and `11000-11100` over the VPN. Do not publish these ports to a public interface.
 
 ## Windows worker
 

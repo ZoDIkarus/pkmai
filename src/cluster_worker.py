@@ -56,6 +56,18 @@ def request(path: str, body: dict) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def raylet_alive() -> bool:
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if b"raylet" in (entry / "cmdline").read_bytes():
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def main() -> None:
     if not KEY_FILE.exists():
         raise SystemExit(f"cluster key file missing: {KEY_FILE}")
@@ -73,6 +85,8 @@ def main() -> None:
     else:
         print(f"registered worker={WORKER_ID} policy_version={version}", flush=True)
     while True:
+        if not raylet_alive():
+            raise SystemExit("local raylet is not running; worker will restart")
         time.sleep(HEARTBEAT_SECONDS)
         try:
             response = request("/api/worker/heartbeat", payload(version))

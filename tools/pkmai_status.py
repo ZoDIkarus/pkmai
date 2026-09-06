@@ -242,14 +242,14 @@ def render():
         maps_seen[f"{d.get('bank')},{d.get('map')}"] += 1
     if instances:
         out.append("-" * WIDTH)
-        out.append(f"  🤖 FLOTTE       {len(instances)} Full-Agenten")
+        out.append(f"  🤖 FLOTTE       {len(instances)} Agenten")
         out.append("     Auf Maps: " + "  ".join(f"{k}:{v}" for k, v in maps_seen.most_common(6)))
 
     stages = sorted(glob.glob(os.path.join(RT, "curriculum_shared", "stage_*.state.gz")))
     if stages:
-        deepest = max(int(os.path.basename(p).split("_")[1].split(".")[0]) for p in stages)
+        deepest = max(int(os.path.basename(p).removesuffix(".state.gz").rsplit("_", 1)[1]) for p in stages)
         out.append("-" * WIDTH)
-        out.append(f"  💾 CHECKPOINTS  tiefster stage_{deepest}  ({len(stages)} validierte Stufen)")
+        out.append(f"  💾 CHECKPOINTS  tiefster stage_{deepest}  ({len(stages)} State-Dateien)")
     out.append("=" * WIDTH)
     return "\n".join(out)
 

@@ -88,3 +88,8 @@ requirements-lock.txt
 
 # Extracted/derived map tiles (large, regenerable)
 assets/maps/extracted_firered_maps/
+
+# Local game-map image references (not distributed with source)
+assets/maps/Route1.png
+assets/maps/pallettown.png
+assets/maps/kanto_map.png.disabled

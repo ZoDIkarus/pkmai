@@ -1,13 +1,23 @@
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
 
-from cluster_worker import choose_action, exploration_distribution, live_telemetry, rollout_fps, worker_rank
+from cluster_worker import configure_cpu_inference, choose_action, exploration_distribution, live_telemetry, rollout_fps, worker_rank
 from dynamic_policy import PKMAIPolicy
 
 
 class DynamicWorkerTests(unittest.TestCase):
+    def test_cpu_limited_worker_uses_single_threaded_torch_inference(self):
+        with patch("cluster_worker.torch.set_num_threads") as set_threads, patch(
+            "cluster_worker.torch.set_num_interop_threads"
+        ) as set_interop_threads:
+            configure_cpu_inference()
+
+        set_threads.assert_called_once_with(1)
+        set_interop_threads.assert_called_once_with(1)
+
     def test_exploration_distribution_keeps_every_action_sampleable(self):
         distribution = exploration_distribution(
             torch.tensor([[20.0, -20.0, -20.0, -20.0, -20.0, -20.0, -20.0]]),

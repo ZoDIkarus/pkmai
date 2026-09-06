@@ -33,6 +33,15 @@ ROLLOUT_STEPS = max(8, int(os.getenv("PKMAI_ROLLOUT_STEPS", "32")))
 ACTION_EXPLORATION_FLOOR = min(0.35, max(0.0, float(os.getenv("PKMAI_ACTION_EXPLORATION_FLOOR", "0.35"))))
 
 
+def configure_cpu_inference() -> None:
+    """Avoid PyTorch thread-pool contention inside one-CPU rollout containers."""
+    torch.set_num_threads(1)
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        pass
+
+
 def _public_reward_events(events) -> list[str]:
     return [
         str(value)[:120]
@@ -226,6 +235,7 @@ def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: di
 def main() -> None:
     if not KEY_FILE.exists():
         raise SystemExit(f"cluster key file missing: {KEY_FILE}")
+    configure_cpu_inference()
     fleet_size = max(ACTIVE_AGENTS, int(os.getenv("PKMAI_WORKER_FLEET_SIZE", ACTIVE_AGENTS)))
     env = PokemonFireRedEnv(rank=worker_rank(), agent_count=fleet_size)
     observation, _ = env.reset()

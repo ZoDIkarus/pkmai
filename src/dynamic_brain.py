@@ -22,7 +22,7 @@ MODEL_FILE = CLUSTER_DIR / "dynamic_policy.pt"
 BEST_MODEL_FILE = CLUSTER_DIR / "dynamic_policy_best.pt"
 CHECKPOINTS_DIR = CLUSTER_DIR / "brain_checkpoints"
 ACTION_EXPLORATION_FLOOR = min(
-    0.35, max(0.0, float(os.getenv("PKMAI_ACTION_EXPLORATION_FLOOR", "0.14")))
+    0.35, max(0.0, float(os.getenv("PKMAI_ACTION_EXPLORATION_FLOOR", "0.35")))
 )
 
 

@@ -30,7 +30,7 @@ WORKER_ID = os.getenv("PKMAI_WORKER_ID", socket.gethostname())
 ACTIVE_AGENTS = max(1, int(os.getenv("PKMAI_WORKER_AGENTS", "1")))
 HEARTBEAT_SECONDS = max(3, int(os.getenv("PKMAI_HEARTBEAT_SECONDS", "10")))
 ROLLOUT_STEPS = max(8, int(os.getenv("PKMAI_ROLLOUT_STEPS", "32")))
-ACTION_EXPLORATION_FLOOR = min(0.35, max(0.0, float(os.getenv("PKMAI_ACTION_EXPLORATION_FLOOR", "0.14"))))
+ACTION_EXPLORATION_FLOOR = min(0.35, max(0.0, float(os.getenv("PKMAI_ACTION_EXPLORATION_FLOOR", "0.35"))))
 
 
 def _public_reward_events(events) -> list[str]:

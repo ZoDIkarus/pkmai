@@ -73,6 +73,13 @@ def watcher_episode_start(is_watcher, curriculum_start):
     return "beginning" if bool(is_watcher) else curriculum_start
 
 
+def intro_map_transition_completed(first_map, current_map):
+    """Require a trusted map transition after gameplay first becomes readable."""
+    if first_map is None or current_map is None:
+        return False
+    return tuple(first_map[:2]) != tuple(current_map[:2])
+
+
 def battle_stagnation_penalty(stagnant_hp_reads, grace_reads=16, penalty=-0.5):
     """Penalize only repeated verified battle HP snapshots with no change."""
     reads = int(stagnant_hp_reads)
@@ -497,6 +504,7 @@ class PokemonFireRedEnv(gym.Env):
         self.intro_last_thumb = None
         self.intro_same_screen_steps = 0
         self.intro_novelty_reward_total = 0.0
+        self.intro_initial_map = None
         self.intro_complete_rewarded = False
 
         # Story-Reward-Meilensteine (pro Episode nur einmal).
@@ -2118,6 +2126,7 @@ class PokemonFireRedEnv(gym.Env):
         self.intro_last_thumb = None
         self.intro_same_screen_steps = 0
         self.intro_novelty_reward_total = 0.0
+        self.intro_initial_map = None
         self.intro_complete_rewarded = False
 
         self.previous_valid_bank = None
@@ -2659,6 +2668,13 @@ class PokemonFireRedEnv(gym.Env):
         # ---------------------------------------------------------
         # INTRO / NAMENSVERGABE SHAPING
         # ---------------------------------------------------------
+        if (
+            gameplay_ready
+            and self.episode_start == "beginning"
+            and self.intro_initial_map is None
+        ):
+            self.intro_initial_map = (bank, map_id)
+
         if not gameplay_ready and self.episode_start == "beginning":
             thumb = self._intro_thumb(raw_screen)
 
@@ -2718,8 +2734,12 @@ class PokemonFireRedEnv(gym.Env):
             gameplay_ready
             and self.episode_start == "beginning"
             and not self.intro_complete_rewarded
+            and intro_map_transition_completed(
+                self.intro_initial_map, (bank, map_id)
+            )
         ):
-            # Der grosse Zielreward: Intro/Namenswahl wirklich abgeschlossen.
+            # Erst der Mapwechsel nach der ersten lesbaren Spielerposition
+            # beendet Intro/Namenswahl; der erste valide RAM-Lock allein nicht.
             self.intro_complete_rewarded = True
             reward += 100.0
             reward_events.append("intro_complete:+100")

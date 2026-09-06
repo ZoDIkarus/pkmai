@@ -7,11 +7,17 @@ from pokemon_env import (
     short_cycle_repeats,
     stairs_no_new_edge_timeout,
     stuck_loop_penalty,
+    intro_map_transition_completed,
     watcher_episode_start,
 )
 
 
 class ShortCycleRepeatsTests(unittest.TestCase):
+    def test_intro_requires_a_trusted_map_transition_after_the_first_playable_map(self):
+        self.assertFalse(intro_map_transition_completed(None, (4, 1)))
+        self.assertFalse(intro_map_transition_completed((4, 1), (4, 1)))
+        self.assertTrue(intro_map_transition_completed((4, 1), (4, 2)))
+
     def test_watcher_episode_start_never_resumes_a_curriculum_checkpoint(self):
         self.assertEqual(watcher_episode_start(True, "starter"), "beginning")
         self.assertEqual(watcher_episode_start(False, "starter"), "starter")

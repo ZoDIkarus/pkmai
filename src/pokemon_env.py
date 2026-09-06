@@ -48,6 +48,11 @@ def short_cycle_repeats(path):
     return repeats
 
 
+def stuck_loop_penalty(stuck_steps):
+    """Apply a small, continuous cost once an agent is demonstrably stuck."""
+    return -0.001 * max(0, int(stuck_steps) - 59)
+
+
 class PokemonFireRedEnv(gym.Env):
     BUILD_TAG = "V10.25_SKILL_VAULT_FULL_CHAIN"
     metadata = {"render_modes": []}
@@ -79,7 +84,9 @@ class PokemonFireRedEnv(gym.Env):
     # Kein positiver "Lebensreward" mehr. Jeder Schritt kostet minimal,
     # damit kuerzere Loesungen besser sind als 8k-Looping.
     INTRO_STEP_COST = -0.002
-    GAMEPLAY_STEP_COST = 0.0
+    # A non-zero time cost keeps stationary or indecisive gameplay from being
+    # neutral while remaining far below every meaningful progress reward.
+    GAMEPLAY_STEP_COST = -0.001
     # V6.1: bekannte, notwendige Wege sind neutral.
     # Nur neue Entdeckung / Ziel-Fortschritt ist positiv;
     # echte Wiederholungs-Loops bleiben negativ.
@@ -102,7 +109,9 @@ class PokemonFireRedEnv(gym.Env):
     NEW_GLOBAL_DEPTH_REWARD = 300.0
     STARTER_REWARD = 500.0
     ENEMY_DAMAGE_REWARD_PER_HP = 0.75
-    ENEMY_FAINT_REWARD = 20.0
+    # Combat remains useful, but exploration and story progress must dominate.
+    ENEMY_FAINT_REWARD = 2.0
+    LEVEL_GAIN_REWARD = 10.0
     ENEMY_HP_READ_EVERY = 2
     NEW_TRANSITION_REWARD = 35.0
     REPLAY_MAP_REWARD = 5.0
@@ -2728,8 +2737,9 @@ class PokemonFireRedEnv(gym.Env):
 
         elif p_lvl > self.last_level:
             level_gain = p_lvl - self.last_level
-            reward += level_gain * 25.0
-            reward_events.append(f"level_up:+{level_gain * 25}")
+            level_reward = level_gain * self.LEVEL_GAIN_REWARD
+            reward += level_reward
+            reward_events.append(f"level_up:+{level_reward:.0f}")
             self.reward_event_counts["level_up"] += level_gain
             self.last_level = p_lvl
             self.last_progress_advance_step = self.total_steps
@@ -3122,12 +3132,8 @@ class PokemonFireRedEnv(gym.Env):
             else:
                 self.stuck_counter += 1
 
-            if in_battle == 0 and self.stuck_counter >= 60:
-                reward -= 0.03
-            if in_battle == 0 and self.stuck_counter >= 180:
-                reward -= 0.12
-            if in_battle == 0 and self.stuck_counter >= 400:
-                reward -= 0.40
+            if in_battle == 0:
+                reward += stuck_loop_penalty(self.stuck_counter)
 
             if in_battle == 0 and self.stuck_counter >= 900:
                 truncated = True

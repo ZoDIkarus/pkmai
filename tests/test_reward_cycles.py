@@ -1,6 +1,6 @@
 import unittest
 
-from pokemon_env import short_cycle_repeats
+from pokemon_env import PokemonFireRedEnv, short_cycle_repeats, stuck_loop_penalty
 
 
 class ShortCycleRepeatsTests(unittest.TestCase):
@@ -24,6 +24,19 @@ class ShortCycleRepeatsTests(unittest.TestCase):
             (3, 0, 14, 9),
         ]
         self.assertEqual(short_cycle_repeats(path), 0)
+
+
+class V17RewardTuningTests(unittest.TestCase):
+    def test_gameplay_time_and_combat_rewards_favor_progress(self):
+        self.assertEqual(PokemonFireRedEnv.GAMEPLAY_STEP_COST, -0.001)
+        self.assertEqual(PokemonFireRedEnv.ENEMY_FAINT_REWARD, 2.0)
+        self.assertEqual(PokemonFireRedEnv.LEVEL_GAIN_REWARD, 10.0)
+
+    def test_stuck_penalty_grows_continuously_without_a_discontinuity(self):
+        self.assertEqual(stuck_loop_penalty(59), 0.0)
+        self.assertEqual(stuck_loop_penalty(60), -0.001)
+        self.assertEqual(stuck_loop_penalty(180), -0.121)
+        self.assertEqual(stuck_loop_penalty(400), -0.341)
 
 
 if __name__ == "__main__":

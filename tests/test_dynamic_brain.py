@@ -5,10 +5,27 @@ from pathlib import Path
 import numpy as np
 
 import dynamic_brain
-from dynamic_brain import DynamicLearner
+from dynamic_brain import DynamicLearner, combine_rollouts
 
 
 class DynamicLearnerTests(unittest.TestCase):
+    def test_combines_several_rollouts_before_a_policy_update(self):
+        batch = {
+            "images": np.zeros((2, 1, 64, 64), dtype=np.uint8),
+            "nav": np.zeros((2, 28), dtype=np.float32),
+            "actions": np.array([0, 1], dtype=np.int64),
+            "rewards": np.array([0.1, 0.2], dtype=np.float32),
+            "dones": np.array([False, True]),
+            "log_probs": np.array([-1.9, -1.9], dtype=np.float32),
+            "values": np.zeros(2, dtype=np.float32),
+        }
+
+        combined = combine_rollouts([batch, batch, batch])
+
+        self.assertEqual(len(combined["actions"]), 6)
+        self.assertEqual(combined["actions"].tolist(), [0, 1, 0, 1, 0, 1])
+        self.assertEqual(tuple(combined["images"].shape), (6, 1, 64, 64))
+
     def test_restores_the_latest_brain_before_republishing_best(self):
         with tempfile.TemporaryDirectory() as directory:
             original_model = dynamic_brain.MODEL_FILE

@@ -30,6 +30,7 @@ WORKER_ID = os.getenv("PKMAI_WORKER_ID", socket.gethostname())
 ACTIVE_AGENTS = max(1, int(os.getenv("PKMAI_WORKER_AGENTS", "1")))
 HEARTBEAT_SECONDS = max(3, int(os.getenv("PKMAI_HEARTBEAT_SECONDS", "10")))
 ROLLOUT_STEPS = max(8, int(os.getenv("PKMAI_ROLLOUT_STEPS", "32")))
+ACTION_EXPLORATION_FLOOR = min(0.35, max(0.0, float(os.getenv("PKMAI_ACTION_EXPLORATION_FLOOR", "0.14"))))
 
 
 def _public_reward_events(events) -> list[str]:
@@ -45,6 +46,17 @@ def rollout_fps(step_count: int, elapsed_seconds: float) -> float:
     if elapsed_seconds <= 0:
         return 0.0
     return round(max(0, int(step_count)) / elapsed_seconds, 2)
+
+
+def exploration_distribution(
+    logits: torch.Tensor, exploration_floor: float = ACTION_EXPLORATION_FLOOR
+) -> Categorical:
+    """Sample from the policy while reserving a bounded uniform action floor."""
+    action_count = logits.shape[-1]
+    floor = min(0.99, max(0.0, float(exploration_floor)))
+    probs = torch.softmax(logits, dim=-1)
+    probs = (1.0 - floor) * probs + floor / action_count
+    return Categorical(probs=probs)
 
 
 def live_telemetry(
@@ -154,7 +166,7 @@ def choose_action(policy: PKMAIPolicy, observation: dict) -> tuple[int, float, f
     nav = torch.from_numpy(np.asarray(observation["nav"], dtype=np.float32))[None, ...]
     with torch.no_grad():
         logits, values = policy(image, nav)
-        distribution = Categorical(logits=logits)
+        distribution = exploration_distribution(logits)
         action = distribution.sample()
     return int(action.item()), float(distribution.log_prob(action).item()), float(values.item())
 

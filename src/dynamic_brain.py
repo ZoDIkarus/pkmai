@@ -21,6 +21,19 @@ POLICY_FILE = CLUSTER_DIR / "policy.json"
 MODEL_FILE = CLUSTER_DIR / "dynamic_policy.pt"
 BEST_MODEL_FILE = CLUSTER_DIR / "dynamic_policy_best.pt"
 CHECKPOINTS_DIR = CLUSTER_DIR / "brain_checkpoints"
+ACTION_EXPLORATION_FLOOR = min(
+    0.35, max(0.0, float(os.getenv("PKMAI_ACTION_EXPLORATION_FLOOR", "0.14")))
+)
+
+
+def combine_rollouts(batches: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
+    """Keep PPO updates broad enough that one tiny rollout cannot steer policy."""
+    if not batches:
+        raise ValueError("at least one rollout batch is required")
+    return {
+        name: np.concatenate([np.asarray(batch[name]) for batch in batches], axis=0)
+        for name in batches[0]
+    }
 
 
 class DynamicLearner:
@@ -60,7 +73,12 @@ class DynamicLearner:
         advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
 
         logits, values = self.model(images, nav)
-        distribution = Categorical(logits=logits)
+        probabilities = torch.softmax(logits, dim=-1)
+        probabilities = (
+            (1.0 - ACTION_EXPLORATION_FLOOR) * probabilities
+            + ACTION_EXPLORATION_FLOOR / logits.shape[-1]
+        )
+        distribution = Categorical(probs=probabilities)
         ratio = torch.exp(distribution.log_prob(actions) - old_log_probs)
         clipped = torch.clamp(ratio, 0.8, 1.2) * advantages
         policy_loss = -torch.minimum(ratio * advantages, clipped).mean()
@@ -100,16 +118,22 @@ class DynamicLearner:
 
 def main() -> None:
     checkpoint_every = max(1, int(os.getenv("PKMAI_CLUSTER_CHECKPOINT_EVERY", "50")))
+    batches_per_update = max(2, int(os.getenv("PKMAI_CLUSTER_BATCHES_PER_UPDATE", "8")))
     learner = DynamicLearner()
     CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
     best_mean_reward = float("-inf")
     learner.restore_latest()
     learner.publish(best=True)
+    pending_batches = []
     while True:
         consumed = 0
         for _, batch in consume_rollouts(INBOX, limit=8):
-            metrics = learner.learn(batch)
+            pending_batches.append(batch)
             consumed += 1
+            if len(pending_batches) < batches_per_update:
+                continue
+            metrics = learner.learn(combine_rollouts(pending_batches))
+            pending_batches.clear()
             checkpoint = None
             if learner.version % checkpoint_every == 0:
                 checkpoint_path = CHECKPOINTS_DIR / f"dynamic-v{learner.version:08d}.pt"

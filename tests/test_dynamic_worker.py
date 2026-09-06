@@ -3,11 +3,20 @@ import unittest
 import numpy as np
 import torch
 
-from cluster_worker import choose_action, live_telemetry, rollout_fps, worker_rank
+from cluster_worker import choose_action, exploration_distribution, live_telemetry, rollout_fps, worker_rank
 from dynamic_policy import PKMAIPolicy
 
 
 class DynamicWorkerTests(unittest.TestCase):
+    def test_exploration_distribution_keeps_every_action_sampleable(self):
+        distribution = exploration_distribution(
+            torch.tensor([[20.0, -20.0, -20.0, -20.0, -20.0, -20.0, -20.0]]),
+            exploration_floor=0.14,
+        )
+
+        self.assertGreaterEqual(float(distribution.probs.min()), 0.14 / 7 - 1e-6)
+        self.assertAlmostEqual(float(distribution.probs.sum()), 1.0)
+
     def test_rollout_fps_uses_completed_steps_and_elapsed_wall_time(self):
         self.assertEqual(rollout_fps(32, 4.0), 8.0)
         self.assertEqual(rollout_fps(32, 0.0), 0.0)

@@ -117,6 +117,8 @@ class PokemonFireRedEnv(gym.Env):
     NEW_MAP_REWARD = 20.0
     # Bekannte notwendige Map, erstmals in dieser Episode erreicht.
     EPISODE_NEW_MAP_REWARD = 0.0
+    CITY_BUILDING_BANKS = {5, 6}
+    BUILDING_FIRST_GLOBAL_REWARD = 500.0
     NEW_GLOBAL_DEPTH_REWARD = 300.0
     STARTER_REWARD = 500.0
     ENEMY_DAMAGE_REWARD_PER_HP = 0.08
@@ -652,11 +654,20 @@ class PokemonFireRedEnv(gym.Env):
         tiles.add(tile)
         if int(bank) in self.INTERIOR_TILE_REWARD_BY_BANK:
             base = self.INTERIOR_TILE_REWARD_BY_BANK[int(bank)]
+            cap = self.INTERIOR_TILE_CAP_PER_MAP
         else:
             base = self.TILE_REWARD_BY_STAGE[self._tile_stage(bank, map_id)]
-        if len(tiles) > self.TILE_REWARD_CAP_PER_MAP:
+            cap = self.TILE_REWARD_CAP_PER_MAP
+        if len(tiles) > cap:
             base *= self.TILE_REWARD_AFTER_CAP_FACTOR
         return base
+
+    @classmethod
+    def _city_building_claim_key(cls, bank, map_id):
+        """Return a city-building claim key, never for Pallet bank 4 interiors."""
+        if int(bank) in cls.CITY_BUILDING_BANKS and int(bank) != 4:
+            return f"building_{int(bank)}_{int(map_id)}"
+        return None
 
     @staticmethod
     def _warp_pair_key(from_bank, from_map, to_bank, to_map):
@@ -3017,6 +3028,17 @@ class PokemonFireRedEnv(gym.Env):
                         reward_events.append(
                             "new_map_local:"
                             f"+{local_map_reward:.2f}"
+                        )
+
+                    building_key = self._city_building_claim_key(bank, map_id)
+                    if building_key and claim_event(
+                        EXPLORATION_MEMORY_DIR, building_key, self.shared_lock
+                    ):
+                        reward += self.BUILDING_FIRST_GLOBAL_REWARD
+                        reward_events.append(
+                            "new_building_global:"
+                            f"{int(bank)}_{int(map_id)}:"
+                            f"+{self.BUILDING_FIRST_GLOBAL_REWARD:.2f}"
                         )
 
                 # Zusaetzliche Zwischenstaende nach wachsender Episode-Map-Abdeckung.

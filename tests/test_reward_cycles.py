@@ -100,6 +100,23 @@ class V17RewardTuningTests(unittest.TestCase):
         self.assertFalse(PokemonFireRedEnv._can_reward_exploration(env, 2))
         self.assertTrue(PokemonFireRedEnv._can_reward_exploration(env, 4))
 
+    def test_bank_four_interiors_never_receive_a_city_building_claim(self):
+        self.assertEqual(PokemonFireRedEnv.CITY_BUILDING_BANKS, {5, 6})
+        self.assertIsNone(PokemonFireRedEnv._city_building_claim_key(4, 3))
+        self.assertEqual(
+            PokemonFireRedEnv._city_building_claim_key(5, 4), "building_5_4"
+        )
+        self.assertEqual(
+            PokemonFireRedEnv._city_building_claim_key(6, 7), "building_6_7"
+        )
+
+    def test_bank_four_interior_tiles_use_the_lower_interior_cap(self):
+        env = object.__new__(PokemonFireRedEnv)
+        env._episode_tiles_by_map = {(4, 3): set(range(15))}
+        self.assertAlmostEqual(
+            PokemonFireRedEnv._tile_reward(env, 4, 3, 15, 0), 0.04
+        )
+
     def test_stuck_penalty_grows_continuously_without_a_discontinuity(self):
         self.assertEqual(stuck_loop_penalty(59), 0.0)
         self.assertEqual(stuck_loop_penalty(60), -0.001)

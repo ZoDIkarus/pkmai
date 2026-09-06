@@ -3,11 +3,15 @@ import unittest
 import numpy as np
 import torch
 
-from cluster_worker import choose_action, live_telemetry, worker_rank
+from cluster_worker import choose_action, live_telemetry, rollout_fps, worker_rank
 from dynamic_policy import PKMAIPolicy
 
 
 class DynamicWorkerTests(unittest.TestCase):
+    def test_rollout_fps_uses_completed_steps_and_elapsed_wall_time(self):
+        self.assertEqual(rollout_fps(32, 4.0), 8.0)
+        self.assertEqual(rollout_fps(32, 0.0), 0.0)
+
     def test_live_telemetry_reports_current_overworld_position_and_progress(self):
         class Environment:
             cached_loc = {"valid": True, "map_bank": 3, "map_id": 7, "x_pos": 14, "y_pos": 22}

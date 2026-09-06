@@ -177,3 +177,9 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.assertIn("selectedTrainer", page)
         self.assertIn("reward_trace", page)
         self.assertIn("training_objective", page)
+
+    def test_trainer_page_labels_current_fps(self):
+        page = web_stream.index()
+
+        self.assertIn("FPS", page)
+        self.assertIn("w.fps", page)

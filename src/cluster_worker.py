@@ -40,11 +40,19 @@ def _public_reward_events(events) -> list[str]:
     ][-8:]
 
 
+def rollout_fps(step_count: int, elapsed_seconds: float) -> float:
+    """Wall-clock action throughput for the just-finished rollout."""
+    if elapsed_seconds <= 0:
+        return 0.0
+    return round(max(0, int(step_count)) / elapsed_seconds, 2)
+
+
 def live_telemetry(
     env: PokemonFireRedEnv,
     *,
     action: int,
     reward: float,
+    fps: float | None = None,
     info: dict | None = None,
     reward_trace: list[dict] | None = None,
 ) -> dict:
@@ -61,6 +69,7 @@ def live_telemetry(
         },
         "last_action": max(0, int(action)),
         "last_reward": float(reward),
+        "fps": max(0.0, float(fps)) if fps is not None else None,
         "episode_steps": max(0, int(getattr(env, "total_steps", 0) or 0)),
         "in_battle": bool(getattr(env, "last_in_battle", False)),
         "milestones": sorted(str(value) for value in getattr(env, "saved_milestones", ()) or ()),
@@ -162,6 +171,7 @@ def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: di
     rows = {name: [] for name in ("images", "nav", "actions", "rewards", "dones", "log_probs", "values")}
     telemetry = live_telemetry(env, action=0, reward=0.0)
     reward_trace = []
+    started_at = time.monotonic()
     for _ in range(ROLLOUT_STEPS):
         action, log_prob, value = choose_action(policy, observation)
         next_observation, reward, terminated, truncated, info = env.step(action)
@@ -182,7 +192,12 @@ def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: di
             }
         )
         telemetry = live_telemetry(
-            env, action=action, reward=reward, info=info, reward_trace=reward_trace
+            env,
+            action=action,
+            reward=reward,
+            fps=rollout_fps(len(rows["actions"]), time.monotonic() - started_at),
+            info=info,
+            reward_trace=reward_trace,
         )
         observation = env.reset()[0] if done else next_observation
     return {

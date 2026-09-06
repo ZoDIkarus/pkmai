@@ -55,3 +55,53 @@ class BattleState:
         if position is not None:
             self.position = position
         return int(self.active)
+
+
+class MainBattleReader:
+    """Use gMain.inBattle only after locating a verified live gMain structure."""
+
+    def __init__(self):
+        self.candidates = None
+        self.samples = 0
+        self.offset = None
+
+    def read(self, ram, frames=14):
+        if ram is None or len(ram) < 0x48000:
+            return None
+
+        def u32(offset):
+            return int.from_bytes(bytes(ram[offset:offset + 4]), "little")
+
+        def callback(value):
+            return 0x08000001 <= value < 0x0A000000 and value & 1
+
+        def valid(base):
+            return callback(u32(base + 4)) and callback(u32(base + 12))
+
+        if self.offset is not None:
+            if valid(self.offset):
+                return bool(int(ram[self.offset + 0x439]) & 2)
+            self.__init__()
+            return None
+
+        if self.candidates is None:
+            self.candidates = {
+                base: u32(base + 0x24)
+                for base in range(0x40000, 0x48000 - 0x43C, 4)
+                if valid(base)
+            }
+            return None
+
+        self.candidates = {
+            base: u32(base + 0x24)
+            for base, previous in self.candidates.items()
+            if valid(base) and (u32(base + 0x24) - previous) % (2 ** 32) == frames
+        }
+        self.samples += 1
+        if not self.candidates:
+            self.candidates = None
+            self.samples = 0
+        elif len(self.candidates) == 1 and self.samples >= 2:
+            self.offset = next(iter(self.candidates))
+            return bool(int(ram[self.offset + 0x439]) & 2)
+        return None

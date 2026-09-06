@@ -1,6 +1,6 @@
 import unittest
 
-from battle_state import BattleState
+from battle_state import BattleState, MainBattleReader
 
 
 def enemy(personality=42, hp=10):
@@ -14,6 +14,9 @@ def enemy(personality=42, hp=10):
 
 
 class BattleStateTests(unittest.TestCase):
+    def test_live_reader_falls_back_cleanly_until_a_main_layout_is_verified(self):
+        self.assertIsNone(MainBattleReader().read(bytearray(64)))
+
     def test_enemy_ram_change_detects_wild_battle_with_zero_flags(self):
         tracker = BattleState()
         self.assertEqual(tracker.update(enemy(), (3, 19, 4, 5), flags=0), 1)

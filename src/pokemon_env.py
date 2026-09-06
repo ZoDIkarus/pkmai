@@ -7,7 +7,7 @@ import os
 import json
 import gzip
 import random
-from battle_state import BattleState
+from battle_state import BattleState, MainBattleReader
 from firered_ram import (
     read_battle_type_flags,
     read_enemy_party,
@@ -233,6 +233,7 @@ class PokemonFireRedEnv(gym.Env):
         self.last_gameplay_ready = False
         self.last_in_battle = 0
         self.battle_state = BattleState()
+        self.main_battle_reader = MainBattleReader()
         self.wipe_active = False
         self._party_had_living_member = False
         self._pending_party_wipe = False
@@ -1910,6 +1911,7 @@ class PokemonFireRedEnv(gym.Env):
         self.episode_enemy_damage_reward = 0.0
         self.episode_enemy_faints = 0
         self.battle_state = BattleState()
+        self.main_battle_reader = MainBattleReader()
         self.wipe_active = False
         self._party_had_living_member = False
         self._pending_party_wipe = False
@@ -2208,12 +2210,17 @@ class PokemonFireRedEnv(gym.Env):
             battle_party = read_enemy_party(self.env)
         except Exception:
             battle_party = self.enemy_party_cache
+        try:
+            live_battle = self.main_battle_reader.read(self.env.get_ram())
+        except Exception:
+            live_battle = None
         position = (bank, map_id, x, y) if loc.get("trusted", False) else None
         in_battle = self.battle_state.update(
             battle_party,
             position,
             flags=read_battle_type_flags(self.env),
             signal=bool(info.get("in_battle", 0)),
+            live=live_battle,
         )
         info["in_battle"] = in_battle
         info["battle_detection"] = self.battle_state.reason

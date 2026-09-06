@@ -160,6 +160,39 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.assertEqual(payload["workers"][0]["reward_trace"][0]["events"], ["new_tile:+0.20"])
         self.assertNotIn("signature", payload["workers"][0])
 
+    def test_cluster_status_exposes_current_curriculum_goals_and_active_objectives(self):
+        now = time.time()
+        web_stream.CLUSTER_WORKERS_FILE.write_text(
+            json.dumps(
+                {
+                    "worker-a": {
+                        "worker_id": "worker-a",
+                        "last_seen": now,
+                        "milestones": ["intro_complete"],
+                        "training_objective": "intro",
+                    },
+                    "worker-b": {
+                        "worker_id": "worker-b",
+                        "last_seen": now,
+                        "training_objective": "scout",
+                    },
+                }
+            )
+        )
+
+        payload = web_stream.get_cluster_status()
+
+        self.assertEqual(
+            payload["goals"][0],
+            {
+                "key": "intro_complete",
+                "label": "Intro abschließen",
+                "observed": True,
+                "active_trainers": 1,
+            },
+        )
+        self.assertEqual(payload["learning_objectives"], [{"key": "intro", "trainers": 1}, {"key": "scout", "trainers": 1}])
+
     def test_dashboard_has_the_five_operational_pages(self):
         page = web_stream.index()
 
@@ -168,6 +201,13 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.assertIn('data-page="trainers"', page)
         self.assertIn('data-page="overworld"', page)
         self.assertIn('data-page="goals"', page)
+
+    def test_dashboard_goals_render_live_goal_and_objective_payloads(self):
+        page = web_stream.index()
+
+        self.assertIn("state.cluster.goals", page)
+        self.assertIn("state.cluster.learning_objectives", page)
+        self.assertIn("active_trainers", page)
 
     def test_trainer_page_has_selectable_details_and_reward_trace(self):
         page = web_stream.index()

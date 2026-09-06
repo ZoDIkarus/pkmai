@@ -62,6 +62,13 @@ def stuck_loop_penalty(stuck_steps):
     return -0.001 * max(0, int(stuck_steps) - 59)
 
 
+def battle_stagnation_penalty(stagnant_hp_reads, grace_reads=16, penalty=-0.5):
+    """Penalize only repeated verified battle HP snapshots with no change."""
+    reads = int(stagnant_hp_reads)
+    grace = max(1, int(grace_reads))
+    return float(penalty) if reads >= grace and reads % grace == 0 else 0.0
+
+
 class PokemonFireRedEnv(gym.Env):
     BUILD_TAG = "V10.25_SKILL_VAULT_FULL_CHAIN"
     metadata = {"render_modes": []}
@@ -127,6 +134,8 @@ class PokemonFireRedEnv(gym.Env):
     BATTLE_WIN_REWARD = 0.0
     LEVEL_GAIN_REWARD = 10.0
     ENEMY_HP_READ_EVERY = 2
+    BATTLE_STAGNATION_HP_READS = 16
+    BATTLE_STAGNATION_PENALTY = -0.5
     NEW_TRANSITION_REWARD = 100.0
     REPLAY_MAP_REWARD = 5.0
     REPLAY_EDGE_REWARD = 0.0
@@ -269,6 +278,8 @@ class PokemonFireRedEnv(gym.Env):
         self.player_party_cache = []
         self.battle_activity_open = False
         self.enemy_hp_min = {}
+        self.battle_hp_signature = None
+        self.battle_stagnant_hp_reads = 0
         self.enemy_fainted_rewarded = set()
         self.episode_enemy_damage_hp = 0
         self.episode_enemy_damage_reward = 0.0
@@ -2323,6 +2334,8 @@ class PokemonFireRedEnv(gym.Env):
             self.battle_activity_open = True
             self.enemy_party_cache = []
             self.enemy_hp_min = {}
+            self.battle_hp_signature = None
+            self.battle_stagnant_hp_reads = 0
             self.enemy_fainted_rewarded = set()
             self._save_run_stats()
         elif previous_battle_state == 1 and in_battle == 0:
@@ -2331,6 +2344,8 @@ class PokemonFireRedEnv(gym.Env):
             self.battle_activity_open = False
             self.enemy_party_cache = []
             self.enemy_hp_min = {}
+            self.battle_hp_signature = None
+            self.battle_stagnant_hp_reads = 0
             self.enemy_fainted_rewarded = set()
             self._save_run_stats()
 
@@ -2470,6 +2485,7 @@ class PokemonFireRedEnv(gym.Env):
 
             if enemy_party:
                 self.enemy_party_cache = enemy_party
+                enemy_hp_signature = []
                 for mon in enemy_party:
                     slot = int(mon.get("slot", -1))
                     species = int(mon.get("species_id", 0))
@@ -2479,6 +2495,7 @@ class PokemonFireRedEnv(gym.Env):
                     if slot < 0 or species <= 0 or max_hp <= 0 or not (0 <= cur_hp <= max_hp):
                         continue
 
+                    enemy_hp_signature.append((slot, species, personality, cur_hp))
                     mon_key = (slot, species, personality)
                     if mon_key not in self.enemy_hp_min:
                         self.enemy_hp_min[mon_key] = cur_hp
@@ -2531,6 +2548,28 @@ class PokemonFireRedEnv(gym.Env):
                                 f"enemy_faint:+{self.ENEMY_FAINT_REWARD:.2f}"
                             )
                         self._save_run_stats()
+
+                if in_battle == 1 and enemy_hp_signature:
+                    current_signature = tuple(sorted(enemy_hp_signature))
+                    if self.battle_hp_signature is None:
+                        self.battle_hp_signature = current_signature
+                        self.battle_stagnant_hp_reads = 0
+                    elif current_signature != self.battle_hp_signature:
+                        self.battle_hp_signature = current_signature
+                        self.battle_stagnant_hp_reads = 0
+                    else:
+                        self.battle_stagnant_hp_reads += 1
+                        stagnation_penalty = battle_stagnation_penalty(
+                            self.battle_stagnant_hp_reads,
+                            self.BATTLE_STAGNATION_HP_READS,
+                            self.BATTLE_STAGNATION_PENALTY,
+                        )
+                        if stagnation_penalty:
+                            reward += stagnation_penalty
+                            reward_events.append(
+                                "battle_hp_stagnant:"
+                                f"{stagnation_penalty:.2f}"
+                            )
 
         # ---------------------------------------------------------
         # START ANTI-SPAM

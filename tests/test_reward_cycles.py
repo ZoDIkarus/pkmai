@@ -1,6 +1,11 @@
 import unittest
 
-from pokemon_env import PokemonFireRedEnv, short_cycle_repeats, stuck_loop_penalty
+from pokemon_env import (
+    PokemonFireRedEnv,
+    battle_stagnation_penalty,
+    short_cycle_repeats,
+    stuck_loop_penalty,
+)
 
 
 class ShortCycleRepeatsTests(unittest.TestCase):
@@ -24,6 +29,12 @@ class ShortCycleRepeatsTests(unittest.TestCase):
             (3, 0, 14, 9),
         ]
         self.assertEqual(short_cycle_repeats(path), 0)
+
+    def test_battle_stagnation_penalizes_only_sustained_unchanged_hp(self):
+        self.assertEqual(battle_stagnation_penalty(15), 0.0)
+        self.assertEqual(battle_stagnation_penalty(16), -0.5)
+        self.assertEqual(battle_stagnation_penalty(17), 0.0)
+        self.assertEqual(battle_stagnation_penalty(32), -0.5)
 
 
 class V17RewardTuningTests(unittest.TestCase):

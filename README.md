@@ -11,7 +11,7 @@ This supersedes conflicting numbers and restart advice in the historical release
 
 - Trainer battles: normal combat rewards plus +50 start/+50 complete win per trainer and episode. Brock start +500 replaces +50; badge +2000. Navigation roles get only 10% positive wild-combat rewards after three opponent KOs; Fighter exempt.
 - Unknown onward transition: **+0.3 per new episode tile, uncapped**, for all navigation roles; fleet-first discovery adds **+1**, including FULL. Combat values unchanged.
-- 60 learners: **FULL 21 / BRIDGE 16 / FRONTIER 14 / RETENTION 5 / FIGHTER 4**, one shared PPO.
+- 46 learners: **FULL 18 / BRIDGE 8 / FRONTIER 12 / RETENTION 4 / FIGHTER 4**, one shared PPO.
 - Fighter receives **only combat rewards**, at the same values as other roles; only wild-battle decay after three fainted opponents is disabled for Fighter.
 - Healthy Frontier starts require every party member at least 80% HP, no status ailment and usable PP. The local Route-1 anchor was repaired to 62/62 HP with its original position and team preserved.
 - Frontier/Fighter episodes end after a party wipe. Frontier resets after 120 trusted travel steps below its starting stage; Fighter resets after 400 consecutive non-battle steps.
@@ -79,7 +79,7 @@ PPO policy (no second network):
 
 plus the existing dynamic `POST_WIPE_RECOVERY` overlay. Allocation is the
 12 / 12 / 6 / 3 ratio applied after reserving four Fighter slots
-(at 60 envs: 21 / 16 / 14 / 5 / 4).
+(at 46 envs: 18 / 8 / 12 / 4 / 4).
 
 Two separate progress concepts now exist:
 
@@ -177,7 +177,7 @@ Viridian. Fixes:
   away beats wiping at −100.
 
 **FIGHTER role** (`curriculum_v20.MODE_FIGHTER`, `FIGHTER_SLOTS = 4` at fleets
-≥ 20; 60 envs → FULL 21 / BRIDGE 16 / FRONTIER 14 / RETENTION 5 / **FIGHTER 4**).
+≥ 20; 46 envs → FULL 18 / BRIDGE 8 / FRONTIER 12 / RETENTION 4 / **FIGHTER 4**).
 Dedicated ranks that resume the FRONTIER Route 1 anchor and just fight, feeding
 the shared PPO net concentrated, undecayed battle experience:
 - **400-step out-of-battle leash** (`FIGHTER_LEASH_STEPS = 400`): in-battle steps
@@ -280,7 +280,7 @@ loops.
 `FRONTIER` (deepest discovered frontier), `RETENTION` (rotates mastered
 transitions) — allocated 12 / 12 / 6 / 3 scaled to `NUM_ENVS`, plus a fixed
 `FIGHTER` block of 4 at the end at fleets ≥ 20 (`curriculum_v20.allocate_modes`;
-60 envs → FULL 21 / BRIDGE 16 / FRONTIER 14 / RETENTION 5 / FIGHTER 4).
+46 envs → FULL 18 / BRIDGE 8 / FRONTIER 12 / RETENTION 4 / FIGHTER 4).
 `POST_WIPE_RECOVERY` still overrides dynamically on a wipe. `V20_CURRICULUM =
 True` is the master switch; set it `False` to fall back to the V17–V19 scout-band
 behaviour. See the dated "Start-state rule …" section near the top for the

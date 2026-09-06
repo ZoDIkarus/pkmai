@@ -47,7 +47,7 @@ def evaluation_module(root):
     return module
 
 
-def make_evaluation_env(root, navigation=((), (), ()), n_envs=60):
+def make_evaluation_env(root, navigation=((), (), ()), n_envs=46):
     module = evaluation_module(root)
     edges, maps, transitions = navigation
     # V17.4: shared_tiles darf NICHT leer starten wie shared_species - sonst

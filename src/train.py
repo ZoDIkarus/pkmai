@@ -24,7 +24,7 @@ from pokemon_env import PokemonFireRedEnv
 # Das ergibt 25.600 Samples pro PPO-Update und laesst Rewards innerhalb langer
 # Intro-/Navigationsfolgen wesentlich weiter zurueckwirken.
 # Sichtbar gerendert wird nur der unabhaengige Watcher; Rendering trainiert nicht.
-NUM_ENVS = 60
+NUM_ENVS = 46  # 2026-09-07 (user): 60 -> 46 to lift per-env FPS
 
 # Endlos-Training: laeuft in Bloecken weiter, bis du Ctrl+C drueckst.
 # TRAIN_CHUNK_TIMESTEPS ist nur die Groesse eines learn()-Blocks.

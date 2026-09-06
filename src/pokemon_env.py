@@ -16,7 +16,7 @@ from firered_ram import (
 )
 from reward_state import claim_event
 from curriculum import local_frontier_roles
-from loop_guard import LocalLoopGuard
+from loop_guard import LocalLoopGuard, ShortCycleGuard
 
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -260,6 +260,7 @@ class PokemonFireRedEnv(gym.Env):
         self.battle_state = BattleState()
         self.main_battle_reader = MainBattleReader()
         self.local_loop_guard = LocalLoopGuard()
+        self.short_cycle_guard = ShortCycleGuard()
         self.wipe_active = False
         self._party_had_living_member = False
         self._pending_party_wipe = False
@@ -2015,6 +2016,7 @@ class PokemonFireRedEnv(gym.Env):
         self.battle_state = BattleState()
         self.main_battle_reader = MainBattleReader()
         self.local_loop_guard = LocalLoopGuard()
+        self.short_cycle_guard = ShortCycleGuard()
         self.wipe_active = False
         self._party_had_living_member = False
         self._pending_party_wipe = False
@@ -3484,11 +3486,23 @@ class PokemonFireRedEnv(gym.Env):
                 (p_lvl, badges, bool(self.has_starter), len(self.visited_maps)),
                 in_battle=bool(in_battle),
             )
-            if in_battle == 0 and (self.stuck_counter >= 900 or local_loop):
+            short_cycle = self.short_cycle_guard.update(
+                (bank, map_id, x, y),
+                (p_lvl, badges, bool(self.has_starter), len(self.visited_maps)),
+                active=(in_battle == 0 and self.previous_valid_map == map_id),
+            )
+            if short_cycle["penalty"]:
+                reward += short_cycle["penalty"]
+                reward_events.append(f"loop_penalty:{short_cycle['penalty']:.3f}")
+
+            if in_battle == 0 and (
+                self.stuck_counter >= 900 or local_loop or short_cycle["truncate"]
+            ):
                 truncated = True
                 info["anti_loop_reset"] = True
                 self.last_stage_timeout = (
-                    "local_loop" if local_loop else "stationary_loop"
+                    "short_cycle_loop" if short_cycle["truncate"]
+                    else "local_loop" if local_loop else "stationary_loop"
                 )
                 reward_events.append(f"{self.last_stage_timeout}:truncate")
                 self.anti_loop_resets += 1

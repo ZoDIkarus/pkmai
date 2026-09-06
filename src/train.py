@@ -222,8 +222,11 @@ class MilestoneCheckpointCallback(BaseCallback):
         self.recent = deque(maxlen=600)
         self.recent_full = deque(maxlen=256)
         self.full_live = {}
-        self.min_eval_episodes = 32
-        self.min_full_episodes = 32
+        # 2026-09-07 (user): 32 -> 8. Episode budgets were raised across the
+        # board (LONG_FULL_PROBE_STEPS ~32k for everyone), so 32 completed
+        # Full-runs per generation took so long the champion never advanced.
+        self.min_eval_episodes = 8
+        self.min_full_episodes = 8
         self.champion_score = None
         self.champion_metrics = {}
         self.rollback_count = 0
@@ -1437,7 +1440,7 @@ def main():
         f"epochs={model.n_epochs} | gae_lambda={model.gae_lambda}"
     )
     print(
-        "🏆 Champion-Regel: mindestens 32 abgeschlossene Full-Runs; "
+        "🏆 Champion-Regel: mindestens 8 abgeschlossene Full-Runs; "
         "nur bessere Kandidaten werden übernommen, Regression wird zurückgerollt."
     )
 

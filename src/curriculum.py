@@ -14,6 +14,19 @@ STAGE_LABEL = {
     "left_house": "Haus verlassen",
     "starter": "Starter erhalten",
 }
+GOAL_CATALOG = (
+    ("intro_complete", "Intro abschließen", "Story", "intro", "intro_complete"),
+    ("stairs_down", "Treppe erreichen", "Story", "stairs", "stairs_down"),
+    ("left_house", "Haus verlassen", "Story", "exit", "left_house"),
+    ("starter", "Starter erhalten", "Story", "starter", "starter"),
+    ("maps_3", "Drei Karten erschließen", "Erkundung", "progress", "maps_3"),
+    ("maps_5", "Fünf Karten erschließen", "Erkundung", "progress", "maps_5"),
+    ("maps_10", "Zehn Karten erschließen", "Erkundung", "scout", "maps_10"),
+    ("level_7", "Pokémon auf Level 7 trainieren", "Kampf", "level", "level_7"),
+    ("progress_1", "Ersten Fortschritts-Checkpoint sichern", "Fortschritt", "progress", "progress_1"),
+    ("brock_rush", "Brock Rush: Trainerkampf in Pewter starten", "Kampf", "battle", "brock_battle_start"),
+    ("badge_1", "Erstes Arena-Abzeichen erhalten", "Arena", "badge", "badge_1"),
+)
 MIN_EVALUATION_EPISODES = 10
 MIN_SUCCESS_RATE = 0.60
 RECENT_WINDOW = 20

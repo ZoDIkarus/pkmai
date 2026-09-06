@@ -193,11 +193,36 @@ class ClusterStatusApiTests(unittest.TestCase):
             {
                 "key": "intro_complete",
                 "label": "Intro abschließen",
+                "category": "Story",
                 "observed": True,
                 "active_trainers": 1,
             },
         )
         self.assertEqual(payload["learning_objectives"], [{"key": "intro", "trainers": 1}, {"key": "scout", "trainers": 1}])
+
+    def test_cluster_status_includes_brock_and_frontier_goal_catalog(self):
+        now = time.time()
+        web_stream.CLUSTER_WORKERS_FILE.write_text(
+            json.dumps(
+                {
+                    "worker-a": {
+                        "worker_id": "worker-a",
+                        "last_seen": now,
+                        "milestones": ["maps_3", "level_7", "progress_1"],
+                        "last_reward_events": ["brock_battle_start:+500"],
+                        "training_objective": "battle",
+                    }
+                }
+            )
+        )
+
+        goals = {goal["key"]: goal for goal in web_stream.get_cluster_status()["goals"]}
+
+        self.assertTrue(goals["maps_3"]["observed"])
+        self.assertTrue(goals["level_7"]["observed"])
+        self.assertTrue(goals["progress_1"]["observed"])
+        self.assertTrue(goals["brock_rush"]["observed"])
+        self.assertEqual(goals["brock_rush"]["active_trainers"], 1)
 
     def test_dashboard_has_the_five_operational_pages(self):
         page = web_stream.index()

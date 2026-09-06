@@ -51,7 +51,7 @@ class ShortCycleRepeatsTests(unittest.TestCase):
 
 
 class V17RewardTuningTests(unittest.TestCase):
-    def test_local_ten_worker_curriculum_reserves_two_frontier_scouts(self):
+    def test_local_ten_worker_curriculum_revalidates_unmeasured_early_stages(self):
         env = object.__new__(PokemonFireRedEnv)
         env.rank = 8
         env.agent_count = 10
@@ -59,9 +59,9 @@ class V17RewardTuningTests(unittest.TestCase):
             "intro_complete", "stairs_down", "left_house", "starter", "progress_3",
         }
         env.full_chain_ready = False
-        self.assertEqual(PokemonFireRedEnv._agent_role(env)[0], "scout")
+        self.assertEqual(PokemonFireRedEnv._agent_role(env)[0], "stairs")
 
-    def test_frontier_scout_resumes_the_deepest_progress_checkpoint(self):
+    def test_unmeasured_early_stages_hold_the_frontier_before_progress_resume(self):
         env = object.__new__(PokemonFireRedEnv)
         env.rank = 8
         env.agent_count = 10
@@ -70,7 +70,7 @@ class V17RewardTuningTests(unittest.TestCase):
         }
         env._discover_saved_milestones = lambda: list(env.saved_milestones)
         env._champion_full_starter_ready = lambda: False
-        self.assertEqual(PokemonFireRedEnv._choose_episode_start(env), "progress_3")
+        self.assertEqual(PokemonFireRedEnv._choose_episode_start(env), "intro_complete")
 
     def test_frontier_scout_uses_the_shared_full_policy_context(self):
         env = object.__new__(PokemonFireRedEnv)

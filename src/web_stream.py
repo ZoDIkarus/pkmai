@@ -12,7 +12,7 @@ import uvicorn
 from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from curriculum import STAGE_LABEL, STAGE_ORDER, STAGE_ROLE
+from curriculum import GOAL_CATALOG
 
 app = FastAPI(title="PKMAI Dashboard")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -160,14 +160,23 @@ def get_cluster_status() -> dict:
         for worker in workers
         if worker["training_objective"] not in {"", "unknown"}
     )
+    observed_events = {
+        event.split(":", 1)[0]
+        for worker in workers
+        for event in (
+            worker["last_reward_events"]
+            + [event for trace in worker["reward_trace"] for event in trace["events"]]
+        )
+    }
     goals = [
         {
-            "key": stage,
-            "label": STAGE_LABEL[stage],
-            "observed": stage in observed_milestones,
-            "active_trainers": objective_counts[STAGE_ROLE[stage]],
+            "key": key,
+            "label": label,
+            "category": category,
+            "observed": evidence in observed_milestones or evidence in observed_events,
+            "active_trainers": objective_counts[objective],
         }
-        for stage in STAGE_ORDER
+        for key, label, category, objective, evidence in GOAL_CATALOG
     ]
     try:
         policy_mtime = CLUSTER_POLICY_FILE.stat().st_mtime
@@ -250,7 +259,7 @@ function renderTrainerDetail(w){const summary=$('trainer-detail-summary'),events
 function renderTrainers(){const root=$('trainer-rows'),workers=state.cluster.workers||[];root.replaceChildren();if(!workers.some(w=>w.worker_id===state.selectedTrainer))state.selectedTrainer=workers[0]?.worker_id||null;workers.forEach(w=>{const r=document.createElement('tr');r.className='trainer-row'+(w.worker_id===state.selectedTrainer?' selected':'');r.tabIndex=0;r.title='Trainer-Details anzeigen';[w.worker_id,w.online?'online':'offline',`${w.training_objective||'unbekannt'} · ${w.training_role||'–'}`,w.story_stage||'–',`v${w.policy_version}`,w.fps===null||w.fps===undefined?'–':Number(w.fps).toFixed(2),position(w),A[w.last_action]||w.last_action,Number(w.last_reward).toFixed(3),Number(w.episode_reward||0).toFixed(2),w.episode_steps,w.in_battle?'ja':'–',w.age_seconds+' s'].forEach((v,i)=>r.append(make('td',v,i===1?(w.online?'online':'offline'):'')));r.onclick=()=>{state.selectedTrainer=w.worker_id;renderTrainers()};r.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();r.click()}};root.append(r)});if(!root.children.length)root.append(make('tr','Keine Trainertelemetrie.','empty'));renderTrainerDetail(workers.find(w=>w.worker_id===state.selectedTrainer))}
 function mapKey(w){const p=w.position;return p?.valid?`B${p.map_bank} · M${p.map_id}`:null}function renderMap(){const workers=state.cluster.workers.filter(w=>w.position?.valid),keys=[...new Set(workers.map(mapKey).filter(Boolean))].sort();const select=$('map-select');if(!keys.includes(state.selectedMap))state.selectedMap=keys[0]||null;select.replaceChildren(...keys.map(k=>{const o=make('option',k);o.value=k;o.selected=k===state.selectedMap;return o}));select.disabled=!keys.length;const canvas=$('coordinate-map'),legend=$('map-legend');canvas.replaceChildren();legend.replaceChildren();workers.filter(w=>mapKey(w)===state.selectedMap).forEach(w=>{const p=w.position,d=make('div',w.worker_id.replace('local-trainer-',''), 'dot'+(w.in_battle?' battle':''));d.style.left=(8+(p.x%64)/64*84)+'%';d.style.top=(10+(p.y%64)/64*80)+'%';d.title=`${w.worker_id}: ${position(w)}`;canvas.append(d);legend.append(make('div',`${w.worker_id} · ${p.x},${p.y}${w.in_battle?' · Battle':''}`))});if(!workers.length){canvas.append(make('div','Warte auf gültige Overworld-Koordinaten.','empty'));legend.append(make('div','Positionen erscheinen nach dem nächsten Trainer-Heartbeat.','muted'))}}
 function renderStats(){const w=state.cluster.workers||[],valid=w.filter(x=>x.position?.valid),battle=w.filter(x=>x.in_battle),rewards=w.length?w.reduce((a,x)=>a+Number(x.last_reward||0),0)/w.length:0,episodeRewards=w.length?w.reduce((a,x)=>a+Number(x.episode_reward||0),0)/w.length:0;const stats=[['Trainer online',w.filter(x=>x.online).length+'/'+w.length],['Policy-Version','v'+(state.cluster.policy_version||0)],['Trainingsschritte',Number(state.cluster.timesteps||0).toLocaleString('de-DE')],['Kartenpositionen',valid.length],['Aktive Battles',battle.length],['Ø letzter Reward',rewards.toFixed(3)],['Ø Episoden-Reward',episodeRewards.toFixed(2)]];$('stat-cards').replaceChildren(...stats.map(([k,v])=>{const e=make('div',undefined,'card');e.append(make('div',k,'muted'),make('div',v,'metric'));return e}))}
-function renderGoals(){const goals=state.cluster.goals||[],objectives=state.cluster.learning_objectives||[],root=$('goals');root.replaceChildren(...goals.map(g=>{const e=make('div',undefined,'goal'),status=[g.observed?'Milestone gespeichert':'noch kein Signal',g.active_trainers?`${g.active_trainers} Trainer aktiv`:''].filter(Boolean).join(' · ');e.append(make('div',g.label),make('span',status,'badge '+(g.observed?'online':'')));return e}));objectives.forEach(o=>{const e=make('div',undefined,'goal');e.append(make('div','Aktiver Trainingsauftrag · '+o.key),make('span',o.trainers+' Trainer','badge online'));root.append(e)});const flow=make('div',undefined,'goal');flow.append(make('div','Kontinuierliche Policy-Lernschleife'),make('span',state.cluster.brain_online?'aktiv':'wartet','badge '+(state.cluster.brain_online?'online':'offline')));root.append(flow)}
+function renderGoals(){const goals=state.cluster.goals||[],objectives=state.cluster.learning_objectives||[],root=$('goals');root.replaceChildren(...goals.map(g=>{const e=make('div',undefined,'goal'),status=[g.category,g.observed?'Milestone gespeichert':'noch kein Signal',g.active_trainers?`${g.active_trainers} Trainer aktiv`:''].filter(Boolean).join(' · ');e.append(make('div',g.label),make('span',status,'badge '+(g.observed?'online':'')));return e}));objectives.forEach(o=>{const e=make('div',undefined,'goal');e.append(make('div','Aktiver Trainingsauftrag · '+o.key),make('span',o.trainers+' Trainer','badge online'));root.append(e)});const flow=make('div',undefined,'goal');flow.append(make('div','Kontinuierliche Policy-Lernschleife'),make('span',state.cluster.brain_online?'aktiv':'wartet','badge '+(state.cluster.brain_online?'online':'offline')));root.append(flow)}
 function render(){renderSummary();renderWatchers();renderTrainers();renderMap();renderStats();renderGoals()}async function refresh(){try{const [watchers,cluster]=await Promise.all([fetch('/api/watchers?t='+Date.now(),{cache:'no-store'}).then(r=>r.json()),fetch('/api/cluster-status?t='+Date.now(),{cache:'no-store'}).then(r=>r.json())]);state.watchers=watchers.watchers||[];state.cluster=cluster;render()}catch{ $('summary').replaceChildren(make('span','Cluster nicht erreichbar','chip offline')) }}
 $('nav').onclick=e=>{const page=e.target.dataset.page;if(!page)return;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page))};$('map-select').onchange=e=>{state.selectedMap=e.target.value;renderMap()};refresh();setInterval(refresh,1500);setInterval(()=>{const active=state.watchers.find(w=>w.id===state.selectedWatcher)||state.watchers[0];if(active)$('watcher-frame').src=active.stream_url+'?t='+Date.now()},150);
 </script></body></html>"""

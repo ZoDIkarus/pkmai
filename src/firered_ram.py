@@ -16,6 +16,11 @@ because those can stay static and break live mapping.
 EWRAM_BUS_BASE = 0x02000000
 IWRAM_BUS_BASE = 0x03000000
 EWRAM_SIZE = 0x40000
+SAVEBLOCK1_VARS_OFFSET = 0x1000
+VARS_START = 0x4000
+VAR_PALLET_OAKS_LAB = 0x4055
+VAR_VIRIDIAN_OLD_MAN = 0x4051
+VAR_VIRIDIAN_MART = 0x4057
 
 GSAVEBLOCK1PTR_BUS = 0x03005008
 
@@ -49,6 +54,15 @@ def _ewram_to_offset(ptr):
     if EWRAM_BUS_BASE <= ptr < EWRAM_BUS_BASE + EWRAM_SIZE:
         return ptr - EWRAM_BUS_BASE
     return None
+
+
+def _scene_var(ram, base, var_id):
+    """Read a plausible u16 SaveBlock1 scene variable, else safely return zero."""
+    index = int(var_id) - VARS_START
+    if base is None or index < 0:
+        return 0
+    value = _u16(ram, int(base) + SAVEBLOCK1_VARS_OFFSET + index * 2)
+    return value if 0 <= value <= 16 else 0
 
 
 def _valid_location(ram, base):
@@ -177,6 +191,9 @@ def read_player_location(env, allow_scan=True):
         "map_id": int(_u8(ram, base + 5)),
         "x_pos": int(_u16(ram, base + 0)),
         "y_pos": int(_u16(ram, base + 2)),
+        "pallet_oaks_lab_scene": _scene_var(ram, base, VAR_PALLET_OAKS_LAB),
+        "viridian_old_man_scene": _scene_var(ram, base, VAR_VIRIDIAN_OLD_MAN),
+        "viridian_mart_scene": _scene_var(ram, base, VAR_VIRIDIAN_MART),
     }
 
 

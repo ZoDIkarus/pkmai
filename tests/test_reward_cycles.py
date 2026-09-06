@@ -51,6 +51,9 @@ class ShortCycleRepeatsTests(unittest.TestCase):
 
 
 class V17RewardTuningTests(unittest.TestCase):
+    def test_stairs_frontier_stops_an_unproductive_run_within_nine_hundred_steps(self):
+        self.assertEqual(PokemonFireRedEnv.STAIRS_TIMEOUT_STEPS, 900)
+
     def test_local_ten_worker_curriculum_revalidates_unmeasured_early_stages(self):
         env = object.__new__(PokemonFireRedEnv)
         env.rank = 8

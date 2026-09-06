@@ -203,7 +203,7 @@ class PokemonFireRedEnv(gym.Env):
     # Early-game Safety / kurze, dichte Lern-Episoden.
     OUTDOOR_CONFIRM_READS = 3
     INTRO_TIMEOUT_STEPS = 1800
-    STAIRS_TIMEOUT_STEPS = 1800
+    STAIRS_TIMEOUT_STEPS = 900
     EXIT_TIMEOUT_STEPS = 7500
     EARLY_HOUSE_HARD_CAP = 12000
 
@@ -3429,7 +3429,7 @@ class PokemonFireRedEnv(gym.Env):
         # 8192 Agent-Schritte.
         #
         # - Intro nicht innerhalb 900 Episode-Steps fertig -> Reset
-        # - Nach Intro: max. 1500 weitere Steps bis F1/Treppe
+        # - Nach Intro: max. 900 weitere Steps bis F1/Treppe
         # - Nach Treppe: max. 2000 weitere Steps bis Hausausgang
         # - Nach Verlassen des Hauses: keine Early-Game-Begrenzung mehr
         if (

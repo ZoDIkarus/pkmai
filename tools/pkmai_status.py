@@ -156,14 +156,42 @@ def render():
     gp = load("exploration_memory", "global_progress.json")
     m = cs.get("metrics", {})
 
-    depth = int(gp.get("max_world_stage", 0))
+    v20 = load("curriculum_v20", "state.json")
+    # Flotten-Rekord = tiefste je beruehrte Stufe (global_progress.json). Das ist
+    # eine Bestmarke, KEIN "freigeschaltet" - ein einzelner (evtl. Glitch-)Schritt
+    # reicht. Was zaehlt: was der Champion reproduziert + was das Curriculum als
+    # gemeistert/entdeckt fuehrt.
+    record_depth = int(gp.get("max_world_stage", 0))
     if gp.get("progress_schema") != "geography_v1":
-        depth = {4: 1, 5: 1, 6: 4, 7: 5, 8: 6, 9: 6}.get(depth, depth)
+        record_depth = {4: 1, 5: 1, 6: 4, 7: 5, 8: 6, 9: 6}.get(record_depth, record_depth)
+    champ_depth = int(m.get("max_stage", 0) or 0)
+    discovered = int(v20.get("discovered_stage", 0) or 0)
+    mastered = int(v20.get("mastered_stage", 0) or 0)
+    bottleneck = v20.get("current_bottleneck")
     stage_names = {
         0: "Start/innen", 1: "Alabastia", 2: "Route 1",
         3: "Vertania", 4: "Route 2", 5: "Vertania-Wald", 6: "Marmoria",
     }
-    wall = "  <-- Route-1-Wand" if depth <= 2 else ""
+    # Die Wand steht am ersten NICHT gemeisterten Uebergang, nicht am Rekord.
+    _trans = v20.get("transitions") or {}
+    if bottleneck:
+        b = int(bottleneck)
+        wall = f"  <-- haengt {stage_names.get(b, b)} -> {stage_names.get(b + 1, b + 1)}"
+    else:
+        wall = ""
+    # Zusaetzlich: der tiefste Uebergang, der oft versucht aber NIE geschafft
+    # wurde - die eigentliche Front-Wand (z.B. Route 1 -> Vertania: 0/246).
+    hard_wall = ""
+    for _k, _rec in sorted(_trans.items(), key=lambda kv: int(kv[0]), reverse=True):
+        _att = int((_rec or {}).get("attempts", 0) or 0)
+        _suc = int((_rec or {}).get("successes", 0) or 0)
+        if _att >= 20 and _suc == 0:
+            _h = int(_k)
+            hard_wall = (
+                f"     Front-Wand:  {stage_names.get(_h, _h)} -> "
+                f"{stage_names.get(_h + 1, _h + 1)}  ({_suc}/{_att} Querungen geschafft)"
+            )
+            break
 
     instances = {}
     watcher = {}
@@ -191,7 +219,16 @@ def render():
 
     # 2) WELT: wo steht die Front gerade.
     out.append("-" * WIDTH)
-    out.append(f"  🗺️ WELT        Stufe {depth}: {stage_names.get(depth, '?')}{wall}")
+    out.append(
+        f"  🗺️ WELT        Champion Stufe {champ_depth}: "
+        f"{stage_names.get(champ_depth, '?')}{wall}"
+    )
+    out.append(
+        f"                 Curriculum: entdeckt {discovered} / gemeistert {mastered}"
+        f"   |   Flotten-Rekord je: {record_depth} ({stage_names.get(record_depth, '?')})"
+    )
+    if hard_wall:
+        out.append(hard_wall)
 
     # V17.2: die SCHIGGI-Sektion (Starter-Erfolgsquote) ist seit dem
     # Savestate-Start ueberfluessig geworden - der Starter ist bereits Teil

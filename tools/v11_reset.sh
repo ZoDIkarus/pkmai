@@ -67,7 +67,7 @@ if [ "$MODE" = "soft" ]; then
   [ -f "$CK/pokemon_skill_starter_best.zip" ] || {
     echo "❌ pokemon_skill_starter_best.zip fehlt. Nutze --hard."; exit 1; }
   cp -p "$CK/pokemon_skill_starter_best.zip" "$CK/pokemon_model_resume.zip"
-  cp -p "$CK/pokemon_skill_starter_best.zip" "$CK/pokemon_model_best.zip"
+  cp -p "$CK/pokemon_skill_starter_best.zip" "$CK/pokemon_model_champion.zip"
   cp -p "$CK/pokemon_skill_starter_best.zip" "$CK/pokemon_model_latest.zip"
   echo "✓ Learner + Champion + latest aus Starter-Skill neu geseedet"
   echo "  BEHALTEN: 5 Skill-zips, skill_vault_scores.json (-> Phase 5),"

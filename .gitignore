@@ -84,3 +84,6 @@ requirements-lock.txt
 .v8_3_night_reset_done
 .v9_clean_night_reset_done
 .v10_1_clean_brain_done
+
+# Extracted/derived map tiles (large, regenerable)
+assets/maps/extracted_firered_maps/

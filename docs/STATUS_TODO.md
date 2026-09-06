@@ -1,5 +1,188 @@
 # Pokemon FireRed AI – PROJECT STATUS / TODO
 
+> **Big deferred changes** (FighterBrain, forest-exit house) live in
+> `docs/BIG_CHANGES_TODO.md`.
+
+## 2026-09-06 — V18: per-run tile ladder, Pokécenter/Mart/badge globals, battle rebalance, dashboard fixes
+
+Full trainer + watcher + web restart, brain kept (learner ~21.5M, champion v9).
+V17.4 was the starting point. All 67 unit tests pass.
+
+**Reward model (`src/pokemon_env.py`):**
+- Tile first-find now pays **per run** (`seen_coords`, every episode fresh) — NOT
+  fleet-once. A watcher / any agent on long-known ground was seeing zero tile
+  reward. Hand-set ladder keyed on the tile's own map stage:
+  `TILE_REWARD_BY_STAGE = {1:2, 2:3, 3:4, 4:5, 5:5, 6:6}` (Pallet 2 … Pewter 6).
+  Interiors `INTERIOR_TILE_REWARD_BY_BANK = {4:1, 5:2, 6:3}` (Pallet/Vertania/
+  Marmoria houses, ~half their city). Plus `GLOBAL_NEW_TILE_BONUS = 1.0`
+  fleet-once on top (`shared_tiles`). Event `new_tile:s<n>[+g]:+N`.
+- City 250/run, route/building 25/run, first global stage unlock 1000-once,
+  per-run stage bonus 0, `NORTH_CORRIDOR_ROW_REWARD` 0 — unchanged from the
+  values confirmed this session; no blanket directional bonus.
+- Scout arrival: `_can_reward_map_arrival` pays scouts for stages deeper than
+  `episode_start_stage`, nothing for backtracking; Pallet excluded for all.
+- **Pokécenter:** `POKECENTER_ENTER_REWARD 100`/run/center, `POKECENTER_ADVANCE_HEAL_REWARD 250`
+  (first heal at a center deeper than any used this run — wipe respawn advanced),
+  `POKECENTER_FIRST_HEAL_GLOBAL_REWARD 1000` once ever per center (`pc_heal_<b>_<m>`).
+- **Poké Mart:** `(5,3)` Vertania — `POKEMART_ENTER_REWARD 100`/run + `POKEMART_FIRST_GLOBAL_REWARD 1000`
+  once ever (`mart_<b>_<m>`). So the brain knows the shop exists (buy Poké Balls).
+- **Badge:** `BADGE_EARNED_REWARD 2000`/run kept + `BADGE_FIRST_GLOBAL_REWARD 5000`
+  fleet-once per badge number (`badge_<n>_ever`).
+- **Battle rebalance** (watcher was 45% of steps in battle): `ENEMY_DAMAGE_REWARD_PER_HP`
+  0.15→0.08; per-episode wild decay `WILD_BATTLE_DECAY_AFTER 6` / `WILD_BATTLE_DECAY_FACTOR 0.3`
+  on `WILD_TRAINING_MAPS` (`_battle_reward_scale`); trainer battles
+  `TRAINER_BATTLE_REWARD_MULT 2.0` on damage/faint/win, exempt from wild decay
+  (`_is_trainer_battle`, `raw_flags & 0x8`). Flee penalty left at −25.
+- **Catch:** `SPECIES_CAUGHT_FIRST_REWARD` 50→120 + `min(level,20)*4`.
+- **Scouts:** `FRONTIER_SCOUT_SLOTS` 5→2 per checkpoint — more of the fleet runs
+  full journeys; scouts were getting through but full runners were not.
+- **Warp reward:** the global bonus claims a coarse `(map_a↔map_b)` pair.
+  Doubly guarded so it truly pays once ever: a pair already in the loaded nav
+  history counts as known (`_derive_warp_pairs`/`_known_warp_pairs`, merged on
+  the watcher 5-min refresh); a genuinely new pair pays once via `claim_event`
+  into `reward_events.json` and stays paid across restarts. Fixes repeated
+  `new_warp_global:+100` for Pallet↔Route 1 after each watcher restart.
+  `persistent_known_transitions` stays coordinate-rich for navigation. No warp
+  reward on the step a battle ends.
+- **Scout backtrack:** a scout that walks back onto/behind its spawn stage
+  (e.g. a Route 1 scout drifting into Pallet) now also gets **no per-run tile
+  reward** there (`new_tile_scout_backtrack:+0`), matching `_can_reward_map_arrival`.
+
+**Dashboard (`src/web_stream.py`, `assets/ui/dashboard-language.js`):**
+- Watcher live image removed from the Overworld-Map left column ("● AGENT · DETAIL"
+  now); the live feed only shows under the Watcher tab.
+- Clicked-agent detail panel gained a "Letzte 10 Rewards" list (`#detail-recent-rewards`).
+- i18n: ~40 missing de→en pairs added; removed the `['Beste','Best']` pair that
+  turned "Bester" into "Bestr". Translation now runs synchronously in the
+  MutationObserver microtask (was `requestAnimationFrame`, paused in background tabs)
+  + `setInterval(translatePage, 700)` safety net + per-node try/catch. Verified
+  live on all 5 tabs, EN and DE.
+
+**Open / watching:**
+- Observe how the fleet responds to the V18 gradient before further tuning.
+- FighterBrain + forest-exit house → `docs/BIG_CHANGES_TODO.md`.
+
+## 2026-09-06 — Route 2 included in scout allocation
+
+User clarified three reached checkpoints must mean 15 scouts. SCOUT_STAGES now
+(2,3,4,5,6): Route 1, Viridian, Route 2, Forest, Pewter. Five fixed ranks per stage;
+Pallet remains excluded. Route 2 had mistakenly been omitted from the earlier
+interpreted list. Full runners use the unchanged master. 64 tests pass, including
+exactly 15 scouts and 45 full slots for stages 2/3/4 in a 60-agent fleet.
+Trainer saved at 18,727,920 before restart. Watcher 63749 not restarted.
+
+
+## 2026-09-06 — Watcher follows learner, trainer alone learns
+
+User clarified watcher should evaluate new brains, not wait for champion approval.
+Trainer retains champion separately as pokemon_model_champion.zip (original weights
+renamed intact). The running watcher's old best-path fallback now resolves to
+pokemon_model_resume.zip: verified live telemetry, same PID 63749, episode 13
+continued, about 59 FPS. No watcher restart or optimizer operation occurred.
+Source watch.py now explicitly prioritizes resume snapshots. Trainer publishes
+resume ZIPs atomically so reload cannot consume partially written snapshots.
+Champion ranking was NOT changed or forced; user clarified separation instead.
+
+Rewards active in trainer: 25 per new map, 50 per new city under existing eligibility;
+per-run world-stage bonus is zero, lifetime global depth unlock is 500. Durable
+claim history is checked even for empty registries and write failure pays nothing.
+63 tests pass including persistence, publication failure and watcher routing.
+Trainer resumed at 18,621,720; PID 70747, first save 18,621,780.
+Running watcher reward code still has old values because its module was loaded
+before these edits; model reload does not reload Python code. Tell user explicitly.
+
+
+## 2026-09-06 — Route 2 checkpoint gate corrected
+
+Route 2 was really visited at y76–79, but a reused Route 1 checkpoint gate required
+y <=34 on every north corridor. Removed that absolute gate: first validated
+arrival can save any geographic stage; north-first replacement remains unchanged.
+Real isolated stage_3 scout advanced to Route 2 and produced stage_4 at x11/y76.
+61 unit tests pass. Trainer saved at 18,585,900 and restarted alone to activate.
+Watcher PID 63749 continues Champion v8 (7,900,560 training steps), not the current
+18.5M learner; candidate evaluations are rejected. No forced champion promotion.
+Fleet snapshots show many full runners oscillating at Pallet/Route 1, earning
++100 map and +1000 stage once then usually paying only -0.005 per action.
+This indicates unresolved policy/reward shortcomings; checkpoint fixes alone are
+not evidence of successful end-to-end learning. No claim that the loop is solved.
+
+
+## 2026-09-06 — False Vertania checkpoint verified and removed from active use
+
+Isolated restores proved stage_3 metadata said Viridian (3/1) while its actual
+state was Route 1 (3/19), x2/y34. Previous explanation of ten scouts as valid
+geographic progress was incorrect. Quarantined stage_3 and legacy lab stage_5
+under runtime/checkpoints/quarantine_20260906_014530. Actual stage_2 verified at
+Route 1 x5/y27, marked with state_validation=1 and SHA-256. Backed up and capped
+false depth records to validated stage 2; model weights preserved.
+Saving now checks fresh RAM location against requested metadata. Loading checks
+validation marker, snapshot hash and actual restored coordinates/stage under the
+shared lock; mismatch restores the previous master. Unverified metadata cannot
+allocate scout bands. 61 unit tests and real Scout reset passed.
+Trainer saved at 8,970,540 and restarted alone. Watcher 63749 untouched.
+
+
+## 2026-09-06 — Checkpoint ordering corrected (restart pending)
+
+Latest user rule: on the same geographic stage/map, smaller Y (further north)
+replaces the old checkpoint regardless of reward. At equal Y, only strictly
+higher episode reward replaces it. Larger Y (south) is always rejected.
+This supersedes reward-only selection. Independent stage updates, exactly five
+fixed scouts per approved stage, and the immutable full-run master are unchanged.
+Regression covers south with huge reward, equal north with lower/equal/higher
+reward, and further north with lower reward after the forest was already reached.
+No runtime savestate was rewritten and no process was restarted.
+
+
+## 2026-09-06 — Restart explicitly authorized and completed
+
+Trainer, watcher, webserver and status monitor restarted in four visible Terminal
+windows. Trainer saved at 8,482,200 steps and resumed that learner explicitly via
+PKMAI_RESUME_SAVED=1; new output confirmed 8,482,260 steps. Web API responds;
+watcher telemetry is fresh, reports gMain.inBattle and approximately 59 FPS.
+PIDs at verification: trainer 63733, web 63739, status 63745, watcher 63749.
+Master savestate remains unchanged. Mapper remains off.
+
+
+## 2026-09-06 — Geographic progression and battle/loop corrections (restart pending)
+
+These changes supersede the older parcel-based stage descriptions below. No trainer,
+watcher, web or mapper process was stopped or restarted during this change.
+
+- Immutable master: the user-recorded `local/custom_integrations/PokemonFireRed-Gba/StartGame.state`
+  after Oak's parcel, verified inside the lab at bank 4/map 3, x6/y4. Every full runner
+  restores this exact original; only scouts load geographic checkpoints.
+  The briefly prepared outdoor derivative was removed, per the latest instruction.
+  Lab/indoor baseline counts as stage 1 and produces no geographic stage jump.
+- Geography: Pallet 1, Route 1 2, Viridian 3, Route 2 4, Viridian Forest 5, Pewter 6.
+  Parcel flags, stairs, buildings and badges do not manufacture geographic stages.
+- Exactly five scouts per valid checkpoint on Route 1, Viridian, Forest and Pewter.
+  Fixed rank bands prevent reassignment when another checkpoint appears. Replacing
+  a savestate never adds scouts. No Pallet or Route 2 scouts. Other agents continue full runs.
+- Each stage independently accepts strictly higher episode reward, including later
+  full runners returning through earlier maps. Battle/wipe states are not captured.
+  Legacy lab checkpoints are rejected by their actual map; old fleet depth is
+  migrated from persisted visited maps at trainer startup, preserving model weights.
+- Battle detection uses dynamically validated gMain.inBattle (not battle-type flags).
+  An isolated real-ROM test detected a zero-type-flag wild encounter and cleared the
+  battle after fleeing without overworld movement. Observations use this same signal.
+- Fresh party HP on every decision; one wipe charge until recovery; wipe healing
+  receives no heal bonus. EXP rewards require the same party and battle context.
+- Global center-heal claim now persists in exploration_memory/reward_events.json.
+  Historical claims made before this file existed cannot be reconstructed reliably;
+  the first post-migration qualifying claim establishes the persistent baseline.
+- A shared local-loop guard ends an episode after 900 overworld decisions on at most
+  eight tiles without exploration/EXP/stage/badge progress. Battles pause counting.
+  This also bounds short back-and-forth loops that reset the old stationary counter.
+- Watcher remains policy evaluation without learning. Updated code takes effect only
+  on the next explicitly approved restart; refreshing navigation is not code reload.
+
+Validation: 58 unit tests, plus isolated emulator checks. Full environment smoke
+validation: 1,000 isolated decisions. Two final resets restored the original master
+location and stage 1; its SHA-256 remained unchanged.
+No user savestate was modified.
+
+
 **Projekt:** Stable-Retro / Gym-Retro + PPO – Pokemon FireRed AI auf macOS  
 **Arbeitsordner:** `~/pokemon_ai_project`  
 **Python:** `/opt/homebrew/Caskroom/miniforge/base/envs/pokemon-ai/bin/python`  

@@ -802,15 +802,23 @@ def get_state():
     deepest_outdoor = 0
     try:
         with open(os.path.join(RUNTIME_DIR, "exploration_memory", "global_progress.json")) as _f:
-            world_depth = int((json.load(_f) or {}).get("max_world_stage", 0))
+            _progress = json.load(_f) or {}
+            world_depth = int(_progress.get("max_world_stage", 0))
+            if _progress.get("progress_schema") != "geography_v1":
+                world_depth = {4: 1, 5: 1, 6: 4, 7: 5, 8: 6, 9: 6}.get(world_depth, world_depth)
     except Exception:
         pass
     try:
         import glob as _glob
         for _p in _glob.glob(os.path.join(RUNTIME_DIR, "curriculum_shared", "stage_*.state.gz")):
             try:
-                deepest_outdoor = max(deepest_outdoor,
-                                      int(os.path.basename(_p).split("_")[1].split(".")[0]))
+                with open(_p[:-9] + ".meta.json") as _meta_file:
+                    _meta = json.load(_meta_file)
+                _stage = int(_meta.get("stage", 0))
+                _actual = {(3,0):1,(3,19):2,(3,1):3,(3,20):4,(1,0):5,(3,2):6}.get(
+                    (_meta.get("bank"), _meta.get("map")), 0)
+                if _actual == _stage and _meta.get("has_starter"):
+                    deepest_outdoor = max(deepest_outdoor, _stage)
             except Exception:
                 pass
     except Exception:
@@ -2271,6 +2279,10 @@ header{padding:6px!important;gap:4px!important}
                 <div class="chart-label">Letztes Reward-Event</div>
                 <div id="detail-event" style="font-size:12px;color:#00e676;padding:6px 8px;">-</div>
             </div>
+            <div class="chart-wrap">
+                <div class="chart-label">Letzte 10 Rewards</div>
+                <div class="wt-events" id="detail-recent-rewards"><div>-</div></div>
+            </div>
             <div class="v8-agent-party" id="v8-agent-party">
                 <div class="v8-agent-party-title">
                     <span>Selected Agent Team</span>
@@ -2857,9 +2869,10 @@ header{padding:6px!important;gap:4px!important}
         let currentTab = 'map';
 
         function refreshWatcherStream() {
-            const img = document.getElementById(currentTab === 'map' ? 'alex-watcher-stream' : 'watcher-stream');
+            // V18: nur noch der Watcher-Tab zeigt das Live-Bild.
+            const img = document.getElementById('watcher-stream');
             if (!img) return;
-            img.src = (currentTab === 'map' ? '/watcher-emulator.jpg?ts=' : '/watcher.jpg?ts=') + Date.now();
+            img.src = '/watcher.jpg?ts=' + Date.now();
             // V17.3: ein einzelner fehlgeschlagener Abruf (Datei mitten im
             // atomaren Replace) durfte das Bild nicht einfrieren lassen, bis
             // die Seite manuell neu geladen wird - sofort erneut versuchen.
@@ -2942,7 +2955,7 @@ header{padding:6px!important;gap:4px!important}
             const evs = Array.isArray(d.reward_events) ? d.reward_events : [];
             const evHtml = evs.slice(-16).reverse().map(e => {
                 const s = (typeof e === 'string') ? e : (e && (e.type || e.name) ? (e.type || e.name) : JSON.stringify(e));
-                const neg = /:-|(-\d)/.test(s);
+                const neg = /:-|(-[0-9])/.test(s);
                 return '<div class="' + (neg ? 'neg' : 'pos') + '">' + s + '</div>';
             }).join('') || '<div>–</div>';
             const rew = Number(d.reward || 0);
@@ -3283,6 +3296,18 @@ header{padding:6px!important;gap:4px!important}
             document.getElementById('detail-event').innerText =
                 `${navState} | ${events.length ? events[events.length - 1] : '-'}`;
 
+            // V18: die letzten 10 Reward-Events des angeklickten Agenten -
+            // schneller Blick, was der gerade tatsaechlich macht.
+            const recentBox = document.getElementById('detail-recent-rewards');
+            if (recentBox) {
+                recentBox.innerHTML = events.slice(-10).reverse().map(e => {
+                    const s = (typeof e === 'string') ? e
+                        : (e && (e.type || e.name) ? (e.type || e.name) : JSON.stringify(e));
+                    const neg = /:-|-[0-9]/.test(s);
+                    return '<div class="' + (neg ? 'neg' : 'pos') + '">' + s + '</div>';
+                }).join('') || '<div>-</div>';
+            }
+
             const h = historyByAgent[inst.id] || {reward:[], steps:[]};
             drawMiniChart('reward-chart', h.reward);
             drawMiniChart('steps-chart', h.steps);
@@ -3349,8 +3374,7 @@ header{padding:6px!important;gap:4px!important}
 
         const FLEET_DEPTH_NAMES = {
             0:'Spielanfang / Alabastia-Innen', 1:'Alabastia (außen)', 2:'Route 1',
-            3:'Vertania City', 4:'Eichs Paket', 5:'Pokédex / Paket abgegeben',
-            6:'Route 2', 7:'Vertania-Wald', 8:'Marmoria City', 9:'Erster Orden'
+            3:'Vertania City', 4:'Route 2', 5:'Vertania-Wald', 6:'Marmoria City'
         };
         const FLEET_ROLE_LABELS = {
             intro:'Intro', stairs:'Treppe', exit:'Haus-Exit', starter:'Starter',
@@ -3564,9 +3588,8 @@ header{padding:6px!important;gap:4px!important}
             const track = document.getElementById('fleet-depth-track');
             if(track){
                 let h='';
-                // V17.3: war bei 7 (Vertania-Wald) gekappt - Marmoria (8) und
-                // erster Orden (9) fehlten komplett in der Anzeige.
-                for(let i=1;i<=9;i++){
+                // Geographic stages; badges are tracked separately.
+                for(let i=1;i<=6;i++){
                     const cls = i<wd ? 'on' : (i===wd ? 'cur' : '');
                     h += `<i class="${cls}" title="${FLEET_DEPTH_NAMES[i]||''}"></i>`;
                 }
@@ -4362,7 +4385,10 @@ setInterval(refreshChampionNight,2000);refreshChampionNight();
   const left=document.createElement('aside');
   left.id='alex-watcher-column';
   left.setAttribute('aria-label', 'Alex Watcher');
-  left.innerHTML='<div class="alex-watcher-title">● ALEX · LIVE WATCHER</div><div class="wt-stream-wrap"><img id="alex-watcher-stream" src="/watcher-emulator.jpg" alt="Alex spielt Pokémon live"></div>';
+  // V18: Das Live-Bild des Watchers laeuft nur noch im Watcher-Tab. In der
+  // Kartenansicht zeigt diese Spalte ausschliesslich das Detail-Feld des
+  // angeklickten Agenten (inkl. der letzten 10 Reward-Events).
+  left.innerHTML='<div class="alex-watcher-title">● AGENT · DETAIL</div>';
   left.appendChild(document.getElementById('detail-panel'));
   const center=document.createElement('section');
   center.id='map-column';

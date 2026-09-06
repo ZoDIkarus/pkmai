@@ -44,11 +44,8 @@ FPS_TITLE_INTERVAL = 0.5
 ACTION_HOLD_FRAMES = 9
 ACTION_RELEASE_FRAMES = 5
 
-# V15.3 BRAIN-MODUS: der sichtbare Watcher benutzt EIN vollstaendiges Netz
-# end-to-end, ohne Skill-Snapshots oder hartkodierte Skill-Umschaltung. Er zeigt
-# den bestaetigten Champion: der rohe Learner kann waehrend eines PPO-Blocks
-# bereits gelernte Intro-Faehigkeiten zeitweise vergessen. Nach jeder echten
-# Champion-Befoerderung wird das neue Gesamt-Brain automatisch nachgeladen.
+# Evaluate one whole trainer snapshot end-to-end. The watcher never learns;
+# it reloads atomically published resume snapshots without waiting for promotion.
 WATCHER_BRAIN_MODE = True
 
 # Reload / RAM
@@ -110,7 +107,7 @@ BOTTOM_H = 74
 # ================================================================
 MODEL_DIR = os.path.join(RUNTIME_DIR, "checkpoints")
 LATEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_latest.zip")
-BEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_best.zip")
+BEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_champion.zip")
 RESUME_MODEL = os.path.join(MODEL_DIR, "pokemon_model_resume.zip")
 VERSION_FILE = os.path.join(RUNTIME_DIR, "model_version.json")
 CHAMPION_FILE = os.path.join(RUNTIME_DIR, "champion_score.json")
@@ -141,11 +138,11 @@ STAGE_SKILLS_USING_VAULT = {"intro", "stairs", "exit", "starter", "progress"}
 
 def get_watcher_model_path(skill=None):
     if WATCHER_BRAIN_MODE:
-        # Ein einziges, vollstaendiges Champion-Netz fuer den gesamten Lauf.
-        if os.path.exists(BEST_MODEL):
-            return BEST_MODEL
+        # Evaluation only: follow trainer snapshots, not champion approval.
         if os.path.exists(RESUME_MODEL):
             return RESUME_MODEL
+        if os.path.exists(BEST_MODEL):
+            return BEST_MODEL
         return LATEST_MODEL
 
     if skill in STAGE_SKILLS_USING_VAULT:

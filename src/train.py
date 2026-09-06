@@ -46,11 +46,11 @@ LEARNING_RATE = 7.5e-05
 # frischeres Feedback bei den langen 12.000-Schritte-Episoden) statt auf
 # einem einzigen sehr grossen Rollout zu sitzen. 256 x 60 Envs = 15.360
 # Rollout-Samples, exakt 60 Minibatches à 256.
-PPO_N_STEPS = 256
+PPO_N_STEPS = 512
 PPO_BATCH_SIZE = 256
 PPO_N_EPOCHS = 4
-PPO_GAMMA = 0.995
-PPO_GAE_LAMBDA = 0.98
+PPO_GAMMA = 0.999
+PPO_GAE_LAMBDA = 0.995
 # 50 parallele Agenten liefern bereits viel Exploration. Eine niedrigere
 # Entropie laesst erfolgreiche Wege und Kampfsequenzen sauberer wiederholen,
 # ohne die Suche im Wald abzuwuergen.
@@ -72,7 +72,7 @@ SHARED_CURRICULUM_DIR = os.path.join(RUNTIME_DIR, "curriculum_shared")
 # ================================================================
 MODEL_DIR = os.path.join(RUNTIME_DIR, "checkpoints")
 LATEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_latest.zip")
-BEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_best.zip")
+BEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_champion.zip")
 CANDIDATE_MODEL = os.path.join(MODEL_DIR, "pokemon_model_candidate.zip")
 RESUME_MODEL = os.path.join(MODEL_DIR, "pokemon_model_resume.zip")
 CHAMPION_FILE = os.path.join(RUNTIME_DIR, "champion_score.json")
@@ -197,6 +197,17 @@ def make_env(
     return _init
 
 
+def save_model_atomic(model, path):
+    """Publish a complete snapshot; a watcher never reads a half-written ZIP."""
+    tmp = path + f".tmp.{os.getpid()}.zip"
+    try:
+        model.save(tmp)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
 class MilestoneCheckpointCallback(BaseCallback):
     """V16: promote measured full-run candidates and protect the champion."""
 
@@ -245,6 +256,10 @@ class MilestoneCheckpointCallback(BaseCallback):
                     data = json.load(f) or {}
                 raw = data.get("score")
                 self.champion_metrics = dict(data.get("metrics") or {})
+                if data.get("progress_schema") != PokemonFireRedEnv.PROGRESS_SCHEMA:
+                    old = int(self.champion_metrics.get("max_stage", 0))
+                    self.champion_metrics["max_stage"] = {4: 1, 5: 1, 6: 4, 7: 5, 8: 6, 9: 6}.get(old, old)
+                    raw = None
                 calculated_score = self._score(self.champion_metrics)
                 if (
                     isinstance(raw, list)
@@ -550,7 +565,8 @@ class MilestoneCheckpointCallback(BaseCallback):
             "maps": int(info.get("visited_maps", 0)),
             "stage": int(info.get("world_stage", 0)),
             "level": level,
-            "steps": int(info.get("episode_steps", 0) or 0),
+            "steps": int(info.get("ppo_episode_steps", info.get("episode_steps", 0)) or 0),
+            "arrivals": dict(info.get("stage_arrival_steps", {})),
         }
 
     @staticmethod
@@ -747,6 +763,7 @@ class MilestoneCheckpointCallback(BaseCallback):
             json.dump({
                 "score": list(score),
                 "metrics": metrics,
+                "progress_schema": PokemonFireRedEnv.PROGRESS_SCHEMA,
                 "timesteps": int(self.num_timesteps),
                 "version": int(self.version),
             }, f)
@@ -768,6 +785,7 @@ class MilestoneCheckpointCallback(BaseCallback):
                 "timesteps": int(self.num_timesteps),
                 "champion": True,
                 "metrics": metrics,
+                "progress_schema": PokemonFireRedEnv.PROGRESS_SCHEMA,
             }, f)
         os.replace(tmp, VERSION_FILE)
 
@@ -830,7 +848,7 @@ class MilestoneCheckpointCallback(BaseCallback):
             return False
         try:
             self.model.set_parameters(BEST_MODEL, exact_match=True)
-            self.model.save(RESUME_MODEL)
+            save_model_atomic(self.model, RESUME_MODEL)
             self.rollback_count += 1
             self.regression_strikes = 0
             self.recent.clear()
@@ -1083,7 +1101,7 @@ class MilestoneCheckpointCallback(BaseCallback):
         # V10.9.4 AUTO-RESUME SAVE
         if self.num_timesteps - self.last_resume_save_step >= self.resume_save_freq:
             self.last_resume_save_step = int(self.num_timesteps)
-            self.model.save(RESUME_MODEL)
+            save_model_atomic(self.model, RESUME_MODEL)
             print(f"💾 Resume-Stand gespeichert bei {self.num_timesteps:,} Steps")
 
         # V10.10.1 LIVE TRAINER STATUS
@@ -1093,7 +1111,7 @@ class MilestoneCheckpointCallback(BaseCallback):
 
     def final_candidate_save(self):
         self.model.save(CANDIDATE_MODEL)
-        self.model.save(RESUME_MODEL)
+        save_model_atomic(self.model, RESUME_MODEL)
         print(f"💾 Resume-Modell gespeichert bei {self.num_timesteps:,} Steps")
 
 def _raise_nofile_limit():
@@ -1108,6 +1126,10 @@ def _raise_nofile_limit():
         print(f"⚠️ NOFILE konnte nicht angehoben werden: {e}")
 
 def main():
+    legacy_champion = os.path.join(MODEL_DIR, "pokemon_model_best.zip")
+    if not os.path.exists(BEST_MODEL) and os.path.exists(legacy_champion):
+        os.replace(legacy_champion, BEST_MODEL)
+
     _raise_nofile_limit()
     if TRAIN_DEVICE == "auto":
         device = (
@@ -1177,6 +1199,7 @@ def main():
         EXPLORATION_MEMORY_DIR, "global_progress.json"
     )
     persisted_depth = 0
+    _gp = {}
     try:
         with open(progress_file, "r") as f:
             _gp = json.load(f) or {}
@@ -1185,6 +1208,14 @@ def main():
             )
     except Exception:
         persisted_depth = 0
+
+    if _gp.get("progress_schema") != PokemonFireRedEnv.PROGRESS_SCHEMA:
+        persisted_depth = max((PokemonFireRedEnv.WORLD_STAGE_BY_MAP.get(tuple(m), 0)
+                               for m in seed_maps), default=1)
+        with open(progress_file + ".tmp", "w") as f:
+            json.dump({"max_world_stage": persisted_depth,
+                       "progress_schema": PokemonFireRedEnv.PROGRESS_SCHEMA}, f)
+        os.replace(progress_file + ".tmp", progress_file)
 
     shared_progress = manager.dict({
         "max_world_stage": persisted_depth,

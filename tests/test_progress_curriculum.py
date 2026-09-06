@@ -38,91 +38,48 @@ class WorldStageTests(unittest.TestCase):
         # Explorationsanreiz sitzt jetzt auf der einzelnen Kachel.
         self.assertEqual(PokemonFireRedEnv.NEW_EDGE_REWARD, 0.0)
         self.assertEqual(PokemonFireRedEnv.EPISODE_EDGE_REWARD, 0.0)
-        self.assertEqual(PokemonFireRedEnv.NEW_TILE_REWARD, 2.0)
-        # V17.4-Fix: derselbe Farm-Loophole wie bei Kanten - laengst
-        # bekannte Innenraeume gaben sonst risikofreies Dauer-Einkommen ohne
-        # je ins Kampfrisiko drausen zu muessen. Nur noch echte fleet-weite
-        # Erstfunde zahlen.
         self.assertEqual(PokemonFireRedEnv.EPISODE_TILE_REWARD, 0.0)
+        # V18: Kachel-Erstfund zahlt PRO LAUF (seen_coords, jede Episode neu),
+        # handgesetzte Leiter pro Story-Aussenmap, Innenraeume nach Stadt-Bank,
+        # plus ein fleet-weit einmaliger +GLOBAL_NEW_TILE_BONUS obendrauf.
+        self.assertEqual(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[1], 2.0)   # Pallet
+        self.assertEqual(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[2], 3.0)   # Route 1
+        self.assertEqual(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[3], 4.0)   # Viridian
+        self.assertEqual(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[6], 6.0)   # Pewter
+        self.assertEqual(PokemonFireRedEnv.GLOBAL_NEW_TILE_BONUS, 1.0)
+        # Innenraeume: Pallet-Haeuser 1 < Vertania 2 < Marmoria 3, jeweils
+        # unter der zugehoerigen Stadt (2/4/6).
+        for bank, city_stage in ((4, 1), (5, 3), (6, 6)):
+            self.assertLess(PokemonFireRedEnv.INTERIOR_TILE_REWARD_BY_BANK[bank],
+                            PokemonFireRedEnv.TILE_REWARD_BY_STAGE[city_stage])
+        e = bare_env()
+        self.assertEqual(e._current_world_stage(3, 0), 1)   # Pallet
+        self.assertEqual(e._current_world_stage(3, 19), 2)  # Route 1
+        self.assertEqual(e._current_world_stage(3, 1), 3)   # Viridian
+        self.assertEqual(e._current_world_stage(4, 3), 0)   # Oak's lab (interior)
 
     def test_arbitrary_interiors_never_increase_stage(self):
         env = bare_env(visited_maps={(3, 0), (4, 0), (4, 1), (5, 0)})
         self.assertEqual(env._world_stage(), 1)
 
-    def test_fire_red_story_chain_is_explicit(self):
-        env = bare_env(
-            visited_maps={(3, 0), (3, 19), (3, 1)},
-            has_target_starter=True,
-        )
-        self.assertEqual(env._world_stage(), 3)
-
-        # Einzelne rohe RAM-Werte duerfen keine permanente Weltstufe setzen.
-        env.viridian_mart_scene = 1
-        self.assertEqual(env._world_stage(), 3)
-        env.parcel_obtained_confirmed = True
-        self.assertEqual(env._world_stage(), 4)
-        env.pallet_oaks_lab_scene = 6
-        self.assertEqual(env._world_stage(), 4)
-        env.parcel_delivered_confirmed = True
-        self.assertEqual(env._world_stage(), 5)
-        env.visited_maps.add((3, 20))
-        self.assertEqual(env._world_stage(), 6)
-        env.visited_maps.add((1, 0))
-        self.assertEqual(env._world_stage(), 7)
-        env.visited_maps.add((3, 2))
-        self.assertEqual(env._world_stage(), 8)
+    def test_story_flags_do_not_change_geographic_stages(self):
+        env = bare_env(visited_maps={(3, 0)}, has_target_starter=True,
+                       parcel_obtained_confirmed=True, parcel_delivered_confirmed=True)
+        for location, stage in [((3,0),1), ((3,19),2), ((3,1),3),
+                                ((3,20),4), ((1,0),5), ((3,2),6)]:
+            env.visited_maps.add(location)
+            self.assertEqual(env._world_stage(), stage)
+            self.assertEqual(env._stage_at_current_location(*location), stage)
+        for location in [(4,3), (5,3), (4,0), (4,1)]:
+            self.assertEqual(env._stage_at_current_location(*location), 0)
         env.last_badges = 1
-        self.assertEqual(env._world_stage(), 9)
+        self.assertEqual(env._world_stage(), 6)
 
-    def test_story_checkpoint_requires_matching_map_and_state(self):
-        env = bare_env(has_target_starter=True, viridian_mart_scene=1)
-        self.assertNotEqual(env._stage_at_current_location(5, 3), 4)
-        env.parcel_obtained_confirmed = True
-        self.assertEqual(env._stage_at_current_location(5, 3), 4)
-        self.assertNotEqual(env._stage_at_current_location(5, 0), 4)
-        env.pallet_oaks_lab_scene = 6
-        self.assertNotEqual(env._stage_at_current_location(4, 3), 5)
-        env.parcel_delivered_confirmed = True
-        self.assertEqual(env._stage_at_current_location(4, 3), 5)
-
-    def test_world_stage_and_location_stage_diverge_once_parcel_is_preconfirmed(self):
-        # V17.4-Fix: der feste Savestate startet mit bereits bestaetigter
-        # Paketabgabe. _world_stage() ist ein Ratchet und floort dadurch ab
-        # Step 0 auf mindestens 5 - EGAL auf welcher Map der Agent steht.
-        # _stage_at_current_location() bleibt dagegen rein standortbasiert
-        # (Route 1 = 2, Vertania = 3). Der Stage-Checkpoint-Code MUSS den
-        # zweiten Wert verwenden (siehe Kommentar an der Aufrufstelle) - mit
-        # dem ersten konnte fuer Route 1/Vertania nie ein Checkpoint
-        # entstehen, weil _save_stage_checkpoint() intern exakte
-        # Uebereinstimmung mit _stage_at_current_location() verlangt.
-        env = bare_env(
-            has_target_starter=True,
-            parcel_obtained_confirmed=True,
-            parcel_delivered_confirmed=True,
-            visited_maps={(3, 19)},
-        )
+    def test_earlier_checkpoint_remains_eligible_after_forest(self):
+        env = bare_env(visited_maps={(1,0), (3,19)})
         self.assertEqual(env._world_stage(), 5)
-        self.assertEqual(env._stage_at_current_location(3, 19), 2)
-        self.assertEqual(env._stage_at_current_location(3, 1), 3)
-
-    def test_saved_stage_baseline_must_not_use_world_stage_either(self):
-        # V17.4-Fix #2: reset() initialisiert _saved_stage (der Checkpoint-
-        # Anti-Doppel-Speicher-Schutz) - das darf ebenfalls NICHT den
-        # world_stage-Ratchet nutzen, sonst startet JEDE Episode mit
-        # _saved_stage>=5 und Route 1 (Stage 2)/Vertania (Stage 3) koennen
-        # NIE einen Checkpoint bekommen, egal wie kurz die Haltezeit ist
-        # (_stage_now(2) > _saved_stage(5) ist nie True). Sogar der fixe
-        # Spawnpunkt Eichs Labor (4,3) selbst wuerde ueber den Paket-Flag-
-        # Bump in _stage_at_current_location ebenfalls auf 5 kommen - nur
-        # der REINE Kartenwert (_current_world_stage, ohne Flag-Bumps) ist
-        # bei einem frischen Reset tatsaechlich 0.
-        env = bare_env(
-            parcel_obtained_confirmed=True,
-            parcel_delivered_confirmed=True,
-        )
-        self.assertEqual(env._current_world_stage(4, 3), 0)
-        self.assertEqual(env._stage_at_current_location(4, 3), 5)
-        self.assertEqual(env._current_world_stage(3, 19), 2)
+        self.assertEqual(env._stage_at_current_location(3,19), 2)
+        self.assertEqual(env._meta_checkpoint_stage({'bank':4, 'map':3, 'stage':5}), 0)
 
     def test_story_confirmation_requires_map_order_and_three_reads(self):
         env = bare_env(has_target_starter=True)
@@ -158,14 +115,14 @@ class WorldStageTests(unittest.TestCase):
         env._update_story_state_from_loc(lab)
         self.assertTrue(env.parcel_delivered_confirmed)
 
-    def test_deep_maps_need_confirmed_parcel_chain(self):
+    def test_deep_maps_are_independent_of_parcel_flags(self):
         env = bare_env(
             visited_maps={(3, 20), (1, 0), (3, 2)},
             has_target_starter=True,
         )
-        self.assertEqual(env._world_stage(), 3)
+        self.assertEqual(env._world_stage(), 6)
         env.parcel_delivered_confirmed = True
-        self.assertEqual(env._world_stage(), 8)
+        self.assertEqual(env._world_stage(), 6)
 
     def test_faster_full_run_wins_only_as_same_quality_tie_breaker(self):
         quality = {
@@ -286,7 +243,7 @@ class RoleAllocationTests(unittest.TestCase):
         # die neu hinzugekommene, hoehere Stage.
         scouts = PokemonFireRedEnv.FRONTIER_SCOUT_SLOTS
         n = 50
-        stage_cps = {2: "stage_2", 6: "stage_6"}
+        stage_cps = {2: "stage_2", 3: "stage_3"}
 
         def scout_env(rank):
             env = bare_env(rank=rank, n_envs=n)
@@ -300,10 +257,10 @@ class RoleAllocationTests(unittest.TestCase):
             scout_env(n - scouts)._choose_episode_start(), "stage_2"
         )
         self.assertEqual(
-            scout_env(n - scouts - 1)._choose_episode_start(), "stage_6"
+            scout_env(n - scouts - 1)._choose_episode_start(), "stage_3"
         )
         self.assertEqual(
-            scout_env(n - 2 * scouts)._choose_episode_start(), "stage_6"
+            scout_env(n - 2 * scouts)._choose_episode_start(), "stage_3"
         )
         self.assertEqual(
             scout_env(n - 2 * scouts - 1)._choose_episode_start(), "beginning"
@@ -337,12 +294,12 @@ class RoleAllocationTests(unittest.TestCase):
         self.assertEqual(roles["battle"], 0)
 
     def test_after_forest_badge_specialists_activate(self):
-        roles = self.roles_at(7)
+        roles = self.roles_at(5)
         self.assertEqual(roles["badge"], 4)
         self.assertEqual(sum(roles.values()), 32)
 
     def test_route_two_prioritizes_world_push_and_full_validation(self):
-        roles = self.roles_at(6)
+        roles = self.roles_at(4)
         self.assertEqual(roles, Counter({
             "progress": 14,
             "full": 8,

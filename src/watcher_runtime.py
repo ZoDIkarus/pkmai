@@ -67,7 +67,9 @@ def make_evaluation_env(root, navigation=((), (), ()), n_envs=60):
         rank=0, n_envs=n_envs,
         shared_edges=dict.fromkeys(edges, 1), shared_maps=dict.fromkeys(maps, 1),
         shared_transitions=dict.fromkeys(transitions, 1),
-        shared_progress={'max_world_stage': 0}, shared_species={},
+        shared_progress={'max_world_stage': max(
+            (module.PokemonFireRedEnv.WORLD_STAGE_BY_MAP.get(tuple(m), 0) for m in maps),
+            default=1)}, shared_species={},
         shared_tiles=dict.fromkeys(tiles, 1),
     )
 

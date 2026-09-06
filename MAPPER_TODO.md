@@ -25,7 +25,9 @@ Webserver, Status und Cloudflare duerfen unabhaengig weiterlaufen.
    Gegner-RAM noch 96 Entscheidungen aktiv. Dadurch steuert der Mapper nach
    einem echten Kampf mehr als zwei Minuten faelschlich weiter das Kampfmenue.
    In `src/mapper.py` fuer Steuerung, Aufnahme-Sperre und Status direkt
-   `firered_ram.read_battle_type_flags()` benutzen; bei Lesefehler konservativ
+   den validierten `MainBattleReader` / `gMain.inBattle` aus `battle_state.py` benutzen.
+   `battle_type_flags` ist KEIN Kampfindikator: normale Wildkaempfe haben Wert 0.
+   Bei unbekanntem Live-Status konservativ
    keine Aufnahme schreiben.
 2. Die vorhandene deterministische Fluchtfolge `B, B, DOWN, RIGHT, A`
    gegen einen echten Wildkampf der deutschen Feuerrot-ROM pruefen. Falls sie

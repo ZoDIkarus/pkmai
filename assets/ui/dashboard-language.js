@@ -35,7 +35,7 @@ const translations = [
  ['Erster Orden','First badge'],['Pokédex / Paket abgegeben','Pokédex / parcel delivered'],
  ['Weltstufe','World stage'],['Treppe','Stairs'],['Haus-Exit','Leaving home'],
  ['Hausausgang','Leaving home'],['abgeschlossen','completed'],['gesamte','total'],
- ['gesamt','total'],['Beste','Best'],['beste','best'],['Läufe','Runs'],['Lauf','Run'],
+ ['gesamt','total'],['Läufe','Runs'],['Lauf','Run'],
  ['Episoden','Episodes'],['Ø Ep-Steps','Average episode steps'],
  ['Erfolgsrate','Success rate'],['Tiefe','Depth'],['Rolle','Role'],['Rollen','Roles'],
 
@@ -83,7 +83,41 @@ const translations = [
  ['Gesamt','Total'],['Durchschnitt','Average'],['Letzter','Last'],['Letzte','Last'],
  ['Aktuell','Current'],['aktuell','current'],['Abbruchgrund','Reset reason'],
  ['Erfolg','Success'],['Fehler','Error'],['keine','none'],['Keine','None'],
- ['Schiggi','Squirtle'],['Bisasam','Bulbasaur'],['Glumanda','Charmander']
+ ['jetzt','now'],['seit vorhin','since earlier'],['Global entdeckt','Globally discovered'],
+ ['Bester Live-Reward jetzt','Best live reward now'],
+ ['Ø Live-Reward jetzt','Avg live reward now'],
+ ['Höchstes Level jetzt','Highest level now'],
+ ['Bestes Party-Level','Best team level'],['Bestes Level','Best level'],
+ ['Kämpfe gesamt','Battles total'],
+ ['Leer / keine Party-Telemetrie','empty / no team data'],
+ ['keine Party-Telemetrie','no team data'],['Leer','Empty'],
+ ['Eich-Szene','Oak scene'],['Taste','Input'],['Episode-Reward','Episode reward'],
+ ['Instanzen','Instances'],['Letzte 10 Rewards','Last 10 rewards'],
+ ['Schiggi','Squirtle'],['Bisasam','Bulbasaur'],['Glumanda','Charmander'],
+
+ /* V18: UI strings that stayed German in EN mode. Full phrases first so the
+    length-sorted pass replaces them before the single-word pairs above. */
+ ['Zusätzliche echte Nachbarschritte der Savestate-Runner anzeigen','Show the savestate runners’ extra real neighbour steps'],
+ ['Ein-/ausklappen (Karte freigeben)','Collapse / expand (free the map)'],
+ ['Mapper ist angehalten oder startet gerade.','Mapper is paused or still starting up.'],
+ ['Spielanfang / Alabastia-Innen','Game start / indoors'],
+ ['Alabastia (außen)','Pallet Town (outdoor)'],
+ ['Agents mit Stats','Agents with stats'],
+ ['Battles gestartet','Battles started'],['Battles beendet','Battles finished'],
+ ['Kämpfe s/f','Battles start/done'],
+ ['Gesammelte Orden','Badges collected'],
+ ['noch keine Events','No events yet'],
+ ['neue Felder','new tiles'],['Bild-Tiles','image tiles'],['Map unbekannt','Map unknown'],
+ ['Erstes Pokémon','First Pokémon'],['Erfolge','successes'],
+ ['Live-Weltkarte','Live world map'],
+ ['Welt-Stufe','World stage'],
+ ['Netz nachgeladen','Policy reloads'],
+ ['Haus-Exit','Leaving home'],['Haus Exit','Leaving home'],
+ [' aktiv',' active'],
+ ['Kanto Orden','Kanto Badges'],
+ ['Felsorden','Boulder Badge'],['Quellorden','Cascade Badge'],['Donnerorden','Thunder Badge'],
+ ['Farborden','Rainbow Badge'],['Seelenorden','Soul Badge'],['Sumpforden','Marsh Badge'],
+ ['Vulkanorden','Volcano Badge'],['Erdorden','Earth Badge']
 ];
 const englishToGerman = [
  ['Overworld Map','Weltkarte'],['Indoor Mapping','Gebäudekarten'],['Graphs','Diagramme'],
@@ -109,12 +143,14 @@ function translatePage() {
  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
  let node;
  while((node=walker.nextNode())) {
-  if(node.parentElement.closest('script,style,#language-toggle')) continue;
-  const previous=originals.get(node);
-  const original=previous && previous.rendered===node.nodeValue ? previous.original : node.nodeValue;
-  const rendered=translated(original);
-  if(rendered!==node.nodeValue) node.nodeValue=rendered;
-  originals.set(node,{original,rendered});
+  try {
+   if(!node.parentElement || node.parentElement.closest('script,style,#language-toggle')) continue;
+   const previous=originals.get(node);
+   const original=previous && previous.rendered===node.nodeValue ? previous.original : node.nodeValue;
+   const rendered=translated(original);
+   if(rendered!==node.nodeValue) node.nodeValue=rendered;
+   originals.set(node,{original,rendered});
+  } catch(_) { /* never let one bad node stop the whole pass */ }
  }
  for(const el of document.querySelectorAll('[title],[aria-label],[placeholder]')) {
   if(el.id==='language-toggle')continue;
@@ -130,15 +166,30 @@ function translatePage() {
   attributeOriginals.set(el,saved);
  }
  document.documentElement.lang=uiLanguage;
- document.getElementById('language-toggle').textContent=uiLanguage==='en' ? 'EN / DE' : 'DE / EN';
+ const tgl=document.getElementById('language-toggle');
+ const tglText=uiLanguage==='en' ? 'EN / DE' : 'DE / EN';
+ if(tgl && tgl.textContent!==tglText) tgl.textContent=tglText;
  observer.observe(document.body,{subtree:true,childList:true,characterData:true});
 }
-let translationPending=false;
+let inTranslate=false;
 const observer=new MutationObserver(()=>{
- if(translationPending)return;
- translationPending=true;
- requestAnimationFrame(()=>{translationPending=false;translatePage();});
+ // Run synchronously in the observer microtask (no setTimeout / rAF): the DOM
+ // is retranslated before the browser paints, so a panel re-rendered in German
+ // by one of the dashboard's refreshers never flashes. translated() output is
+ // stable (no de->en pair matches an English result), so setting nodeValue
+ // here produces no further mutations and cannot loop. rAF was wrong (paused
+ // in background tabs -> translation silently stopped); setTimeout was wrong
+ // (macrotask -> a visible German flicker on every refresh).
+ if(inTranslate)return;
+ inTranslate=true;
+ try{translatePage();}catch(_){}
+ inTranslate=false;
 });
+// Safety net: the observer is disconnected while translatePage() runs, so a
+// panel re-rendered by one of the many setInterval refreshers during that
+// window can stay untranslated until the next unrelated mutation. A periodic
+// pass guarantees those sections get caught even if an event is missed.
+setInterval(()=>{try{translatePage();}catch(_){}}, 700);
 function setLanguage(language) {
  uiLanguage=language;
  localStorage.setItem('pkmai-language',language);

@@ -53,13 +53,15 @@ class WatcherModelRoutingTests(unittest.TestCase):
             ):
                 self.assertEqual(watch.get_watcher_model_path("stairs"), vault)
 
-    def test_brain_mode_always_uses_whole_champion_without_skills(self):
+    def test_brain_mode_uses_latest_learner_with_champion_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             champion = os.path.join(tmp, "champion.zip")
             open(champion, "wb").close()
+            resume = os.path.join(tmp, "resume.zip")
             with (
                 patch.object(watch, "WATCHER_BRAIN_MODE", True),
                 patch.object(watch, "BEST_MODEL", champion),
+                patch.object(watch, "RESUME_MODEL", resume),
             ):
                 self.assertEqual(
                     watch.get_watcher_model_path("intro"), champion
@@ -67,6 +69,9 @@ class WatcherModelRoutingTests(unittest.TestCase):
                 self.assertEqual(
                     watch.get_watcher_model_path("progress"), champion
                 )
+                open(resume, "wb").close()
+                self.assertEqual(watch.get_watcher_model_path("intro"),resume)
+                self.assertEqual(watch.get_watcher_model_path("progress"),resume)
 
     def test_champion_sidecar_prevents_false_version_zero(self):
         with tempfile.TemporaryDirectory() as tmp:

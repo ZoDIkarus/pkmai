@@ -65,7 +65,7 @@ def brain_section(ts, cs, m):
     """Kompakte Antwort auf die Frage: lernt das Netz weiter?"""
     lines = []
     has_champion = os.path.exists(
-        os.path.join(RT, "checkpoints", "pokemon_model_best.zip")
+        os.path.join(RT, "checkpoints", "pokemon_model_champion.zip")
     )
     champion_label = (
         f"Champion v{cs.get('version', 0):06d} @ {fmt(cs.get('timesteps', 0))} Steps"
@@ -157,11 +157,11 @@ def render():
     m = cs.get("metrics", {})
 
     depth = int(gp.get("max_world_stage", 0))
+    if gp.get("progress_schema") != "geography_v1":
+        depth = {4: 1, 5: 1, 6: 4, 7: 5, 8: 6, 9: 6}.get(depth, depth)
     stage_names = {
         0: "Start/innen", 1: "Alabastia", 2: "Route 1",
-        3: "Vertania", 4: "Eichs Paket", 5: "Pokédex/Paket abgegeben",
-        6: "Route 2", 7: "Vertania-Wald", 8: "Marmoria",
-        9: "erster Orden",
+        3: "Vertania", 4: "Route 2", 5: "Vertania-Wald", 6: "Marmoria",
     }
     wall = "  <-- Route-1-Wand" if depth <= 2 else ""
 

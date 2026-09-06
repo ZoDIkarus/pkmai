@@ -4,7 +4,112 @@ PKMAI is an experimental reinforcement-learning project that trains a PPO agent 
 
 > This repository does not contain a Pokémon ROM or proprietary game assets. You must provide your own legally obtained game data and local Stable-Retro integration.
 
-## Current release
+## Current training and watcher behavior
+
+Only the trainer learns. The watcher evaluates current `pokemon_model_resume.zip`
+snapshots, independently of champion promotion. The protected fallback is stored
+as `pokemon_model_champion.zip`. Snapshot publication is atomic.
+
+Reward model as of V18 (see the dated section below for detail): tiles pay
+**per run** on a hand-set ladder by map (Pallet 2 … Pewter 6, houses ~half),
+plus +1 fleet-once. New route/building 25/run, city 250/run, first global stage
+unlock 1000-once, per-run stage bonus 0, no directional bonus. Pokécenter, Poké
+Mart and the first badge each add a one-time fleet-wide bonus (1000 / 1000 /
+5000) on top of their per-run value. Trainer battles pay double and skip the
+per-episode wild-battle decay. Persistent claim history (`reward_events.json`)
+prevents any one-time bonus repaying after a restart.
+
+## 2026-09-06 — V18: per-run tile ladder, one-time fleet bonuses, battle rebalance, dashboard
+
+Full trainer + watcher + web restart (brain kept: learner ~21.5M, champion v9).
+67 unit tests pass. Live-verified in the watcher and dashboard.
+
+**Tiles pay per run now.** The fleet-once tile bonus meant the watcher (and any
+agent on long-known ground) saw no tile reward at all. First-find of a tile is
+now rewarded every episode (`seen_coords`), on a hand-set ladder tied to the
+tile's own map: `TILE_REWARD_BY_STAGE = {1:2, 2:3, 3:4, 4:5, 5:5, 6:6}` — Pallet
+2, Route 1 3, Vertania 4, Route 2 5, Forest 5, Pewter 6. Interior tiles by city
+bank: Pallet houses 1, Vertania 2, Marmoria 3 (≈ half their city, so houses are
+not ignored but never pull like the route). On top, `GLOBAL_NEW_TILE_BONUS = 1`
+fleet-once for the very first agent ever to step on a tile — first foot into
+Pewter = 6 + 1.
+
+**One-time fleet-wide bonuses** (persisted in `reward_events.json`, cannot repay
+after a restart), each on top of a per-run value:
+- Pokécenter: +100/run to enter, +250/run for a heal at a center deeper than any
+  used this run (the wipe respawn point advances), **+1000 once per center**.
+- Poké Mart (Vertania `5,3`): +100/run to enter, **+1000 once** — so the brain
+  learns the shop exists and can buy Poké Balls.
+- First badge: +2000/run kept, **+5000 once** per badge number.
+
+**Battle rebalance** (watcher was 45 % of steps fighting): enemy-damage reward
+0.15 → 0.08 per HP; after 6 wild wins in an episode on a wild map, wild
+damage/faint/win drop to 30 %; **trainer/gym battles pay ×2** and are exempt from
+that decay. Catch reward 50 → 120 + `min(level,20)×4`.
+
+**Scouts** back to 2 per checkpoint (from 5) — scouts were getting through,
+full runners were not.
+
+**Warp reward** now claims a coarse `(map_a↔map_b)` pair instead of exact
+coordinates, and it is persisted (`claim_event` → `reward_events.json`) plus
+pre-seeded from the navigation history, so the first global warp bonus truly
+fires once ever and does not repay after a restart (the watcher was granting
++100 for Pallet↔Route 1 on every restart). Navigation data stays
+coordinate-exact. No warp reward on the step a battle ends. A scout that drifts
+back onto/behind its spawn stage now also earns no per-run tile reward there.
+
+**Dashboard:** the watcher live image is gone from the Overworld-Map side column
+(it only shows under the Watcher tab now); that column shows the clicked agent's
+detail plus its **last 10 reward events**. Localisation: ~40 missing German→English
+strings added, the `Beste`→`Best` substring bug that produced "Bestr" removed, and
+the translation pass rewritten to run synchronously in the mutation observer
+(`requestAnimationFrame` was paused in background tabs and silently stopped
+translating) with a 700 ms safety interval.
+
+**Deferred** to `docs/BIG_CHANGES_TODO.md`: a separate combat policy (FighterBrain)
+beside the champion, and special handling for the house past Viridian Forest
+(needs its map id first).
+
+## 2026-09-06 — Geographic progression and battle/loop corrections
+
+These changes supersede the older parcel-based stage descriptions below. No trainer,
+watcher, web or mapper process was stopped or restarted during this change.
+
+- Immutable master: the user-recorded `local/custom_integrations/PokemonFireRed-Gba/StartGame.state`
+  after Oak's parcel, verified inside the lab at bank 4/map 3, x6/y4. Every full runner
+  restores this exact original; only scouts load geographic checkpoints.
+  The briefly prepared outdoor derivative was removed, per the latest instruction.
+  Lab/indoor baseline counts as stage 1 and produces no geographic stage jump.
+- Geography: Pallet 1, Route 1 2, Viridian 3, Route 2 4, Viridian Forest 5, Pewter 6.
+  Parcel flags, stairs, buildings and badges do not manufacture geographic stages.
+- Exactly five scouts per valid checkpoint on Route 1, Viridian, Route 2, Forest and Pewter.
+  Fixed rank bands prevent reassignment when another checkpoint appears. Replacing
+  a savestate never adds scouts. No Pallet scouts. Other agents continue full runs.
+- Each stage independently prefers a further-north position (smaller Y), even
+  with lower reward. At equal Y, strictly higher reward wins; south is rejected.
+  This also applies to later full runners returning through earlier maps. Battle/wipe states are not captured.
+  Legacy lab checkpoints are rejected by their actual map; old fleet depth is
+  migrated from persisted visited maps at trainer startup, preserving model weights.
+- Battle detection uses dynamically validated gMain.inBattle (not battle-type flags).
+  An isolated real-ROM test detected a zero-type-flag wild encounter and cleared the
+  battle after fleeing without overworld movement. Observations use this same signal.
+- Fresh party HP on every decision; one wipe charge until recovery; wipe healing
+  receives no heal bonus. EXP rewards require the same party and battle context.
+- Global center-heal claim now persists in exploration_memory/reward_events.json.
+  Historical claims made before this file existed cannot be reconstructed reliably;
+  the first post-migration qualifying claim establishes the persistent baseline.
+- A shared local-loop guard ends an episode after 900 overworld decisions on at most
+  eight tiles without exploration/EXP/stage/badge progress. Battles pause counting.
+  This also bounds short back-and-forth loops that reset the old stationary counter.
+- Watcher remains policy evaluation without learning. Updated code takes effect only
+  on the next explicitly approved restart; refreshing navigation is not code reload.
+
+Validation: 58 unit tests, plus isolated emulator checks. Full environment smoke
+validation: 1,000 isolated decisions. Two final resets restored the original master
+location and stage 1; its SHA-256 remained unchanged.
+No user savestate was modified.
+
+## Previous release (historical)
 
 **V17.4 — Reward-Rebalance gegen Farm-Loops, Frontier-Scouts pro Stage, kritische Checkpoint-/Warp-Bugs behoben** (2026-09-06, Nachtsession)
 

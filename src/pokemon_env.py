@@ -230,10 +230,14 @@ class PokemonFireRedEnv(gym.Env):
         shared_progress=None,
         shared_lock=None,
         agent_count=120,
+        is_watcher=False,
     ):
         super().__init__()
 
         self.rank = rank
+        # The visible watcher is an observer, not a bounded training rollout.
+        # It may reset only through real safety guards or emulator recovery.
+        self.is_watcher = bool(is_watcher)
         self.agent_count = max(1, int(agent_count))
         self.shared_edges = shared_edges
         self.shared_maps = shared_maps
@@ -3797,13 +3801,18 @@ class PokemonFireRedEnv(gym.Env):
         else:
             info["progress_stall_reset"] = False
 
-        episode_limit = (
-            self.SCOUT_EPISODE_STEPS
-            if self.training_objective == "scout"
-            else self.MAX_EPISODE_STEPS
-            if self.training_objective in ("progress", "badge", "full")
-            else 32768
-        )
+        # The public watcher follows one continuous real journey.  Ordinary
+        # rollouts retain their bounded episode horizons for stable learning.
+        if self.is_watcher:
+            episode_limit = 10 ** 12
+        else:
+            episode_limit = (
+                self.SCOUT_EPISODE_STEPS
+                if self.training_objective == "scout"
+                else self.MAX_EPISODE_STEPS
+                if self.training_objective in ("progress", "badge", "full")
+                else 32768
+            )
         terminated = bool(
             objective_done
             or self.total_steps >= episode_limit

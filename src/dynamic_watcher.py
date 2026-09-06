@@ -119,7 +119,7 @@ def main() -> None:
     reload_seconds = max(0.1, float(os.getenv("PKMAI_WATCHER_RELOAD_SECONDS", "1.0")))
     watcher_rank = max(0, int(os.getenv("PKMAI_WATCHER_RANK", "120")))
     fleet_size = max(1, int(os.getenv("PKMAI_WATCHER_FLEET_SIZE", "121")))
-    env = PokemonFireRedEnv(rank=watcher_rank, agent_count=fleet_size)
+    env = PokemonFireRedEnv(rank=watcher_rank, agent_count=fleet_size, is_watcher=True)
     env.EXPLORATION_MEMORY_ENABLED = False
     policy: PKMAIPolicy | None = None
     policy_version = -1

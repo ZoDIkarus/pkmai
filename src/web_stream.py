@@ -2308,7 +2308,7 @@ header{padding:6px!important;gap:4px!important}
                 <div id="detail-event" style="font-size:12px;color:#00e676;padding:6px 8px;">-</div>
             </div>
             <div class="chart-wrap">
-                <div class="chart-label">Letzte 10 Rewards</div>
+                <div class="chart-label">Letzte 10 Rewards · Extremwerte (⬆ höchster + / ⬇ tiefster −)</div>
                 <div class="wt-events" id="detail-recent-rewards"><div>-</div></div>
             </div>
             <div class="v8-agent-party" id="v8-agent-party">
@@ -3340,14 +3340,45 @@ header{padding:6px!important;gap:4px!important}
 
             // V18: die letzten 10 Reward-Events des angeklickten Agenten -
             // schneller Blick, was der gerade tatsaechlich macht.
+            // 2026-09-07 (user): zusaetzlich der hoechste positive und der
+            // tiefste negative Einzel-Reward aus dem Fenster (letzte ~40),
+            // damit man die grossen Ausschlaege sieht, auch wenn sie schon
+            // aus den letzten 10 herausgescrollt sind.
             const recentBox = document.getElementById('detail-recent-rewards');
             if (recentBox) {
-                recentBox.innerHTML = events.slice(-10).reverse().map(e => {
+                const parseEv = (raw) => {
+                    const s = String(raw);
+                    const m = s.match(/([+-]\d+(?:\.\d+)?)\s*$/);
+                    if (!m) return null;
+                    const val = parseFloat(m[1]);
+                    if (!isFinite(val)) return null;
+                    let body = s.slice(0, m.index).replace(/:$/, '');
+                    let step = '';
+                    const sm = body.match(/^(\d+):(.*)$/);
+                    if (sm) { step = sm[1]; body = sm[2]; }
+                    return { val, label: body, step };
+                };
+                const fmtV = (v) => (v > 0 ? '+' : '') +
+                    (Math.abs(v) >= 1 ? v.toFixed(1) : v.toFixed(3));
+                let hi = null, lo = null;
+                for (const raw of events) {
+                    const p = parseEv(raw);
+                    if (!p) continue;
+                    if (p.val > 0 && (!hi || p.val > hi.val)) hi = p;
+                    if (p.val < 0 && (!lo || p.val < lo.val)) lo = p;
+                }
+                let head = '';
+                if (hi) head += '<div class="pos" style="border-bottom:1px dashed #232738">⬆ ' +
+                    fmtV(hi.val) + '  ' + hi.label + (hi.step ? ' · s' + hi.step : '') + '</div>';
+                if (lo) head += '<div class="neg" style="border-bottom:1px dashed #232738">⬇ ' +
+                    fmtV(lo.val) + '  ' + lo.label + (lo.step ? ' · s' + lo.step : '') + '</div>';
+                const list = events.slice(-10).reverse().map(e => {
                     const s = (typeof e === 'string') ? e
                         : (e && (e.type || e.name) ? (e.type || e.name) : JSON.stringify(e));
                     const neg = /:-|-[0-9]/.test(s);
                     return '<div class="' + (neg ? 'neg' : 'pos') + '">' + s + '</div>';
-                }).join('') || '<div>-</div>';
+                }).join('');
+                recentBox.innerHTML = (head + list) || '<div>-</div>';
             }
 
             const h = historyByAgent[inst.id] || {reward:[], steps:[]};

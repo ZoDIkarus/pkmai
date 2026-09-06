@@ -267,6 +267,41 @@ class ProgressRegressionTests(unittest.TestCase):
         self.assertNotIn("target_farther", src)
         self.assertIn("route_progress_best", src)
         self.assertIn("route_backtrack", src)
+        # 2026-09-06 (user): potential-based approach gradient ON TOP of the
+        # high-watermark - BRIDGE/FULL barely saw a positive while walking to
+        # the exit. Telescoping (per-tile +/-, keyed to the objective, spike
+        # filtered) => a round trip nets 0, a real approach accumulates +.
+        self.assertIn("route_approach", src)
+        self.assertGreater(PokemonFireRedEnv.TARGET_APPROACH_REWARD, 0.0)
+        # smaller than a first-visit frontier tile, so exploitation of the
+        # proven route never out-earns genuine frontier discovery.
+        self.assertLess(PokemonFireRedEnv.TARGET_APPROACH_REWARD,
+                        PokemonFireRedEnv.FULL_FRONTIER_TILE_REWARD)
+
+    def test_potential_approach_shaping_round_trip_nets_zero(self):
+        # Mirror of the inline telescoping logic: walking out N tiles and back
+        # to the same distance must sum to exactly 0 (not farmable), while a
+        # net approach of K tiles pays +K * TARGET_APPROACH_REWARD.
+        k = PokemonFireRedEnv.TARGET_APPROACH_REWARD
+        dists = [20, 19, 18, 19, 20, 19, 18, 17, 16]  # ends 4 closer than start
+        total = 0.0
+        prev = dists[0]
+        for d in dists[1:]:
+            delta = prev - d
+            if 0 < abs(delta) <= 4:
+                total += delta * k
+            prev = d
+        self.assertAlmostEqual(total, 4 * k)
+        # pure oscillation 20<->19, returning to the start distance -> exactly 0
+        osc = [20, 19] * 25 + [20]
+        t2 = 0.0
+        p = osc[0]
+        for d in osc[1:]:
+            dd = p - d
+            if 0 < abs(dd) <= 4:
+                t2 += dd * k
+            p = d
+        self.assertAlmostEqual(t2, 0.0)
 
     def test_bank4_interiors_never_get_the_500_city_building_reward(self):
         import inspect

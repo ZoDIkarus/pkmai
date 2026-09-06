@@ -521,6 +521,17 @@ class PokemonFireRedEnv(gym.Env):
     # nudge. Progress stays positive-only (route_progress_best high-watermark).
     TARGET_BACKTRACK_PENALTY = -0.005
     TARGET_BACKTRACK_MARGIN = 12
+    # 2026-09-06 (user): BRIDGE/FULL sahen sich Richtung Ziel bewegend fast nur
+    # "route_backtrack" - der positive High-Watermark (route_progress_best) feuert
+    # nur beim STRIKT neuen Episoden-Bestwert, alles Nachlaufen dazwischen zahlte
+    # 0. Zusaetzlich jetzt ein POTENZIAL-basiertes Annaeherungssignal: pro Kachel
+    # naeher am bewiesenen Ausgang +TARGET_APPROACH_REWARD, pro Kachel weiter weg
+    # -TARGET_APPROACH_REWARD. Teleskopsumme -> jede Rundreise ergibt exakt 0
+    # (nicht farmbar, kein Wall-Pin beim Stehenbleiben), eine echte Annaeherung
+    # summiert sich zu +. Nur aktiv wenn ein bewiesenes Ziel existiert
+    # (_v20_world_targets / _pallet_route1_target), gegen Warp-/RAM-Spruenge
+    # abgesichert (Delta <= 4 Kacheln/Step).
+    TARGET_APPROACH_REWARD = 0.03
     EARLY_STORY_STEP_REWARD = 0.0
 
     # V20 FRONTIER REDESIGN (frontier_v20.py). Frontier progress = real
@@ -760,6 +771,9 @@ class PokemonFireRedEnv(gym.Env):
             progress_reward=self.FRONTIER_PROGRESS_REWARD,
             epsilon=self.FRONTIER_PROGRESS_EPSILON,
         )
+        # Potential-based approach shaping baseline (see TARGET_APPROACH_REWARD).
+        self._target_pot_key = None
+        self._target_pot_dist = None
         self.episode_best_frontier_value = 0.0
         self.episode_max_frontier_depth = 0
         self._frontier_graph_cache = None
@@ -3819,6 +3833,8 @@ class PokemonFireRedEnv(gym.Env):
         self._short_cycle_last = None
         self.target_shaper.reset()
         self.trainer_rewards.reset()
+        self._target_pot_key = None
+        self._target_pot_dist = None
         self._stage_hold_map = None
         self._stage_hold_steps = 0
 
@@ -6146,6 +6162,41 @@ class PokemonFireRedEnv(gym.Env):
                                         "route_backtrack:"
                                         f"{self.TARGET_BACKTRACK_PENALTY:+.3f}"
                                     )
+
+                                # Potential-based approach gradient ON TOP of the
+                                # high-watermark: +TARGET_APPROACH_REWARD per tile
+                                # closer to the proven exit, -that per tile away.
+                                # Keyed to the same objective so a target/map
+                                # change rebaselines (no jump payout); abs(delta)
+                                # <= 4 filters warp/RAM spikes. Telescoping -> any
+                                # round trip nets exactly 0 (not farmable, no
+                                # wall-pin when standing still); a real approach
+                                # accumulates positive. Positive half is
+                                # suppressed inside a detected short-cycle loop.
+                                if _obj_key != self._target_pot_key:
+                                    self._target_pot_key = _obj_key
+                                    self._target_pot_dist = new_d
+                                else:
+                                    _prev_pd = self._target_pot_dist
+                                    self._target_pot_dist = new_d
+                                    if _prev_pd is not None:
+                                        _delta = int(_prev_pd) - int(new_d)
+                                        if 0 < abs(_delta) <= 4:
+                                            _appr = _delta * self.TARGET_APPROACH_REWARD
+                                            if getattr(self, "post_wipe_recovery", False):
+                                                _appr *= (
+                                                    self.POST_WIPE_TARGET_PROGRESS_REWARD
+                                                    / max(self.TARGET_PROGRESS_REWARD, 1e-6)
+                                                )
+                                            if _appr > 0 and _loop.get("suppress_shaping"):
+                                                reward_events.append(
+                                                    "route_approach_loop_suppressed:+0"
+                                                )
+                                            elif _appr:
+                                                reward += _appr
+                                                reward_events.append(
+                                                    f"route_approach:{_appr:+.3f}"
+                                                )
 
                 else:
                     # Mapwechsel / Warp: Ein konkreter Ein-/Ausgangspunkt wird

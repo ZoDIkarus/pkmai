@@ -48,7 +48,14 @@ class ProgressRegressionTests(unittest.TestCase):
             counts[e._scout_assigned_stage()]+=1
         self.assertEqual(counts,Counter({None:60-3*slots,2:slots,3:slots,4:slots}))
 
-    def test_checkpoint_prefers_north_then_reward_even_after_forest(self):
+    def test_entry_checkpoint_is_immutable_once_valid(self):
+        # V20 section 4: the old "north-most Y wins, then higher reward"
+        # checkpoint replacement heuristic is removed - it is logically
+        # invalid in forests / caves / buildings / gyms. A stage ENTRY
+        # checkpoint must represent the BEGINNING of the stage, so once a
+        # valid one exists it is never moved (not for a smaller Y, not for a
+        # higher reward). FRONTIER checkpoints (a separate name) advance only
+        # on a strictly higher exploration score, never on Y.
         with tempfile.TemporaryDirectory() as d:
             e=bare_env(rank=0,route_steps=100,shared_lock=None,
                        rank_state_dir=d,saved_milestones=[],visited_maps={(1,0)})
@@ -60,23 +67,28 @@ class ProgressRegressionTests(unittest.TestCase):
                     'trusted':True,'map_bank':3,'map_id':19,'x_pos':4,'y_pos':30}
             ) as location:
                 self.assertTrue(e._save_stage_checkpoint(2,3,19,4,30,100))
-                def save(stage, bank, map_id, x, y, reward):
+                def save(stage, bank, map_id, x, y, reward, **kw):
                     location.return_value = dict(trusted=True,map_bank=bank,map_id=map_id,x_pos=x,y_pos=y)
-                    return e._save_stage_checkpoint(stage,bank,map_id,x,y,reward)
-                # More points cannot pull the checkpoint south.
-                self.assertFalse(save(2,3,19,3,33,9999))
-                self.assertFalse(save(2,3,19,3,30,100))
-                self.assertFalse(save(2,3,19,3,30,99))
-                state[0]=b'better_score'
-                self.assertTrue(save(2,3,19,3,30,150))
+                    return e._save_stage_checkpoint(stage,bank,map_id,x,y,reward,**kw)
+                # Nothing can move the ENTRY checkpoint - not further north,
+                # not a huge reward.
                 state[0]=b'further_north'
-                self.assertTrue(save(2,3,19,3,29,50))
-                self.assertFalse(save(2,3,19,3,30,9999))
-                self.assertFalse(save(5,4,3,6,4,9999))
+                self.assertFalse(save(2,3,19,3,29,9999))
+                self.assertFalse(save(2,3,19,3,30,150))
+                self.assertFalse(save(2,3,19,3,33,9999))
                 with gzip.open(Path(d)/'stage_2.state.gz','rb') as f:
-                    self.assertEqual(f.read(),b'further_north')
+                    self.assertEqual(f.read(),b'first')
                 meta=e._read_stage_meta('stage_2')
-                self.assertEqual((meta['y'],meta['episode_reward']),(29,50))
+                self.assertEqual((meta['y'],meta['episode_reward']),(30,100.0))
+                # A FRONTIER anchor is a different milestone and advances on a
+                # higher exploration score only.
+                state[0]=b'frontier_a'
+                self.assertTrue(save(2,3,19,3,33,0,kind="frontier",frontier_score=5))
+                state[0]=b'frontier_b'
+                self.assertFalse(save(2,3,19,3,20,0,kind="frontier",frontier_score=5))
+                self.assertTrue(save(2,3,19,3,20,0,kind="frontier",frontier_score=9))
+                with gzip.open(Path(d)/'stage_frontier_2.state.gz','rb') as f:
+                    self.assertEqual(f.read(),b'frontier_b')
 
     def test_stage_load_rejects_wrong_map_and_restores_master(self):
         import json, hashlib
@@ -178,9 +190,11 @@ class ProgressRegressionTests(unittest.TestCase):
         self.assertEqual(e._wild_battle_scale(3, 1), 1.0)
 
     def test_v19_brock_rush_milestones_and_flags(self):
-        self.assertEqual(PokemonFireRedEnv.BUILD_TAG, "V19_BROCK_RUSH")
+        self.assertEqual(PokemonFireRedEnv.BUILD_TAG, "V20_CURRICULUM_MODES")
         self.assertEqual(PokemonFireRedEnv.STAGE_ADVANCE_REWARD, 250.0)
-        self.assertEqual(PokemonFireRedEnv.TARGET_PROGRESS_REWARD, 0.20)
+        # V20 section 6: non-farmable best-distance shaping at a small rate.
+        self.assertEqual(PokemonFireRedEnv.TARGET_PROGRESS_REWARD, 0.05)
+        self.assertEqual(PokemonFireRedEnv.TARGET_BACKTRACK_PENALTY, -0.01)
         self.assertEqual(PokemonFireRedEnv.FRONTIER_SCOUT_SLOTS, 3)
         # neue Meilenstein-Konstanten
         self.assertEqual(PokemonFireRedEnv.PEWTER_WITH_PIKACHU_REWARD, 300.0)
@@ -257,8 +271,11 @@ class ProgressRegressionTests(unittest.TestCase):
         self.assertIn("int(bank) != 4", window)
         self.assertNotIn(4, PokemonFireRedEnv.CITY_BUILDING_BANKS)
         self.assertEqual(PokemonFireRedEnv.CITY_BUILDING_BANKS, {5, 6})
-        self.assertGreater(PokemonFireRedEnv.BUILDING_FIRST_GLOBAL_REWARD,
-                           PokemonFireRedEnv.EPISODE_NEW_MAP_REWARD)
+        # V20 section 8: generic city buildings are no longer story jackpots -
+        # a random Viridian/Pewter house is worth 0 (real objectives keep
+        # their dedicated Center/Mart/Gym rewards). The `!= 4` guard above
+        # still stands so Bank-4 interiors can never regress into a bonus.
+        self.assertEqual(PokemonFireRedEnv.BUILDING_FIRST_GLOBAL_REWARD, 0.0)
         # Das +500-Event (`new_building_global`) und der `building_`-Key haengen
         # beide am selben `_is_city_building`-Zweig, der 500-Wert im if-Body.
         self.assertLess(src.index("_is_city_building"),

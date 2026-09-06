@@ -11,6 +11,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.callbacks import BaseCallback
 
+import pokemon_env
 from pokemon_env import PokemonFireRedEnv
 
 
@@ -1146,12 +1147,112 @@ def main():
         f"{device.upper()}"
     )
 
-    print("🧬 V16 Full-Brain: alle 50 Episoden starten am Spielanfang.")
+    print("🧬 V16 Full-Brain: alle Episoden trainieren dasselbe PPO-Netz.")
 
     print(
         f"⏱️ Episodenlaenge: "
-        f"{PokemonFireRedEnv.MAX_EPISODE_STEPS:,} Agent-Schritte"
+        f"{PokemonFireRedEnv.MAX_EPISODE_STEPS:,} Agent-Schritte "
+        f"(lange Full-Probe: {PokemonFireRedEnv.LONG_FULL_PROBE_STEPS:,})"
     )
+
+    if getattr(PokemonFireRedEnv, "V20_CURRICULUM", False):
+        import curriculum_v20
+        from nav_transitions_v20 import KnownTransitions, KNOWN as _NK
+
+        _alloc = curriculum_v20.allocation_summary(NUM_ENVS)
+
+        # Seed discovered_stage from the checkpoints/records already on disk so
+        # BRIDGE/FRONTIER do not have to rediscover the world from scratch on a
+        # cold start. mastered_stage is intentionally NOT seeded - it must be
+        # re-earned by Full-from-start confirmations.
+        _cur = curriculum_v20.CurriculumState.load(pokemon_env.V20_STATE_FILE)
+        _seed_stage = int(_cur.discovered_stage)
+        try:
+            for _n in PokemonFireRedEnv.SCOUT_STAGES:
+                _mp = os.path.join(
+                    RUNTIME_DIR, "curriculum_shared", f"stage_{_n}.meta.json"
+                )
+                if os.path.exists(_mp):
+                    with open(_mp) as _f:
+                        _m = json.load(_f) or {}
+                    if int(_m.get("state_validation", 0)) == 1:
+                        _seed_stage = max(_seed_stage, int(_n))
+        except Exception:
+            pass
+        try:
+            _gpf = os.path.join(
+                EXPLORATION_MEMORY_DIR, "global_progress.json"
+            )
+            with open(_gpf) as _f:
+                _gp = json.load(_f) or {}
+            _seed_stage = max(
+                _seed_stage, int(_gp.get("max_world_stage", 0) or 0)
+            )
+        except Exception:
+            pass
+        _dirty = _seed_stage > int(_cur.discovered_stage)
+        if _dirty:
+            _cur.record_discovery(_seed_stage)
+
+        # One-time bootstrap of transition 1 (Pallet->Route1). The whole
+        # premise is "full runners fail AROUND Route 1" - i.e. they DO leave
+        # Pallet reliably. If the champion / global record already shows Full
+        # depth >= Route 1 and transition 1 has no stats yet, pre-confirm it so
+        # the detected bottleneck starts at Route1->Viridian (brief section 17)
+        # instead of spending the first eval windows re-proving Pallet->Route1.
+        try:
+            _champ_stage = 0
+            _cf = os.path.join(RUNTIME_DIR, "champion_score.json")
+            if os.path.exists(_cf):
+                with open(_cf) as _f:
+                    _champ_stage = int(
+                        (json.load(_f) or {}).get("metrics", {}).get(
+                            "max_stage", 0
+                        ) or 0
+                    )
+            _evidence_stage = max(_champ_stage, _seed_stage)
+            if (_evidence_stage >= 2
+                    and 1 not in _cur.transitions):
+                for _ in range(curriculum_v20.TRANSITION_MASTERY_MIN_ATTEMPTS):
+                    _cur.record_transition_attempt(1, True, full_chain=True)
+                _dirty = True
+                print(
+                    "🧭 V20 bootstrap: Pallet->Route1 pre-confirmed from "
+                    f"existing Full depth (stage {_evidence_stage})"
+                )
+        except Exception:
+            pass
+
+        if _dirty:
+            _cur.save(pokemon_env.V20_STATE_FILE)
+        _cur = curriculum_v20.CurriculumState.load(
+            pokemon_env.V20_STATE_FILE
+        )
+        _known = KnownTransitions.load(
+            pokemon_env.V20_KNOWN_TRANSITIONS_FILE
+        )
+        _bn = _cur.current_bottleneck
+        print(
+            "🧭 V20 CURRICULUM MODES | "
+            f"FULL={_alloc['FULL']} BRIDGE={_alloc['BRIDGE']} "
+            f"FRONTIER={_alloc['FRONTIER']} RETENTION={_alloc['RETENTION']}"
+        )
+        if _bn is not None:
+            _bn_txt = (
+                f"bottleneck={curriculum_v20.transition_name(_bn)} "
+                f"({_known.navigation_state(_bn)})"
+            )
+        elif int(_cur.discovered_stage) <= 1:
+            _bn_txt = (
+                "bottleneck=Pallet->Route1 (nothing discovered past stage 1 "
+                "yet - whole fleet runs FULL until the net holds Route 1)"
+            )
+        else:
+            _bn_txt = "bottleneck=none (everything discovered is mastered)"
+        print(
+            f"🧭 discovered_stage={_cur.discovered_stage} "
+            f"mastered_stage={_cur.mastered_stage} {_bn_txt}"
+        )
 
     # ------------------------------------------------------------
     # TRAINING V2: gemeinsamer Curriculum- und Mapping-Speicher

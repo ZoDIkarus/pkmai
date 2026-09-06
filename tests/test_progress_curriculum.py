@@ -60,8 +60,10 @@ class WorldStageTests(unittest.TestCase):
         # Gebaeude zahlen einen fleet-weit einmaligen Fund-Bonus.
         self.assertLessEqual(PokemonFireRedEnv.INTERIOR_TILE_CAP_PER_MAP,
                              PokemonFireRedEnv.TILE_REWARD_CAP_PER_MAP)
-        self.assertGreater(PokemonFireRedEnv.BUILDING_FIRST_GLOBAL_REWARD,
-                           PokemonFireRedEnv.EPISODE_NEW_MAP_REWARD)
+        # V20 section 8: generic city houses are NOT story jackpots any more.
+        # Real objectives (Center / Mart / Gym) keep their own dedicated
+        # rewards; a random house is worth 0 so enter/exit cannot be a loop.
+        self.assertEqual(PokemonFireRedEnv.BUILDING_FIRST_GLOBAL_REWARD, 0.0)
         self.assertEqual(PokemonFireRedEnv.CITY_BUILDING_BANKS, {5, 6})
         # Pallet-Haeuser so billig wie Pallet aussen; die tieferen Staedte
         # weiter unter ihrer Aussen-Kachel.
@@ -230,8 +232,11 @@ class RoleAllocationTests(unittest.TestCase):
         scouts = PokemonFireRedEnv.FRONTIER_SCOUT_SLOTS
         n = 50
 
+        # V20 replaces the fixed scout bands with FULL/BRIDGE/FRONTIER/
+        # RETENTION mode allocation; this test still covers the legacy
+        # fallback path (V20_CURRICULUM disabled).
         def role_env(rank, stage_cps):
-            env = bare_env(rank=rank, n_envs=n)
+            env = bare_env(rank=rank, n_envs=n, V20_CURRICULUM=False)
             env._valid_stage_checkpoints = lambda: dict(stage_cps)
             return env
 
@@ -264,7 +269,7 @@ class RoleAllocationTests(unittest.TestCase):
         stage_cps = {2: "stage_2", 3: "stage_3"}
 
         def scout_env(rank):
-            env = bare_env(rank=rank, n_envs=n)
+            env = bare_env(rank=rank, n_envs=n, V20_CURRICULUM=False)
             env._valid_stage_checkpoints = lambda: dict(stage_cps)
             env._discover_saved_milestones = lambda: list(stage_cps.values())
             env._champion_full_starter_ready = lambda: True

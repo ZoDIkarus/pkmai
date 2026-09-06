@@ -76,6 +76,7 @@ venv/
 # Project-local migration markers
 .fresh_ai_reset_done_v3
 .v5_brain_mapping_reset_done
+.v20_clean_reset_done
 
 # ---- PKMAI hard safety ----
 scripts/start_all_legacy.sh

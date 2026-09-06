@@ -1,12 +1,106 @@
 # Pokemon FireRed AI – PROJECT STATUS / TODO
 
-> **V19.1 (nav fix):** Pallet Town has exactly one nav target — the real
-> `(3,0)→(3,19)` transition (no frontiers/dead-ends/house-doors); plus an
-> immediate-edge-reversal guard on positive target shaping. See
-> `docs/AI_STATUS.md`.
+> **V20 CURRICULUM MODES (current):** fleet split into `FULL` / `BRIDGE` /
+> `FRONTIER` / `RETENTION` on one PPO policy; `discovered_stage` vs
+> `mastered_stage` with rolling per-transition stats; dynamic `current_bottleneck`
+> BRIDGE focus; non-farmable best-distance target shaping (0.05); entry vs
+> frontier checkpoints (no more "north Y wins"); `ShortCycleGuard`; long-Full
+> probe horizon fixed. Deployed with a 100 % clean reset (fresh net, world_stage
+> 0, no checkpoints; only the `StartGame` master savegame kept). `V20_CURRICULUM`
+> master switch. See `README.md` and the section below.
 
 > **Big deferred changes** (FighterBrain, forest-exit house) live in
 > `docs/BIG_CHANGES_TODO.md`.
+
+## 2026-09-06 — V20 CURRICULUM MODES (`BUILD_TAG = "V20_CURRICULUM_MODES"`)
+
+Ziel: eine Architektur, die irgendwann das **ganze** Spiel lernen kann, statt
+noch eines Reward-Patches. Live nach **100 % Clean Reset** (frisches PPO-Netz,
+`world_stage 0`, keine Checkpoints, leere Statistik; nur das `StartGame`-Master-
+Savegame behalten). Backup `brain_backups/V20_CLEAN_RESET_*`. 100 Tests grün.
+
+**Neue Module:** `src/curriculum_v20.py` (Modi, `CurriculumState`,
+`allocate_modes`, `Objective`), `src/nav_transitions_v20.py` (`KnownTransitions`
+KNOWN/UNKNOWN), `src/target_shaper_v20.py` (`TargetShaper`), `src/loop_guard.py`
+(+ `ShortCycleGuard`).
+
+**Vier Modi, EIN PPO-Netz** (`curriculum_v20.allocate_modes`, Ratio 12/12/6/3
+skaliert auf `NUM_ENVS`; bei 60 → 24/21/10/5):
+- `FULL` — ab echtem `StartGame`. Kann das Netz alles verketten?
+- `BRIDGE` — ab Entry-Checkpoint der Bottleneck-Stufe. Lernt genau den ersten
+  Übergang, den Full-Läufe nicht reproduzieren. Wandert automatisch vor
+  (Route1→Vertania → Vertania→Route2 → Route2→Wald → Wald→Marmoria).
+- `FRONTIER` — ab tiefster entdeckter Front. Entdeckt den nächsten unbekannten
+  Story-Übergang. Rast nicht mehr als `mastered+2` voraus.
+- `RETENTION` — rotiert gemeisterte Übergänge (Anti-Vergessen).
+- `POST_WIPE_RECOVERY` überschreibt weiterhin dynamisch bei einem Wipe.
+- `V20_CURRICULUM = True` Hauptschalter (False → V17–V19-Scout-Bänder).
+
+**discovered_stage vs mastered_stage:**
+- `discovered_stage` = tiefste Stufe, die IRGENDEIN Agent je erreicht hat.
+- Übergang **gemeistert** nur wenn: Fenster (`TRANSITION_MASTERY_WINDOW` 50) ≥ 20
+  Versuche, `success_rate` ≥ 0.80 **und** `full_chain_confirmations` ≥ 5.
+  Letztere steigen NUR durch `FULL`-Läufe ab `beginning` (`record_full_chain_
+  result`). BRIDGE/Scout-Erfolge bauen die Quote, befördern aber nie allein.
+- `mastered_stage` = 1 + zusammenhängende Kette gemeisterter Übergänge ab Stufe 1.
+- `current_bottleneck` = frühester entdeckter, nicht gemeisterter Übergang.
+- Zustand: `runtime/curriculum_v20/state.json` (Env liest mit 256-Step-Cache,
+  schreibt am Episodenende unter Fleet-Lock).
+
+**Zwei Checkpoint-Typen (Brief §4):** „north-most Y gewinnt"-Ersetzung ENTFERNT
+(in Wald/Höhle/Gebäude/Arena logisch ungültig).
+- `stage_<n>` = **Entry**, beim ersten sicheren Betreten gesetzt, danach
+  **unveränderlich**. BRIDGE/RETENTION resumen daraus.
+- `stage_frontier_<n>` = optionaler Discovery-Anker, steigt nur bei höherem
+  Explorations-Score (Kacheln auf der Stufe), NIE über Y. FRONTIER resumt daraus.
+
+**KNOWN vs UNKNOWN (Brief §5, §21):** `UNKNOWN_NEXT_TRANSITION` → Erkundung an,
+Ziel-Shaping aus, KEINE erfundene Koordinate (kein Nordpunkt, Kartenrand,
+nächste Frontier, Haus, Sackgasse). Bei echtem `Stufe N → N+1`-Übergang werden
+Quell-Map, Quell-Ausgangskoordinate, Ziel-Map, Zielkoordinate persistiert
+(`runtime/curriculum_v20/known_transitions.json`) und werden zum Navigationsziel.
+
+**Nicht-farmbares Ziel-Shaping (Brief §6, §22):** `TARGET_PROGRESS_REWARD`
+0.20 → **0.05**, neu `TARGET_BACKTRACK_PENALTY = −0.01`. `TargetShaper` zahlt
+`0.05 × Verbesserung` NUR beim strikten neuen Episode-Bestwert der Graph-Distanz;
+Rückkehr auf eine schon erreichte Distanz zahlt 0; erst jenseits `best + 3` ein
+flaches `−0.01`. Plus `ShortCycleGuard` (A-B-A-B / A-B-C-Erkennung, unterdrückt
+positives Shaping, `−0.05 … −0.25` eskalierend, Truncation nach ~600 Zyklus-
+Steps). Damit gelten alle Anti-Loop-Invarianten (A/B-Ziel-Loop, Haus rein/raus,
+Warp-Replay, Kachel-Revisit, Wipe-Farm, Dauer-Wildkampf, Center-Farm,
+`5→4→5`-Stufen-Farm sind keiner davon netto profitabel).
+
+**Weitere Änderungen:**
+- `BUILDING_FIRST_GLOBAL_REWARD` 500 → **0** (Brief §8). Generische
+  Vertania/Marmoria-Häuser = 0; echte Ziele behalten `POKECENTER_*` /
+  `POKEMART_*` / `PEWTER_GYM_*`. Der Bank-4-`!= 4`-Guard bleibt.
+- **Long-Full-Probe-Horizont-Bug gefixt (Brief §16):** neues
+  `_episode_step_limit()` — `scout` → `SCOUT_EPISODE_STEPS`; `full` + Long-Probe
+  → `LONG_FULL_PROBE_STEPS` (32768); sonst `full` → `MAX_EPISODE_STEPS` (12000).
+  Vorher wurde JEDE Full-Episode auf 12000 gezwungen, `_is_long_full_probe()`
+  war wirkungslos.
+- Generische `Objective`-Repräsentation (`reach_map`, `reach_transition`,
+  `enter_required_building`, `heal_center`, `win_trainer`, `win_gym`,
+  `obtain_badge`, `obtain_item`, `trigger_story_flag`) — Route 3 → Mt. Moon →
+  Azuria → Misty → … → Top 4 → Champ per Objekt, nicht per Code. `world_stage`
+  (Geografie) und `story_objective` bleiben getrennt.
+- Dashboard-`info`: `training_mode`, `current_stage`, `discovered_stage`,
+  `mastered_stage`, `current_bottleneck`, `objective`, `target_source`,
+  `target_coordinate`, `best_target_distance`, `post_wipe_recovery`,
+  `transition_attempt`, `transition_success`.
+
+**Reset:** `bash tools/v20_reset.sh --yes` (behält nur `StartGame`), dann
+`bash scripts/start_all.sh`. `train.py` seedet `discovered_stage` aus gültigen
+`stage_*`-Metas + `global_progress.json`; wenn Champion/Global-Rekord schon
+Full-Tiefe ≥ Route 1 zeigt, wird `Pallet→Route1` einmalig vor-bestätigt, sodass
+der Bottleneck bei `Route1→Vertania` startet. Beim Clean Reset gibt es diese
+Evidenz nicht → erstes Bild `discovered = mastered = 1`, Bottleneck
+`Pallet→Route1`, ganze Flotte `FULL` bis das frische Netz Route 1 hält.
+
+**Offene RAM/Story-Unsicherheit:** `PEWTER_GYM_MAPS` weiter leer (Arena-Map-ID
+unbestätigt); Known-Transition-Koordinaten für Route1→Vertania … Wald→Marmoria
+werden erst beim ersten echten Vorwärts-Crossing im Lauf gefüllt; Mastery-
+Statistik startet leer und konvergiert über die ersten Eval-Fenster.
 
 ## 2026-09-06 — V19 BROCK RUSH (`BUILD_TAG = "V19_BROCK_RUSH"`)
 

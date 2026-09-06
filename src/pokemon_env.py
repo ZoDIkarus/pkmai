@@ -11,7 +11,15 @@ from contextlib import nullcontext
 import random
 from battle_state import BattleState, MainBattleReader
 from reward_state import claim_event
-from loop_guard import LocalLoopGuard
+from loop_guard import LocalLoopGuard, ShortCycleGuard
+import curriculum_v20
+from curriculum_v20 import CurriculumState
+from nav_transitions_v20 import (
+    KnownTransitions,
+    KNOWN as NAV_KNOWN,
+    UNKNOWN as NAV_UNKNOWN,
+)
+from target_shaper_v20 import TargetShaper
 from firered_ram import (
     read_battle_type_flags,
     read_enemy_party,
@@ -34,6 +42,14 @@ SHARED_CURRICULUM_DIR = os.path.join(RUNTIME_DIR, "curriculum_shared")
 STATS_DIR = os.path.join(RUNTIME_DIR, "training_stats")
 GLOBAL_PROGRESS_FILE = os.path.join(EXPLORATION_MEMORY_DIR, "global_progress.json")
 
+# V20 curriculum architecture state (see curriculum_v20.py / nav_transitions_v20.py).
+V20_CURRICULUM_DIR = os.path.join(RUNTIME_DIR, "curriculum_v20")
+V20_STATE_FILE = os.path.join(V20_CURRICULUM_DIR, "state.json")
+V20_KNOWN_TRANSITIONS_FILE = os.path.join(
+    V20_CURRICULUM_DIR, "known_transitions.json"
+)
+os.makedirs(V20_CURRICULUM_DIR, exist_ok=True)
+
 os.makedirs(INSTANCES_DIR, exist_ok=True)
 os.makedirs(CURRICULUM_DIR, exist_ok=True)
 os.makedirs(SHARED_CURRICULUM_DIR, exist_ok=True)
@@ -41,7 +57,7 @@ os.makedirs(STATS_DIR, exist_ok=True)
 
 
 class PokemonFireRedEnv(gym.Env):
-    BUILD_TAG = "V19_BROCK_RUSH"
+    BUILD_TAG = "V20_CURRICULUM_MODES"
     metadata = {"render_modes": []}
 
     # Training V2 nutzt feste Spezialisten statt einer 90/10-Zufallsquote.
@@ -248,7 +264,13 @@ class PokemonFireRedEnv(gym.Env):
     # building_<b>_<m>, ueberlebt Neustarts). Die Alabastia-Schuppen (Bank 4)
     # bleiben beim kleinen +25.
     CITY_BUILDING_BANKS = {5, 6}
-    BUILDING_FIRST_GLOBAL_REWARD = 500.0
+    # V20 section 8: generic city houses are NOT story jackpots. A random
+    # Viridian/Pewter house is worth 0; only real objectives (Pokemon Center
+    # progression, required PokeMart, Gym, required story building) carry
+    # strong reward, and those have their own dedicated events
+    # (POKECENTER_*, POKEMART_*, PEWTER_GYM_*). Enter/exit of a generic
+    # building can therefore never be a profitable loop.
+    BUILDING_FIRST_GLOBAL_REWARD = 0.0
     NEW_GLOBAL_DEPTH_REWARD = 0.0
     # V17.2: Wenn ein Agent den bisher tiefsten world_stage ueberhaupt (ueber
     # ALLE Agenten und Episoden seit dem letzten Reset) als Erster erreicht,
@@ -449,12 +471,28 @@ class PokemonFireRedEnv(gym.Env):
     # bestraft. So vergisst PPO den guten Weg nicht, wenn Novelty weg ist.
     # Welt-Exploration bekommt keine generischen Koordinaten-Ziele mehr.
     # Diese Ziele bevorzugten wiederholt Haeuser und Sackgassen.
-    # V19 BROCK RUSH: Graph-Distanz-Wegfuehrung wieder AN. Naeher zum
-    # bekannten Stage-Ziel (_target_coords_for_stage / _progress_targets_for_map,
-    # Graph-Distanz - NICHT Kompassrichtung) = +0.20, weiter weg = -0.20.
-    # Symmetrisch -> Hin-/Rueckweg netto 0, kein Nord-Bonus.
-    TARGET_PROGRESS_REWARD = 0.20
+    # V20 section 6: non-farmable target shaping. POSITIVE shaping is paid
+    # ONLY for a NEW BEST graph distance within the current objective/episode
+    # (TargetShaper.best_target_distance), scaled by the improvement. Returning
+    # to an already-achieved distance pays nothing, so A->B->A->B can never
+    # repeatedly earn positive route progress. Negative shaping is tiny and
+    # only when moving meaningfully away from the best-known route; day-to-day
+    # pressure is GAMEPLAY_STEP_COST + loop guard, not a dense +/- storm.
+    TARGET_PROGRESS_REWARD = 0.05
+    TARGET_BACKTRACK_PENALTY = -0.01
     EARLY_STORY_STEP_REWARD = 0.0
+
+    # V20 curriculum architecture master switch. When True the fleet is split
+    # into FULL / BRIDGE / FRONTIER / RETENTION modes (curriculum_v20.py),
+    # BRIDGE concentrates on the earliest transition Full runs cannot
+    # reproduce, and target shaping / loop protection use the V20 helpers.
+    V20_CURRICULUM = True
+    TRANSITION_MASTERY_WINDOW = curriculum_v20.TRANSITION_MASTERY_WINDOW
+    TRANSITION_MASTERY_MIN_ATTEMPTS = (
+        curriculum_v20.TRANSITION_MASTERY_MIN_ATTEMPTS
+    )
+    TRANSITION_MASTERY_RATE = curriculum_v20.TRANSITION_MASTERY_RATE
+    FULL_CHAIN_CONFIRMATIONS = curriculum_v20.FULL_CHAIN_CONFIRMATIONS
 
     EXPLORATION_MEMORY_ENABLED = True
     CONFIRMED_WARP_MIN_AGENTS = 2
@@ -636,7 +674,21 @@ class PokemonFireRedEnv(gym.Env):
         self._nav_target_cache_step = -999999
         self._last_exploration_save_step = -999999
         self.training_objective = "full"
+        # V20: FULL / BRIDGE / FRONTIER / RETENTION (static per rank) plus the
+        # dynamic POST_WIPE_RECOVERY overlay handled by post_wipe_recovery.
+        self.training_mode = "FULL"
         self.full_chain_ready = False
+        # V20 helpers (brief sections 6 + 10).
+        self.target_shaper = TargetShaper(
+            progress_reward=self.TARGET_PROGRESS_REWARD,
+            backtrack_penalty=self.TARGET_BACKTRACK_PENALTY,
+        )
+        self.short_cycle_guard = ShortCycleGuard()
+        self._short_cycle_last = None
+        self._v20_state_cache = None
+        self._v20_state_cache_step = -10 ** 9
+        self._v20_known_cache = None
+        self._v20_known_cache_step = -10 ** 9
         self.objective_success = False
         self.last_gameplay_ready = False
         self.last_in_battle = 0
@@ -1803,7 +1855,18 @@ class PokemonFireRedEnv(gym.Env):
                 out[n] = name
         return out
 
-    def _save_stage_checkpoint(self, stage, bank, map_id, x, y, episode_reward=0.0):
+    def _save_stage_checkpoint(self, stage, bank, map_id, x, y, episode_reward=0.0,
+                               kind="entry", frontier_score=None):
+        # V20 section 4: two checkpoint types.
+        #   kind="entry"    -> stage_<n>. Saved when the stage is first safely
+        #                      entered and then IMMUTABLE. Represents the
+        #                      BEGINNING of the stage. BRIDGE agents use it.
+        #                      Never replaced because another coordinate has a
+        #                      smaller Y (invalid in forests/caves/buildings).
+        #   kind="frontier" -> stage_frontier_<n>. Optional discovery anchor,
+        #                      advanced only by genuine exploration progress
+        #                      (frontier_score = tiles explored on this stage),
+        #                      never by "north = better". FRONTIER agents use it.
         # Cached navigation may lag a warp. Read the actual emulator now.
         live = read_player_location(self.env, allow_scan=True)
         if not live.get("trusted") or (
@@ -1811,9 +1874,12 @@ class PokemonFireRedEnv(gym.Env):
             int(live.get("x_pos", -1)), int(live.get("y_pos", -1))
         ) != (int(bank), int(map_id), int(x), int(y)):
             return False
-        name = f"stage_{int(stage)}"
+        is_frontier = (kind == "frontier")
+        name = (f"stage_frontier_{int(stage)}" if is_frontier
+                else f"stage_{int(stage)}")
         meta = {
             "stage": int(stage), "progress_schema": self.PROGRESS_SCHEMA,
+            "kind": kind,
             "bank": int(bank), "map": int(map_id),
             "x": int(x), "y": int(y), "has_starter": True,
             "starter_species": int(self._starter_species()),
@@ -1824,6 +1890,7 @@ class PokemonFireRedEnv(gym.Env):
             "parcel_obtained_confirmed": bool(self.parcel_obtained_confirmed),
             "parcel_delivered_confirmed": bool(self.parcel_delivered_confirmed),
             "episode_reward": float(episode_reward),
+            "frontier_score": int(frontier_score or 0),
         }
         if self._stage_at_current_location(bank, map_id) != int(stage):
             return False
@@ -1840,14 +1907,15 @@ class PokemonFireRedEnv(gym.Env):
                 and os.path.exists(self._shared_state_path(name))
             )
             if ok_existing:
-                # North position wins first (smaller map Y). At equal Y,
-                # require strictly higher reward. Never move a checkpoint south.
-                # Each stage competes independently, including full runners.
-                old_y = int(existing.get("y", y))
-                old_reward = float(existing.get("episode_reward", 0.0) or 0.0)
-                if int(y) > old_y or (
-                    int(y) == old_y and float(episode_reward) <= old_reward
-                ):
+                if not is_frontier:
+                    # ENTRY checkpoint is immutable once valid. It must keep
+                    # representing the START of the stage. Do NOT move it for
+                    # a smaller Y or a higher reward.
+                    return False
+                # FRONTIER checkpoint advances only on a strictly higher
+                # exploration score - genuine new ground on this stage.
+                old_score = int(existing.get("frontier_score", 0) or 0)
+                if int(frontier_score or 0) <= old_score:
                     return False
 
             # Auch beim Verbessern atomar ersetzen. So bleibt bei einem
@@ -2641,6 +2709,21 @@ class PokemonFireRedEnv(gym.Env):
         # explizit ergaenzt wurde, damit Scouts ihr eigenes, kuerzeres
         # SCOUT_EPISODE_STEPS-Limit bekommen statt versehentlich das lange
         # "full"-Limit oder gar 32768 zu erben.
+        if getattr(self, "V20_CURRICULUM", False) and getattr(
+            self, "FULL_ONLY_MODE", False
+        ):
+            # V20: FULL / BRIDGE / FRONTIER / RETENTION (brief section 3).
+            # All four train the SAME PPO policy. BRIDGE/FRONTIER/RETENTION use
+            # the "scout" objective string so every reward branch that keys on
+            # role treats them like the existing checkpoint-resuming scouts;
+            # the mode itself drives _choose_episode_start / episode limit.
+            mode = self._v20_mode()
+            self.training_mode = mode
+            if mode == curriculum_v20.MODE_FULL:
+                return "full", f"V20 FULL {slot + 1:03d}"
+            obj = "full" if mode == curriculum_v20.MODE_FULL else "scout"
+            return obj, f"V20 {mode} {slot + 1:03d}"
+
         if getattr(self, "FULL_ONLY_MODE", False):
             assigned_stage = self._scout_assigned_stage()
             if assigned_stage is not None:
@@ -2751,6 +2834,86 @@ class PokemonFireRedEnv(gym.Env):
         if slot < b_full:    return "progress", f"World Push {slot - b_badge + 1:03d}"
         return "full", f"Full Journey {slot - b_full + 1:02d}"
 
+    def _v20_stage_checkpoint_name(self, stage, kind="entry"):
+        """Return a validated 'stage_<n>' / 'stage_frontier_<n>' milestone name
+        for this stage, or None. Never falls back to a fake coordinate."""
+        want = (f"stage_frontier_{int(stage)}" if kind == "frontier"
+                else f"stage_{int(stage)}")
+        if want not in set(getattr(self, "saved_milestones", ()) or ()):
+            return None
+        meta = self._read_stage_meta(want)
+        if (meta.get("state_validation") == 1
+                and int(meta.get("stage", -1)) == int(stage)
+                and bool(meta.get("has_starter"))
+                and self._meta_checkpoint_stage(meta) == int(stage)):
+            return want
+        return None
+
+    def _v20_choose_episode_start(self, mode):
+        """Episode start for a V20 mode (brief section 3).
+
+        FULL      -> real StartGame ("beginning")
+        BRIDGE    -> ENTRY checkpoint of the current bottleneck stage
+        FRONTIER  -> deepest discovered frontier checkpoint
+        RETENTION -> rotate through mastered-transition ENTRY checkpoints
+        Any mode with no valid checkpoint degrades to a FULL run from the
+        beginning (never an invented coordinate).
+        """
+        state = self._v20_load_state(force=True)
+        entry_cps = self._valid_stage_checkpoints()  # {stage: 'stage_n'}
+
+        if mode == curriculum_v20.MODE_FULL:
+            self.training_objective = "full"
+            return "beginning"
+
+        if mode == curriculum_v20.MODE_BRIDGE:
+            src = state.current_bottleneck
+            if src is None:
+                # Everything discovered is mastered -> help FRONTIER instead.
+                src = state.frontier_stage()
+            name = self._v20_stage_checkpoint_name(src, "entry")
+            if name:
+                self.training_objective = "scout"
+                self.episode_start_bottleneck = int(src)
+                return name
+            if not entry_cps:
+                # No checkpoint anywhere yet: this rank runs FULL so it can
+                # create the first stage-entry checkpoint. Diagnostic only,
+                # never substitute a random frontier (brief section 7 / 21).
+                pass
+            self.training_objective = "full"
+            return "beginning"
+
+        if mode == curriculum_v20.MODE_FRONTIER:
+            fstage = state.frontier_stage()
+            for cand in (fstage, fstage - 1, fstage + 1):
+                nm = (self._v20_stage_checkpoint_name(cand, "frontier")
+                      or self._v20_stage_checkpoint_name(cand, "entry"))
+                if nm:
+                    self.training_objective = "scout"
+                    return nm
+            if entry_cps:
+                deepest = max(entry_cps)
+                self.training_objective = "scout"
+                return entry_cps[deepest]
+            self.training_objective = "full"
+            return "beginning"
+
+        if mode == curriculum_v20.MODE_RETENTION:
+            mastered = state.mastered_transitions()
+            names = [self._v20_stage_checkpoint_name(s, "entry")
+                     for s in mastered]
+            names = [n for n in names if n]
+            if names:
+                idx = (self.rank + self.completed_episodes) % len(names)
+                self.training_objective = "scout"
+                return names[idx]
+            self.training_objective = "full"
+            return "beginning"
+
+        self.training_objective = "full"
+        return "beginning"
+
     def _choose_episode_start(self):
         self.saved_milestones = self._discover_saved_milestones()
         self.full_chain_ready = self._champion_full_starter_ready()
@@ -2773,6 +2936,11 @@ class PokemonFireRedEnv(gym.Env):
         # _scout_assigned_stage()) statt dass alle immer zur tiefsten Front
         # wandern - hier also den PASSENDEN Checkpoint fuer die diesem Rank
         # zugewiesene Stage laden, nicht pauschal den tiefsten.
+        if getattr(self, "V20_CURRICULUM", False) and getattr(
+            self, "FULL_ONLY_MODE", False
+        ):
+            return self._v20_choose_episode_start(role)
+
         if getattr(self, "FULL_ONLY_MODE", False):
             if role == "scout":
                 assigned_stage = self._scout_assigned_stage()
@@ -2858,11 +3026,160 @@ class PokemonFireRedEnv(gym.Env):
             full_count = max(4, int(round(n * 0.1875)))
         b_full = n - full_count
         lo = b_full + max(1, (n - b_full) // 2)
+        if getattr(self, "V20_CURRICULUM", False) and getattr(
+            self, "FULL_ONLY_MODE", False
+        ):
+            # V20: the deeper half of the FULL-mode ranks run the long,
+            # cap-free probe so LONG_FULL_PROBE_STEPS is actually reachable
+            # (brief section 16). Everyone else FULL keeps MAX_EPISODE_STEPS
+            # so completed Full episodes stay frequent for the callback eval.
+            if not (
+                self.training_objective == "full"
+                and self.episode_start == "beginning"
+            ):
+                return False
+            layout = curriculum_v20.allocate_modes(n)
+            full_ranks = [i for i, m in enumerate(layout)
+                          if m == curriculum_v20.MODE_FULL]
+            if not full_ranks:
+                return False
+            half = full_ranks[len(full_ranks) // 2:]
+            return slot in set(half)
         return (
             self.training_objective == "full"
             and self.episode_start == "beginning"
             and slot >= lo
         )
+
+    # ------------------------------------------------------------------
+    # V20 curriculum architecture
+    # ------------------------------------------------------------------
+    def _v20_active(self):
+        return bool(
+            getattr(self, "V20_CURRICULUM", False)
+            and getattr(self, "FULL_ONLY_MODE", False)
+        )
+
+    def _v20_mode(self):
+        """FULL / BRIDGE / FRONTIER / RETENTION for this rank (static)."""
+        return curriculum_v20.mode_for_rank(self.rank, self.n_envs)
+
+    # Re-reading the two small JSON files every step across 60 workers is
+    # wasteful; refresh them on the same cadence as the shared snapshots.
+    V20_STATE_REFRESH_EVERY = 256
+
+    def _v20_load_state(self, force=False):
+        step = int(getattr(self, "total_steps", 0))
+        cache = getattr(self, "_v20_state_cache", None)
+        if (not force and cache is not None
+                and step - self._v20_state_cache_step
+                < self.V20_STATE_REFRESH_EVERY):
+            return cache
+        state = CurriculumState.load(V20_STATE_FILE)
+        self._v20_state_cache = state
+        self._v20_state_cache_step = step
+        return state
+
+    def _v20_load_known_transitions(self, force=False):
+        step = int(getattr(self, "total_steps", 0))
+        cache = getattr(self, "_v20_known_cache", None)
+        if (not force and cache is not None
+                and step - self._v20_known_cache_step
+                < self.V20_STATE_REFRESH_EVERY):
+            return cache
+        known = KnownTransitions.load(V20_KNOWN_TRANSITIONS_FILE)
+        self._v20_known_cache = known
+        self._v20_known_cache_step = step
+        return known
+
+    def _episode_step_limit(self):
+        """Route-step budget for this episode (brief section 16).
+
+        The old code forced every 'full' episode to MAX_EPISODE_STEPS, so
+        _is_long_full_probe() could never actually run its longer horizon.
+        """
+        obj = self.training_objective
+        if obj == "scout":
+            return self.SCOUT_EPISODE_STEPS
+        if obj == "full" and self._is_long_full_probe():
+            return self.LONG_FULL_PROBE_STEPS
+        if obj in ("progress", "badge", "full"):
+            return self.MAX_EPISODE_STEPS
+        return 32768
+
+    def _v20_update_shared_state(self, mutate):
+        """Read-modify-write the shared V20 curriculum state under the fleet
+        lock. ``mutate(state)`` performs the change. Best effort - a failed
+        write must never break training."""
+        lock = self.shared_lock if self.shared_lock is not None else nullcontext()
+        try:
+            with lock:
+                state = CurriculumState.load(V20_STATE_FILE)
+                mutate(state)
+                state.save(V20_STATE_FILE)
+        except Exception:
+            pass
+
+    def _v20_record_episode_outcome(self):
+        """Called once when the episode ends. Feeds transition statistics that
+        drive discovered_stage / mastered_stage / current_bottleneck."""
+        if not self._v20_active() or getattr(self, "_v20_outcome_recorded", False):
+            return
+        self._v20_outcome_recorded = True
+        mode = getattr(self, "training_mode", "FULL")
+        reached = int(getattr(self, "episode_best_stage", 1) or 1)
+        start_stage = int(getattr(self, "episode_start_stage", 1) or 1)
+        beginning = (self.episode_start == "beginning")
+
+        def _mut(state):
+            state.record_discovery(reached)
+            if mode == curriculum_v20.MODE_FULL and beginning:
+                # The ONLY path that moves mastered_stage in bulk.
+                state.record_full_chain_result(reached)
+            elif mode == curriculum_v20.MODE_BRIDGE:
+                src = getattr(self, "episode_start_bottleneck", None)
+                if src is None:
+                    src = start_stage
+                state.record_transition_attempt(
+                    int(src), success=reached >= int(src) + 1, full_chain=False
+                )
+            elif mode == curriculum_v20.MODE_FRONTIER:
+                if reached > start_stage:
+                    for s in range(start_stage, reached):
+                        state.record_transition_attempt(
+                            s, success=True, full_chain=False
+                        )
+
+        self._v20_update_shared_state(_mut)
+
+    def _v20_record_known_transition(self, pb, pm, px, py, bank, map_id, x, y):
+        """A real map crossing happened. If it is a forward world-stage hop,
+        persist the exact source exit + destination coordinate (brief 5/21)."""
+        if not self._v20_active():
+            return
+        src_stage = self._current_world_stage(pb, pm)
+        dst_stage = self._current_world_stage(bank, map_id)
+        if src_stage < 1 or dst_stage != src_stage + 1:
+            return
+        try:
+            known = KnownTransitions.load(V20_KNOWN_TRANSITIONS_FILE)
+            known.record(
+                src_stage, dst_stage,
+                (int(pb), int(pm)), (int(px), int(py)),
+                (int(bank), int(map_id)), (int(x), int(y)),
+            )
+            lock = (self.shared_lock if self.shared_lock is not None
+                    else nullcontext())
+            with lock:
+                merged = KnownTransitions.load(V20_KNOWN_TRANSITIONS_FILE)
+                merged.record(
+                    src_stage, dst_stage,
+                    (int(pb), int(pm)), (int(px), int(py)),
+                    (int(bank), int(map_id)), (int(x), int(y)),
+                )
+                merged.save(V20_KNOWN_TRANSITIONS_FILE)
+        except Exception:
+            pass
 
     def _read_info_with_idle_frame(self):
         """
@@ -3215,8 +3532,13 @@ class PokemonFireRedEnv(gym.Env):
         self.main_battle_reader = MainBattleReader()
         self.episode_best_stage = int(self._world_stage())
         self.episode_start_stage = self.episode_best_stage
+        self.episode_start_bottleneck = None
+        self._v20_outcome_recorded = False
         self.stage_arrival_steps = {str(self.episode_best_stage): 0}
         self.local_loop_guard = LocalLoopGuard()
+        self.short_cycle_guard = ShortCycleGuard()
+        self._short_cycle_last = None
+        self.target_shaper.reset()
         self._stage_hold_map = None
         self._stage_hold_steps = 0
 
@@ -5130,6 +5452,7 @@ class PokemonFireRedEnv(gym.Env):
                     _saved_now = self._save_stage_checkpoint(
                         _stage_now, bank, map_id, x, y,
                         episode_reward=self.current_reward + reward,
+                        kind="entry",
                     )
                     if _saved_now:
                         milestone_saved = f"stage_{_stage_now}"
@@ -5140,6 +5463,20 @@ class PokemonFireRedEnv(gym.Env):
                         )
                         if bridge:
                             milestone_saved = bridge
+                    # V20: FRONTIER agents also drop a discovery anchor that
+                    # advances only on genuinely more explored ground on this
+                    # stage - never on a smaller Y.
+                    if getattr(self, "training_mode", "") == "FRONTIER":
+                        _fscore = self._episode_tiles_by_map.get(
+                            (int(bank), int(map_id)), 0
+                        )
+                        _fsaved = self._save_stage_checkpoint(
+                            _stage_now, bank, map_id, x, y,
+                            episode_reward=self.current_reward + reward,
+                            kind="frontier", frontier_score=_fscore,
+                        )
+                        if _fsaved and not milestone_saved:
+                            milestone_saved = f"stage_frontier_{_stage_now}"
 
 
             if coord_key not in self.seen_coords:
@@ -5368,7 +5705,42 @@ class PokemonFireRedEnv(gym.Env):
                                 getattr(self, "_prev_step_move", None)
                                 == ((int(x), int(y)), (int(px), int(py)))
                             )
-                            if (
+                            _v20_shape = (
+                                getattr(self, "V20_CURRICULUM", False)
+                                and not getattr(self, "post_wipe_recovery", False)
+                            )
+                            if _v20_shape:
+                                # V20 section 6/22: positive shaping ONLY on a
+                                # new episode-best distance to this exact target;
+                                # A<->B oscillation can never repeatedly pay.
+                                _obj_key = (
+                                    self.training_objective,
+                                    int(bank), int(map_id),
+                                    tuple(sorted({
+                                        (int(t[0]), int(t[1])) for t in targets
+                                    })),
+                                )
+                                _loop = getattr(self, "_short_cycle_last", None) or {}
+                                _sr, _sev = self.target_shaper.update(
+                                    _obj_key, new_d
+                                )
+                                if _loop.get("suppress_shaping"):
+                                    if _sev == "route_progress_best":
+                                        reward_events.append(
+                                            "route_progress_loop_suppressed:+0"
+                                        )
+                                elif _sev == "route_progress_best" and _sr > 0:
+                                    reward += _sr
+                                    reward_events.append(
+                                        f"route_progress_best:+{_sr:.3f}"
+                                    )
+                                elif _sev == "route_backtrack":
+                                    reward += self.TARGET_BACKTRACK_PENALTY
+                                    reward_events.append(
+                                        "route_backtrack:"
+                                        f"{self.TARGET_BACKTRACK_PENALTY:.3f}"
+                                    )
+                            elif (
                                 target_step_reward
                                 and
                                 prev_d is not None
@@ -5395,6 +5767,12 @@ class PokemonFireRedEnv(gym.Env):
                 else:
                     # Mapwechsel / Warp: Ein konkreter Ein-/Ausgangspunkt wird
                     # persistent gespeichert. Rueckweg durch dieselbe Tuer = bekannt.
+                    # V20 section 5: if this crossing is a real forward
+                    # world-stage hop, persist the exact source exit +
+                    # destination coordinate so it becomes the nav objective.
+                    self._v20_record_known_transition(
+                        pb, pm, px, py, bank, map_id, x, y
+                    )
                     transition_key = self._transition_key(
                         pb, pm, px, py,
                         bank, map_id, x, y
@@ -5593,10 +5971,41 @@ class PokemonFireRedEnv(gym.Env):
                  self.last_party_total_experience, len(self.seen_coords)),
                 in_battle=bool(in_battle),
             )
-            if in_battle == 0 and (self.stuck_counter >= 900 or local_loop):
+
+            # V20 section 10: explicit A-B-A-B / A-B-C-A-B-C short-cycle
+            # detection. Battles, menus and one-time map transitions are
+            # excluded (active=False). A sustained tiny cycle first suppresses
+            # positive navigation shaping (handled where target shaping runs),
+            # then applies a small escalating penalty, then truncates.
+            _sc_active = (
+                in_battle == 0
+                and gameplay_ready
+                and loc.get("trusted", False)
+                and (self.previous_valid_map == map_id)
+            )
+            self._short_cycle_last = self.short_cycle_guard.update(
+                (int(bank), int(map_id), int(x), int(y))
+                if loc.get("trusted") else None,
+                (self._world_stage(), self.last_badges,
+                 int(self.left_house_rewarded), int(self.has_starter)),
+                active=_sc_active,
+            )
+            _sc = self._short_cycle_last
+            if _sc.get("cycle") and _sc.get("penalty"):
+                reward += _sc["penalty"]
+                reward_events.append(f"loop_penalty:{_sc['penalty']:.3f}")
+
+            _short_cycle_trunc = bool(_sc.get("truncate"))
+            if in_battle == 0 and (
+                self.stuck_counter >= 900 or local_loop or _short_cycle_trunc
+            ):
                 truncated = True
                 info["anti_loop_reset"] = True
-                self.last_stage_timeout = "local_loop" if local_loop else "stationary_loop"
+                self.last_stage_timeout = (
+                    "short_cycle_loop" if _short_cycle_trunc
+                    else "local_loop" if local_loop
+                    else "stationary_loop"
+                )
                 reward_events.append(self.last_stage_timeout + ":truncate")
                 self.anti_loop_resets += 1
                 self.episode_anti_loop_resets += 1
@@ -5775,6 +6184,48 @@ class PokemonFireRedEnv(gym.Env):
         info["training_objective"] = self.training_objective
         info["training_role"] = self._agent_role()[0]
         info["curriculum_states"] = len(self.saved_milestones)
+
+        # V20 section 20: observability for the dashboard / callback.
+        if self._v20_active():
+            _v20st = self._v20_load_state()
+            _knownt = self._v20_load_known_transitions()
+            _src = _v20st.current_bottleneck
+            _tgt = (_knownt.source_exit_for_stage(_src)
+                    if _src is not None else None)
+            info["training_mode"] = getattr(self, "training_mode", "FULL")
+            info["current_stage"] = int(self._world_stage())
+            info["discovered_stage"] = int(_v20st.discovered_stage)
+            info["mastered_stage"] = int(_v20st.mastered_stage)
+            info["current_bottleneck"] = (
+                curriculum_v20.transition_name(_src) if _src is not None
+                else None
+            )
+            info["objective"] = (
+                "explore_unknown_frontier"
+                if (_src is not None
+                    and _knownt.navigation_state(_src) == NAV_UNKNOWN)
+                else "reproduce_known_transition"
+            )
+            info["target_source"] = (
+                "recorded_transition" if _tgt is not None else "none"
+            )
+            info["target_coordinate"] = list(_tgt) if _tgt else None
+            info["best_target_distance"] = (
+                None if self.target_shaper.best_target_distance is None
+                else int(self.target_shaper.best_target_distance)
+            )
+            info["post_wipe_recovery"] = bool(
+                getattr(self, "post_wipe_recovery", False)
+            )
+            _brec = (_v20st.transitions.get(_src)
+                     if _src is not None else None)
+            info["transition_attempt"] = (
+                int(_brec.window_attempts) if _brec else 0
+            )
+            info["transition_success"] = (
+                round(_brec.success_rate, 3) if _brec else 0.0
+            )
+
         info["milestone_saved"] = milestone_saved
         info["explored_tiles"] = len(self.seen_coords)
         info["visited_maps"] = len(self.visited_maps)
@@ -5983,13 +6434,9 @@ class PokemonFireRedEnv(gym.Env):
         else:
             info["progress_stall_reset"] = False
 
-        episode_limit = (
-            self.SCOUT_EPISODE_STEPS
-            if self.training_objective == "scout"
-            else self.MAX_EPISODE_STEPS
-            if self.training_objective in ("progress", "badge", "full")
-            else 32768
-        )
+        # V20 section 16: long Full probes must actually get LONG_FULL_PROBE_STEPS
+        # instead of being silently capped at MAX_EPISODE_STEPS.
+        episode_limit = self._episode_step_limit()
         if (
             self.current_battle_steps >= self.MAX_SINGLE_BATTLE_STEPS
             or self.battle_steps >= self.MAX_EPISODE_BATTLE_STEPS
@@ -6003,6 +6450,10 @@ class PokemonFireRedEnv(gym.Env):
             objective_done
             or self.route_steps >= episode_limit
         )
+
+        # V20: feed transition statistics once, when the episode actually ends.
+        if terminated or truncated:
+            self._v20_record_episode_outcome()
 
         # V15.3: das Post-Haus-Wander-Shaping (+0.35/Kachel, Loop-Strafen) ist
         # genau die "bewegt sich fuer kleine Scores in Alabastia"-Logik - im

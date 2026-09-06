@@ -4,6 +4,14 @@ Größere Umbauten, die eine eigene fokussierte Session + sauberen Neustart
 brauchen (nicht mal eben zwischendurch). Kleinteiliges Reward-/Doku-Zeug
 steht weiterhin in `docs/STATUS_TODO.md`.
 
+> **2026-09-06 — erledigt: V20 CURRICULUM MODES.** Die „Architektur, die
+> irgendwann das ganze Spiel lernen kann" ist gebaut: `FULL` / `BRIDGE` /
+> `FRONTIER` / `RETENTION` auf einem PPO-Netz, `discovered_stage` vs
+> `mastered_stage`, dynamischer `current_bottleneck`, generische
+> `Objective`-Repräsentation für den Rest der Story. Details: `README.md` +
+> `docs/STATUS_TODO.md`. Clean-Reset-Script: `tools/v20_reset.sh`
+> (löst `tools/v11_reset.sh` ab).
+
 ---
 
 ## 1. FighterBrain — eigenes Kampf-Hirn neben dem ChampionBrain
@@ -18,8 +26,8 @@ Full-Reset betroffen.
 ### Architektur
 - Eigene Modell-Dateien (`fighter_model_latest.zip`, `fighter_model_champion.zip`,
   `fighter_champion_score.json`, eigene `fighter_model_version.json`), abgelegt
-  unter `runtime/fighter/` — dieser Ordner wird von `tools/v11_reset.sh`
-  **explizit ausgenommen**.
+  unter `runtime/fighter/` — dieser Ordner wird vom Reset-Script
+  (`tools/v20_reset.sh`) **explizit ausgenommen**.
 - Paralleler Promotion-Loop neben `ChampionManager` in `src/train.py`
   (eigener `FighterManager` o. Ä.).
 

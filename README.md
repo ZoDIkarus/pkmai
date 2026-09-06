@@ -10,27 +10,193 @@ Only the trainer learns. The watcher evaluates current `pokemon_model_resume.zip
 snapshots, independently of champion promotion. The protected fallback is stored
 as `pokemon_model_champion.zip`. Snapshot publication is atomic.
 
-Reward model as of **V19 BROCK RUSH** (see the dated section in `docs/STATUS_TODO.md`
-for the full list): the push forward comes from `STAGE_ADVANCE_REWARD` (+250 per new
-world-stage, new episode best only) and `TARGET_PROGRESS_REWARD` (±0.20 graph-distance
-toward the transition that leads to the next stage / the city's Center / the gym —
-symmetric, no compass bias). Tiles are just a flat "keep moving" trickle (Pallet 0.1
-… Pewter 3.0, first 20/map/episode then 10 %, +1 fleet-once). New route 50/run, city
-300/run, city building 500-once, first global stage unlock 1000-once. Pokécenter
-enter 50/run, **deeper heal 500/run** (wipe respawn anchor), 1000-once; Poké Mart
-100/run + 1000-once; badge 3000/run + 5000-once. Pewter/Brock split into small
-episode-flagged milestones (reach Pewter with Pikachu +300, gym enter +200, Brock
-battle start +500, first gym KO +300). **In a battle only continuous signals pay** —
-dealt/taken damage, healing, level-up, catching; no flat KO or win bonus. Trainer
-battles pay double on damage and skip the wild decay (30 % after 6 wild wins).
-All edge/warp/corridor farm rewards stay off. Persistent claim history
+As of **V20 CURRICULUM MODES** (`BUILD_TAG = "V20_CURRICULUM_MODES"`) the fleet
+is split into four mutually exclusive training modes that all train the **same**
+PPO policy (no second network):
+
+| Mode | Start | Purpose |
+|---|---|---|
+| `FULL` | real `StartGame` | can the shared policy chain everything together? |
+| `BRIDGE` | entry checkpoint of the current bottleneck stage | learn the first hop Full runs cannot reproduce |
+| `FRONTIER` | deepest discovered frontier | discover the next unknown story transition |
+| `RETENTION` | rotates mastered-transition entry checkpoints | prevent catastrophic forgetting |
+
+plus the existing dynamic `POST_WIPE_RECOVERY` overlay. Allocation is the
+12 / 12 / 6 / 3 ratio scaled to `NUM_ENVS` (at 60 envs: 24 / 21 / 10 / 5).
+
+Two separate progress concepts now exist:
+
+- **`discovered_stage`** — deepest world-stage *any* agent has ever reached.
+- **`mastered_stage`** — deepest transition the *shared* PPO policy reproduces
+  reliably. A transition (Pallet→Route1, Route1→Viridian, …) is *mastered* only
+  when its rolling window (50) has ≥ 20 attempts, ≥ 80 % success **and** ≥ 5
+  Full-from-start confirmations. A lucky scout can never promote a stage; only
+  Full-chain evidence moves `mastered_stage`.
+
+The **`current_bottleneck`** is the earliest discovered transition that is not
+mastered; `BRIDGE` agents concentrate there and automatically walk forward
+(Route1→Viridian → Viridian→Route2 → Route2→Forest → Forest→Pewter) as each hop
+is mastered.
+
+Navigation targets come **only** from real recorded `stage N → stage N+1`
+crossings (`runtime/curriculum_v20/known_transitions.json`). An undiscovered
+next hop → `UNKNOWN_NEXT_TRANSITION`: exploration on, no target, no fake
+coordinate (no north-most point, map edge, nearest frontier, house or dead end).
+
+Reward model (see the dated section in `docs/STATUS_TODO.md` for the full list):
+the push forward comes from `STAGE_ADVANCE_REWARD` (+250 per new world-stage,
+new episode best only) and **non-farmable** target shaping — `TargetShaper`
+pays `TARGET_PROGRESS_REWARD` (0.05) × improvement **only on a new episode-best
+graph distance** to the known target; returning to an already-achieved distance
+pays nothing, so `A→B→A→B` can never repeatedly earn positive progress. Backtrack
+is a tiny flat `−0.01` only past a 3-tile margin. Tiles are a flat "keep moving"
+trickle (Pallet 0.1 … Pewter 3.0, first 20/map/episode then 10 %, +1 fleet-once).
+New route 50/run, city 300/run, **generic city buildings pay 0** (a random house
+is no longer a story jackpot — Center/Mart/Gym keep their own dedicated rewards),
+first global stage unlock 1000-once. Pokécenter enter 50/run, deeper heal 500/run
+(wipe respawn anchor), 1000-once; Poké Mart 100/run + 1000-once; badge 3000/run +
+5000-once. Pewter/Brock split into small episode-flagged milestones (reach Pewter
+with Pikachu +300, gym enter +200, Brock battle start +500, first gym KO +300).
+**In a battle only continuous signals pay** — dealt/taken damage, healing,
+level-up, catching; no flat KO or win bonus. Trainer battles pay double on damage
+and skip the wild decay (30 % after 6 wild wins). All edge/warp/corridor farm
+rewards stay off. A `ShortCycleGuard` detects `A-B-A-B` / `A-B-C-A-B-C` loops,
+suppresses positive shaping, applies an escalating `−0.05 … −0.25` penalty and
+truncates the episode after sustained cycling. Persistent claim history
 (`reward_events.json`) keeps every one-time bonus one-time across restarts.
+
+Checkpoints are now two kinds (the old "north-most Y wins" replacement is gone —
+invalid in forests, caves, buildings): `stage_<n>` is the **entry** checkpoint,
+saved on first safe entry and **immutable** thereafter; `stage_frontier_<n>` is
+an optional discovery anchor that advances only on a strictly higher exploration
+score, never on Y.
+
+The long-Full-probe horizon bug is fixed: `_episode_step_limit()` gives the
+deeper half of the FULL ranks the real `LONG_FULL_PROBE_STEPS` (32768) instead of
+silently capping every Full episode at `MAX_EPISODE_STEPS` (12000).
 
 After a party wipe a **recovery mode** kicks in (no novelty-memory reset, so
 dying is never a farm): wild-battle rewards are cut to 5 %, generic catches pay 0,
 and graph-distance guidance back to the pre-wipe story front pulls at ±0.50 until
 that front (or a deeper Center respawn, or a badge) is re-reached — then a
 one-time +300. The −100 wipe penalty and the Center-respawn teleport are unchanged.
+
+## 2026-09-06 — V20 CURRICULUM MODES
+
+`BUILD_TAG = "V20_CURRICULUM_MODES"`. Goal: an architecture that can eventually
+learn the **complete** game instead of another one-off reward patch. Deployed
+with a **100 % clean reset** — fresh PPO net, `world_stage 0`, no checkpoints,
+empty stats; only the `StartGame` master savegame is kept. Backup in
+`brain_backups/V20_CLEAN_RESET_*`. 100 unit tests pass.
+
+### The problem it fixes
+
+After ~23 M steps scouts could reach later areas but full runners still failed
+around Route 1: the policy learned isolated checkpoint skills without chaining
+them. Recent target shaping also created Pallet / house / two-tile oscillation
+loops.
+
+### New modules
+
+| File | Role |
+|---|---|
+| `src/curriculum_v20.py` | modes, `CurriculumState` (discovered/mastered stage, rolling per-transition stats, `current_bottleneck`), `allocate_modes`, generic story-`Objective` system |
+| `src/nav_transitions_v20.py` | `KnownTransitions` — KNOWN/UNKNOWN state, real recorded crossings only |
+| `src/target_shaper_v20.py` | `TargetShaper` — non-farmable best-distance shaping |
+| `src/loop_guard.py` | added `ShortCycleGuard` (A-B-A-B / A-B-C detection, escalating penalty, truncate); `LocalLoopGuard` unchanged |
+
+### Four modes, one PPO policy
+
+`FULL` (real `StartGame`), `BRIDGE` (bottleneck stage entry checkpoint),
+`FRONTIER` (deepest discovered frontier), `RETENTION` (rotates mastered
+transitions) — allocated 12 / 12 / 6 / 3 scaled to `NUM_ENVS`
+(`curriculum_v20.allocate_modes`). `POST_WIPE_RECOVERY` still overrides
+dynamically on a wipe. `V20_CURRICULUM = True` is the master switch; set it
+`False` to fall back to the V17–V19 scout-band behaviour.
+
+### discovered vs mastered stage
+
+- `discovered_stage` = deepest stage any episode reached.
+- A transition is **mastered** only when: window (`TRANSITION_MASTERY_WINDOW`
+  50) has ≥ `TRANSITION_MASTERY_MIN_ATTEMPTS` (20) attempts, `success_rate` ≥
+  `TRANSITION_MASTERY_RATE` (0.80) **and** `full_chain_confirmations` ≥
+  `FULL_CHAIN_CONFIRMATIONS` (5). `full_chain_confirmations` is incremented only
+  by `FULL`-mode, `episode_start=="beginning"` episodes
+  (`record_full_chain_result`). BRIDGE/scout successes build the rolling rate
+  but never promote a stage alone.
+- `mastered_stage` = 1 + the contiguous run of mastered transitions from stage 1.
+- `current_bottleneck` = earliest discovered transition that is not mastered;
+  BRIDGE trains it and walks forward automatically as each hop is mastered.
+- State lives in `runtime/curriculum_v20/state.json` (env reads it with a
+  256-step cache, writes under the fleet lock at episode end).
+
+### Two checkpoint types (brief §4)
+
+The "north-most Y wins" replacement heuristic is **removed** — smaller Y is not
+more story progress in a forest / cave / building / gym.
+
+- `stage_<n>` — **entry** checkpoint. Saved on first safe entry (trusted RAM,
+  correct stage, starter present, not in battle / not wiping, stable position)
+  and then **immutable**. `BRIDGE` / `RETENTION` resume from it.
+- `stage_frontier_<n>` — optional discovery anchor; advances only on a strictly
+  higher exploration score (tiles explored on that stage), never on Y.
+  `FRONTIER` resumes from it.
+
+### KNOWN vs UNKNOWN transitions (brief §5, §21)
+
+`UNKNOWN_NEXT_TRANSITION` → exploration on, target shaping off, no fake
+coordinate. When a real forward `stage N → stage N+1` crossing is observed the
+exact source map, source exit coord, destination map and destination coord are
+persisted (`runtime/curriculum_v20/known_transitions.json`); that exact
+transition becomes the navigation objective and exploration reward on the solved
+stage drops away. Pallet is a solved transit area — its only objective is the
+real `(3,0)→(3,19)` transition; missing → an explicit diagnostic, never an
+invented target.
+
+### Non-farmable target shaping (brief §6, §22)
+
+`TARGET_PROGRESS_REWARD` 0.20 → **0.05**, new `TARGET_BACKTRACK_PENALTY = −0.01`.
+`TargetShaper` maintains `best_target_distance` per objective/episode and pays
+`0.05 × improvement` **only** on a strict new best. Returning to an achieved
+distance pays 0; moving past `best + 3` pays a flat `−0.01`. Combined with the
+`ShortCycleGuard` (suppresses positive shaping while cycling, `−0.05 … −0.25`
+escalating, truncate after ~600 cycle steps) the anti-loop invariants hold:
+A/B target loop, house in/out loop, warp replay, tile revisit, wipe farm, endless
+wild battles, Center farm and `5→4→5` stage farm can none of them be net
+profitable.
+
+### Other changes
+
+- `BUILDING_FIRST_GLOBAL_REWARD` 500 → **0** (brief §8). Generic Viridian/Pewter
+  houses are worth 0; real objectives keep their dedicated `POKECENTER_*`,
+  `POKEMART_*`, `PEWTER_GYM_*` rewards. The Bank-4 `!= 4` guard still stands.
+- **Long-Full-probe horizon bug fixed** (brief §16): new `_episode_step_limit()`
+  — `scout` → `SCOUT_EPISODE_STEPS`; `full` + long probe → `LONG_FULL_PROBE_STEPS`
+  (32768); other `full` → `MAX_EPISODE_STEPS` (12000). Previously every `full`
+  episode was forced to 12000, making `_is_long_full_probe()` inert.
+- Generic story-`Objective` representation (`reach_map`, `reach_transition`,
+  `enter_required_building`, `heal_center`, `win_trainer`, `win_gym`,
+  `obtain_badge`, `obtain_item`, `trigger_story_flag`) so the same architecture
+  extends to Route 3 → Mt. Moon → Cerulean → Misty → … → Elite Four → Champion by
+  adding objects, not code. `world_stage` (geography) and `story_objective` stay
+  separate.
+- Dashboard `info` fields: `training_mode`, `current_stage`, `discovered_stage`,
+  `mastered_stage`, `current_bottleneck`, `objective`, `target_source`,
+  `target_coordinate`, `best_target_distance`, `post_wipe_recovery`,
+  `transition_attempt`, `transition_success`. Reward events distinguish
+  `route_progress_best`, `loop_penalty`, `route_backtrack`, `stage_advance`,
+  `post_wipe_front_recovered`.
+
+### Reset / restart
+
+`bash tools/v20_reset.sh --yes` — full clean wipe (keeps only the `StartGame`
+master savegame), then `bash scripts/start_all.sh`. `train.py` seeds
+`discovered_stage` from any valid `stage_*` metas + `global_progress.json` and,
+if the champion / global record already shows Full depth ≥ Route 1, one-time
+pre-confirms `Pallet→Route1` so the detected bottleneck starts at
+`Route1→Viridian`. On the clean reset there is no such evidence, so the first
+picture is `discovered = mastered = 1`, bottleneck `Pallet→Route1`, whole fleet
+running `FULL` until the fresh net actually holds Route 1.
 
 ## 2026-09-06 — V19 BROCK RUSH + POST_WIPE_RECOVERY
 

@@ -223,3 +223,10 @@ class ClusterStatusApiTests(unittest.TestCase):
 
         self.assertIn("FPS", page)
         self.assertIn("w.fps", page)
+
+    def test_trainer_page_distinguishes_last_step_from_episode_reward(self):
+        page = web_stream.index()
+
+        self.assertIn("Letzter Step", page)
+        self.assertIn("Episoden-Reward", page)
+        self.assertIn("Ø Episoden-Reward", page)

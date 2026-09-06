@@ -36,7 +36,7 @@ Current saved evidence at review: discovered stage 3, mastered stage 1. The curr
 | Party wipe | −100 once | same; episode ends |
 | Gameplay action cost | −0.005 | same, only during battle |
 
-`_battle_reward_scale` doubles enemy-damage/win/level/faint components for trainer battles in both cases. It does not double every penalty. On wild-training maps it reduces these components to ×0.3 after six recorded opponent faints for normal roles; Fighter alone skips that reduction. The counter is opponent faints, not necessarily six fully completed multi-opponent battles.
+`_battle_reward_scale` doubles enemy-damage/win/level/faint components for trainer battles in both cases. It does not double every penalty. On wild-training maps it reduces these components to ×0.1 after three recorded opponent faints for normal roles; Fighter alone skips that reduction. The counter is opponent faints, not necessarily three fully completed multi-opponent battles.
 
 The existing post-wipe ×0.05 applies to damage (win and level are exempt) in both roles' scaling function. Fighter now ends its episode on a wipe, so it normally restarts healthy instead of spending its next battles in recovery.
 
@@ -62,7 +62,7 @@ These apply to non-Fighter roles; ordinary combat rewards above remain available
 | Door/map back-and-forth | −0.10 |
 | Short local cycle | −0.05, escalating to −0.25; persistent loops can truncate |
 
-Town/route, story, badges and catching retain their existing conditional rewards (e.g. new route +50, city +300, badge +3000). They are not additive unconditional rewards on every visit. Scouts receive no tile reward below their starting stage, and map arrival guards suppress old-stage reward farming. `src/pokemon_env.py:step` contains the conditions; constants alone are not a complete reward specification.
+Town/route, story, badges and catching retain their existing conditional rewards (e.g. new route +50, city +300, badge +2000). They are not additive unconditional rewards on every visit. Scouts receive no tile reward below their starting stage, and map arrival guards suppress old-stage reward farming. `src/pokemon_env.py:step` contains the conditions; constants alone are not a complete reward specification.
 
 FRONTIER score comes from walked graph depth plus unknown-neighbor openness minus revisits, not a hardcoded north direction. Unknown/unconnected positions do not invent a target or score. This also means a deep dead-end can look promising; the metric cannot guarantee the exit is found.
 
@@ -103,3 +103,11 @@ On 2026-09-06 the user explicitly authorized restarting all services, including 
 ## Exploration balance follow-up
 
 All navigation roles (FULL/BRIDGE/FRONTIER/RETENTION) receive +0.3 for each tile first visited in the episode on a stage whose forward transition is still unknown, without the 20-tile reduction. A fleet-first tile adds +1 for the discovering navigation agent, including FULL. Repeated visits in the episode pay zero; scout backtracking below spawn stage stays unrewarded. Known-stage caps and all combat values are unchanged; Fighter still receives only combat rewards. This raises the incentive to reach unknown territory without increasing repeated-tile rewards. It does not directly change BRIDGE's mastery gate or promise faster convergence.
+
+Wild battle decay follow-up: `WILD_BATTLE_DECAY_AFTER=3`, `WILD_BATTLE_DECAY_FACTOR=0.1`. Applies to positive damage/win/level/faint components on wild-training maps for navigation roles. Fighter remains exempt, trainer-battle multiplier and all penalties unchanged. The counter resets each episode.
+
+## Trainer-battle bonuses
+
+Normal combat shaping and trainer ×2 scaling remain. Each trainer ID pays +50 on battle start and +50 on the full battle victory (outcome=1), each once per episode. A single enemy KO/EXP increase does not grant the +50 victory bonus. Repeated losses/re-entry cannot repeat the start bonus within the episode. Fighter receives these combat bonuses too. Brock (ID 414) pays +500 instead of +50 at start, then the usual +50 trainer win bonus. A badge pays +2000; the previous extra global +5000 and approximate Pewter trainer-KO +300 bonus are disabled.
+
+The former battle-flags offset 0x22FEC was incorrect; use 0x22B4C. Trainer ID is at 0x386AE and complete battle outcome at 0x23E8A. The local BPRD ROM contains the matching ordinary-trainer argument table at ROM offset 0x3C674C. Sources: [trainer argument table](https://raw.githubusercontent.com/pret/pokefirered/master/src/battle_setup.c), [battle RAM symbols](https://raw.githubusercontent.com/Skeli789/Complete-Fire-Red-Upgrade/master/BPRE.ld), [Brock ID](https://raw.githubusercontent.com/pret/pokefirered/master/include/constants/opponents.h). No ROM content is distributed.

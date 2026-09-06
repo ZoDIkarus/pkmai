@@ -203,7 +203,9 @@ class ProgressRegressionTests(unittest.TestCase):
         self.assertEqual(PokemonFireRedEnv.PEWTER_WITH_PIKACHU_REWARD, 300.0)
         self.assertEqual(PokemonFireRedEnv.PEWTER_GYM_ENTER_REWARD, 200.0)
         self.assertEqual(PokemonFireRedEnv.BROCK_BATTLE_START_REWARD, 500.0)
-        self.assertEqual(PokemonFireRedEnv.PEWTER_GYM_TRAINER_REWARD, 300.0)
+        self.assertEqual(PokemonFireRedEnv.PEWTER_GYM_TRAINER_REWARD, 0.0)
+        self.assertEqual(PokemonFireRedEnv.BADGE_EARNED_REWARD, 2000.0)
+        self.assertEqual(PokemonFireRedEnv.BADGE_FIRST_GLOBAL_REWARD, 0.0)
         # jeder Meilenstein hat ein Episode-Flag, in __init__ UND reset() auf
         # False gesetzt (Anti-Farm: einmal pro Episode).
         import inspect
@@ -328,10 +330,14 @@ class ProgressRegressionTests(unittest.TestCase):
         # 2026-09-06: damage/heal/level are the continuous teachers; a modest
         # BATTLE_WIN_REWARD is back so FINISHING a fight beats chip-and-flee.
         # No per-KO faint bonus (win covers it for wild; damage covers trainer).
+        # 2026-09-06 (user): all continuous combat signals cut to 10 % so
+        # exploration structurally wins again - damage 0.008/HP, win 1.0,
+        # level 5.0. Still strictly positive, still far below the old jackpots.
         self.assertEqual(PokemonFireRedEnv.ENEMY_FAINT_REWARD, 0.0)
-        self.assertEqual(PokemonFireRedEnv.BATTLE_WIN_REWARD, 10.0)
+        self.assertEqual(PokemonFireRedEnv.BATTLE_WIN_REWARD, 1.0)
         self.assertLess(PokemonFireRedEnv.BATTLE_WIN_REWARD, 50.0)  # not the pre-V18 jackpot
         self.assertGreater(PokemonFireRedEnv.ENEMY_DAMAGE_REWARD_PER_HP, 0.0)
+        self.assertLess(PokemonFireRedEnv.ENEMY_DAMAGE_REWARD_PER_HP, 0.05)
         self.assertGreater(PokemonFireRedEnv.LEVEL_GAIN_REWARD, 0.0)
         self.assertGreater(PokemonFireRedEnv.SPECIES_CAUGHT_FIRST_REWARD, 0.0)
 

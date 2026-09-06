@@ -38,17 +38,17 @@ class FighterRewardTests(unittest.TestCase):
         for mode in ('FULL','BRIDGE','FRONTIER','RETENTION'):
             self.assertEqual(self.select(mode,321,[('battle_win',10)])[0],321)
 
-    def test_only_fighter_ignores_six_faint_decay(self):
+    def test_only_fighter_ignores_three_faint_decay(self):
         e=Env.__new__(Env)
         e._is_trainer_battle=lambda:False
         e.post_wipe_recovery=False
         bank,map_id=next(iter(e.WILD_TRAINING_MAPS))
-        for count in (0,5,6,20):
+        for count in (0,2,3,20):
             e.episode_wild_faints=count
             e.training_mode='FIGHTER'
             self.assertEqual(e._battle_reward_scale(bank,map_id),1)
             e.training_mode='FULL'
-            self.assertEqual(e._battle_reward_scale(bank,map_id),1 if count<6 else .3)
+            self.assertEqual(e._battle_reward_scale(bank,map_id),1 if count<3 else .1)
         e._is_trainer_battle=lambda:True
         for mode in ('FIGHTER','FULL'):
             e.training_mode=mode

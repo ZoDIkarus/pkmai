@@ -13,6 +13,7 @@ import random
 from battle_state import BattleState, MainBattleReader
 from reward_state import claim_event
 from loop_guard import LocalLoopGuard, ShortCycleGuard
+from trainer_rewards import TrainerRewards
 from checkpoint_health import party_health, may_replace_frontier
 import curriculum_v20
 from curriculum_v20 import CurriculumState
@@ -25,6 +26,7 @@ from target_shaper_v20 import TargetShaper
 from frontier_v20 import FrontierGraph, FrontierHighWater
 from firered_ram import (
     read_battle_type_flags,
+    read_trainer_battle,
     read_enemy_party,
     read_player_location,
     read_player_party,
@@ -339,10 +341,16 @@ class PokemonFireRedEnv(gym.Env):
     # V18: 0.15 -> 0.08. Wild-Gras respawnt endlos, Kampf-Reward war weiter
     # ein positiver Dauerstrom, sobald die einmaligen Vorwaerts-Boni (Kachel/
     # Map/Stadt) in Reichweite abgegrast waren - Live 45% aller Steps im Kampf.
-    ENEMY_DAMAGE_REWARD_PER_HP = 0.08
+    # 2026-09-06 (user): alle kontinuierlichen Kampf-Signale pauschal auf 10%,
+    # damit FRONTIER/FULL/PROGRESS strukturell wieder erkunden statt im Gras zu
+    # haengen. Schaden 0.08 -> 0.008, erlittener Schaden -0.1 -> -0.01, Heilung
+    # 0.1 -> 0.01, BATTLE_WIN 10 -> 1. Flucht-Strafen, Trainer-x2 und die
+    # Trainer-Start/Win-Boni bleiben unveraendert. Die "nach 3 Wildkaempfen
+    # nochmal x0.1"-Stufe (WILD_BATTLE_DECAY_*) greift zusaetzlich.
+    ENEMY_DAMAGE_REWARD_PER_HP = 0.008
     # V18: 2.0 -> 0.0. Im Kampf zaehlen nur noch KONTINUIERLICHE Signale:
     # zugefuegter Schaden (ENEMY_DAMAGE_REWARD_PER_HP), erlittener Schaden
-    # (-0.1/HP), Heilung (+0.1/HP), Level-Up (LEVEL_GAIN_REWARD) und Fangen
+    # (-0.01/HP), Heilung (+0.01/HP), Level-Up (LEVEL_GAIN_REWARD) und Fangen
     # (SPECIES_CAUGHT_*). KEINE pauschalen Discrete-Boni mehr fuers KO
     # (enemy_faint) oder den Sieg/EP-Anstieg (BATTLE_WIN_REWARD) - die haben
     # das Kaempfen ueberbewertet.
@@ -353,21 +361,21 @@ class PokemonFireRedEnv(gym.Env):
     # Fruehes Leveln (Orden 1/2 brauchen es) bleibt voll bezahlt, der Dauer-
     # Grind an derselben Stelle wird strukturell unrentabel. Trainer-/Story-
     # Kaempfe und Nicht-Wild-Maps sind nicht betroffen.
-    WILD_BATTLE_DECAY_AFTER = 6
-    WILD_BATTLE_DECAY_FACTOR = 0.3
+    WILD_BATTLE_DECAY_AFTER = 3
+    WILD_BATTLE_DECAY_FACTOR = 0.1
     # V18: Trainer-/Arena-Kaempfe zahlen doppelt (Schaden) und sind vom
     # Wild-Abklingen ausgenommen - sie sind der eigentliche Story-Weg.
     TRAINER_BATTLE_REWARD_MULT = 2.0
-    LEVEL_GAIN_REWARD = 10.0   # V19: 10 -> 15; 2026-09-06: 15 -> 10
+    LEVEL_GAIN_REWARD = 5.0   # V19: 10 -> 15; 2026-09-06: 15 -> 10 -> 5 (user)
     # V17.4: erster echter Orden-Reward als benannte Konstante statt
     # hartcodierter Inline-Zahl - gilt pro gewonnenem Orden (jede Episode
     # neu, kein Fleet-Claim: die Party wird bei jedem Reset zurueckgesetzt,
     # der Orden muss also in jedem Run neu erkaempft werden).
-    BADGE_EARNED_REWARD = 3000.0   # V19: 2000 -> 3000 (pro Lauf)
+    BADGE_EARNED_REWARD = 2000.0   # User-requested per-badge total.
     # V18: fleet-weit EINMALIGER Bonus, wenn die Flotte einen Orden zum
     # allerersten Mal ueberhaupt holt (pro Ordensnummer, reward_events.json
     # key badge_<n>_ever). Der 2000er oben bleibt pro Lauf (Party resettet).
-    BADGE_FIRST_GLOBAL_REWARD = 5000.0
+    BADGE_FIRST_GLOBAL_REWARD = 0.0
     # Kleiner, von der Party-Level-Summe komplett unabhaengiger Anreiz, das
     # Center ueberhaupt aufzusuchen. Nur einmal pro Episode (Flag oben), keine
     # Kopplung an Levelsumme/Party-Groesse - kann also nie durch PC-Box-
@@ -422,7 +430,8 @@ class PokemonFireRedEnv(gym.Env):
     # wipes/episode). Small (was +50 pre-V18). Exempt from the post-wipe x0.05
     # scaling - the recovering fleet is almost always post-wipe, so that was
     # zeroing the learning signal exactly when it is needed most.
-    BATTLE_WIN_REWARD = 10.0
+    # 2026-09-06: 10.0 -> 1.0 (user, combat-signals-to-10%).
+    BATTLE_WIN_REWARD = 1.0
     ENEMY_HP_READ_EVERY = 2
     ENEMY_ACTIVITY_TTL = 96
     FLED_BATTLE_PENALTY = -25.0
@@ -674,7 +683,7 @@ class PokemonFireRedEnv(gym.Env):
     PEWTER_GYM_MAPS = set()          # z.B. {(6, 4)} sobald bestaetigt
     PEWTER_GYM_ENTER_REWARD = 200.0
     BROCK_BATTLE_START_REWARD = 500.0
-    PEWTER_GYM_TRAINER_REWARD = 300.0
+    PEWTER_GYM_TRAINER_REWARD = 0.0  # Replaced by per-trainer start/win bonuses.
     SCOUT_STAGES = (2, 3, 4, 5, 6)  # FRONTIER_SCOUT_SLOTS scouts per validated checkpoint after Pallet.
     WORLD_ROLES = ("progress", "battle", "level", "badge", "full", "scout")
 
@@ -740,6 +749,7 @@ class PokemonFireRedEnv(gym.Env):
         self.training_mode = "FULL"
         self.full_chain_ready = False
         # V20 helpers (brief sections 6 + 10).
+        self.trainer_rewards = TrainerRewards(brock_start=self.BROCK_BATTLE_START_REWARD)
         self.target_shaper = TargetShaper(
             progress_reward=self.TARGET_PROGRESS_REWARD,
             backtrack_penalty=self.TARGET_BACKTRACK_PENALTY,
@@ -3328,6 +3338,12 @@ class PokemonFireRedEnv(gym.Env):
         The old code forced every 'full' episode to MAX_EPISODE_STEPS, so
         _is_long_full_probe() could never actually run its longer horizon.
         """
+        # 2026-09-06 (user): the visible watcher never resets on a step count.
+        # It plays one continuous journey; only the genuine "stuck" guards
+        # (anti-loop, indoor-stall, single-battle cap, error recovery) may still
+        # cut it. Its episode/route budget is effectively unlimited.
+        if getattr(self, "is_watcher", False):
+            return 10 ** 12
         obj = self.training_objective
         if obj == "scout":
             return self.SCOUT_EPISODE_STEPS
@@ -3802,6 +3818,7 @@ class PokemonFireRedEnv(gym.Env):
         self.short_cycle_guard = ShortCycleGuard()
         self._short_cycle_last = None
         self.target_shaper.reset()
+        self.trainer_rewards.reset()
         self._stage_hold_map = None
         self._stage_hold_steps = 0
 
@@ -4115,25 +4132,6 @@ class PokemonFireRedEnv(gym.Env):
             self.enemy_hp_min = {}
             self.enemy_fainted_rewarded = set()
             self._save_run_stats()
-            # V19 BROCK RUSH: erster Trainerkampf in Marmoria (Stadt-Map oder
-            # ein Bank-6-Innenraum = Arena) pro Episode = Brock-/Arenakampf
-            # gestartet. Anti-Farm: Episode-Flag, kein Re-Trigger durch
-            # Kampf-Neustart. Kompass-/Trainer-ID-unabhaengig.
-            _in_pewter = (
-                int(bank) == 6
-                or self._current_world_stage(bank, map_id) == 6
-            )
-            if (
-                _in_pewter
-                and self._is_trainer_battle()
-                and not self.episode_brock_battle_started
-            ):
-                self.episode_brock_battle_started = True
-                if self.BROCK_BATTLE_START_REWARD:
-                    reward += self.BROCK_BATTLE_START_REWARD
-                    reward_events.append(
-                        f"brock_battle_start:+{self.BROCK_BATTLE_START_REWARD:.0f}"
-                    )
         elif battle_just_ended:
             alive_pokemon = sum(
                 1 for mon in self.player_party_cache
@@ -4190,6 +4188,17 @@ class PokemonFireRedEnv(gym.Env):
             # Abschlussframe sichtbaren K.O. noch sauber. Beim naechsten
             # Kampfstart werden diese Felder ohnehin zurueckgesetzt.
             self._save_run_stats()
+
+        trainer_id, battle_outcome = read_trainer_battle(self.env)
+        trainer_events = self.trainer_rewards.update(
+            bool(in_battle), self._is_trainer_battle(), trainer_id, battle_outcome
+        )
+        for event, value in trainer_events:
+            reward += value
+            combat_rewards.append((event, value))
+            reward_events.append(f"{event}:+{value:.0f}")
+            if event == "brock_battle_start":
+                self.episode_brock_battle_started = True
 
         p_lvl = int(info.get("p1_level", 0))
         badges_raw = int(info.get("badges", 0))
@@ -4492,9 +4501,9 @@ class PokemonFireRedEnv(gym.Env):
             elif self.last_party_total_hp > 0:
                 hp_diff = current_total_hp - self.last_party_total_hp
                 if hp_diff < 0:
-                    hp_reward = abs(hp_diff) * -0.1
+                    hp_reward = abs(hp_diff) * -0.01
                     reward += hp_reward
-                    reward_events.append(f"took_damage:{hp_reward:.1f}")
+                    reward_events.append(f"took_damage:{hp_reward:.2f}")
                     if in_battle or battle_just_ended:
                         combat_rewards.append(("took_damage", hp_reward))
                 elif hp_diff > 0:
@@ -4561,9 +4570,9 @@ class PokemonFireRedEnv(gym.Env):
                         # Jede andere Heilung (Items/Kampfattacken/Teilheilung):
                         # proportional zur wiederhergestellten HP, symmetrisch
                         # zur Schadensstrafe (-0.1/HP) statt pauschal neutral.
-                        hp_reward = 0.0 if self.wipe_active else hp_diff * 0.1
+                        hp_reward = 0.0 if self.wipe_active else hp_diff * 0.01
                         reward += hp_reward
-                        reward_events.append(f"healed_partial:+{hp_reward:.1f}")
+                        reward_events.append(f"healed_partial:+{hp_reward:.2f}")
                         if in_battle and not self.wipe_active:
                             combat_rewards.append(("battle_heal", hp_reward))
 
@@ -6940,11 +6949,17 @@ class PokemonFireRedEnv(gym.Env):
         # V20 section 16: long Full probes must actually get LONG_FULL_PROBE_STEPS
         # instead of being silently capped at MAX_EPISODE_STEPS.
         episode_limit = self._episode_step_limit()
-        # A single stuck battle is still capped for everyone; the per-episode
-        # battle-step budget does not apply to FIGHTER ranks (fighting IS their
-        # episode - the 400-step out-of-battle leash bounds them instead).
+        # A single stuck battle is still capped for everyone (the watcher
+        # included - a 2000-step fight it can neither win nor flee IS a stuck
+        # state); the per-episode battle-step budget does not apply to FIGHTER
+        # ranks (fighting IS their episode - the 400-step out-of-battle leash
+        # bounds them instead) nor to the watcher (2026-09-06 user: no
+        # step-count reset - it plays one continuous journey).
         _batt_ep_cap = (
-            10 ** 9 if getattr(self, "training_mode", "") == "FIGHTER"
+            10 ** 9 if (
+                getattr(self, "training_mode", "") == "FIGHTER"
+                or getattr(self, "is_watcher", False)
+            )
             else self.MAX_EPISODE_BATTLE_STEPS
         )
         if (

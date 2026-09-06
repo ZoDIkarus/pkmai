@@ -249,20 +249,13 @@ class Test9_LongFullProbeHorizon(unittest.TestCase):
         self.assertEqual(env._episode_step_limit(),
                          PokemonFireRedEnv.SCOUT_EPISODE_STEPS)
 
-    def test_watcher_never_resets_on_a_step_count(self):
-        # 2026-09-06 (user): the visible watcher plays one continuous journey;
-        # no episode/route/battle-step cap may cut it (only genuine stuck
-        # guards + error recovery remain).
+    def test_watcher_uses_the_normal_long_horizon(self):
+        # 2026-09-07 (user): watcher back on the standard budget - the "watcher"
+        # objective falls through to LONG_FULL_PROBE_STEPS (~32k), same as a
+        # full run, so it resets on a step count like everything else.
         env = self._limit(training_objective="watcher", is_watcher=True)
-        self.assertGreaterEqual(
-            env._episode_step_limit(),
-            10 ** 11,
-        )
-        # ... and far above every ordinary horizon.
-        self.assertGreater(
-            env._episode_step_limit(),
-            PokemonFireRedEnv.LONG_FULL_PROBE_STEPS * 1000,
-        )
+        self.assertEqual(env._episode_step_limit(),
+                         PokemonFireRedEnv.LONG_FULL_PROBE_STEPS)
 
 
 # --------------------------------------------------------------------------

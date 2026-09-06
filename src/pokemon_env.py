@@ -3352,12 +3352,8 @@ class PokemonFireRedEnv(gym.Env):
         The old code forced every 'full' episode to MAX_EPISODE_STEPS, so
         _is_long_full_probe() could never actually run its longer horizon.
         """
-        # 2026-09-06 (user): the visible watcher never resets on a step count.
-        # It plays one continuous journey; only the genuine "stuck" guards
-        # (anti-loop, indoor-stall, single-battle cap, error recovery) may still
-        # cut it. Its episode/route budget is effectively unlimited.
-        if getattr(self, "is_watcher", False):
-            return 10 ** 12
+        # 2026-09-07 (user): watcher back on the normal budget - the "watcher"
+        # objective falls through to LONG_FULL_PROBE_STEPS (~32k) like a full run.
         obj = self.training_objective
         if obj == "scout":
             return self.SCOUT_EPISODE_STEPS
@@ -7000,17 +6996,11 @@ class PokemonFireRedEnv(gym.Env):
         # V20 section 16: long Full probes must actually get LONG_FULL_PROBE_STEPS
         # instead of being silently capped at MAX_EPISODE_STEPS.
         episode_limit = self._episode_step_limit()
-        # A single stuck battle is still capped for everyone (the watcher
-        # included - a 2000-step fight it can neither win nor flee IS a stuck
-        # state); the per-episode battle-step budget does not apply to FIGHTER
-        # ranks (fighting IS their episode - the 400-step out-of-battle leash
-        # bounds them instead) nor to the watcher (2026-09-06 user: no
-        # step-count reset - it plays one continuous journey).
+        # A single stuck battle is still capped for everyone; the per-episode
+        # battle-step budget does not apply to FIGHTER ranks (fighting IS their
+        # episode - the 400-step out-of-battle leash bounds them instead).
         _batt_ep_cap = (
-            10 ** 9 if (
-                getattr(self, "training_mode", "") == "FIGHTER"
-                or getattr(self, "is_watcher", False)
-            )
+            10 ** 9 if getattr(self, "training_mode", "") == "FIGHTER"
             else self.MAX_EPISODE_BATTLE_STEPS
         )
         if (

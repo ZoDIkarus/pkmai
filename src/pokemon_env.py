@@ -407,6 +407,21 @@ class PokemonFireRedEnv(gym.Env):
     # STEPS Route-Schritte nach dem Wipe unterdrueckt (Buchfuehrung/Claims
     # laufen normal weiter, nur die Auszahlung pausiert).
     POST_WIPE_REWARD_COOLDOWN_STEPS = 40
+    # V19 POST_WIPE_RECOVERY_MODE. Nach einem Wipe zahlen laengst besuchte
+    # Tiles/Maps zu Recht nicht erneut - dadurch kann Wildkampf am Respawn
+    # der attraktivste Rest-Rewardstrom werden und die Policy bleibt im Gras
+    # kaempfen statt zur Front zurueckzulaufen. Waehrend post_wipe_recovery:
+    #   * Wildkampf-Rewards zusaetzlich * POST_WIPE_WILD_BATTLE_SCALE
+    #     (Trainer-/Gym-/Brock-Kaempfe NICHT reduziert)
+    #   * generische Fang-Rewards -> 0 (Pikachu-Wald-Bonus bleibt, eigener if)
+    #   * Graph-Distanz zur alten Front mit POST_WIPE_TARGET_PROGRESS_REWARD
+    #     (symmetrisch +/-, kein Vor/Zurueck-Loop)
+    # Endet, sobald die aktuelle Standort-Stufe >= pre_wipe_best_stage ist,
+    # ODER ein tieferer Center-Respawn aktiviert wurde, ODER ein Orden fiel.
+    # Dann einmalig +POST_WIPE_FRONT_RECOVERED_REWARD.
+    POST_WIPE_WILD_BATTLE_SCALE = 0.05
+    POST_WIPE_TARGET_PROGRESS_REWARD = 0.50
+    POST_WIPE_FRONT_RECOVERED_REWARD = 300.0
     WILD_TRAINING_MAPS = {(3, 19), (3, 20), (1, 0)}
     # V17.3: Warps/Tueren waren bisher komplett neutral ("reine Kartendaten").
     # V17.4: kein Run-Bonus mehr fuer laengst bekannte Warps (0.0) - nur noch
@@ -779,6 +794,11 @@ class PokemonFireRedEnv(gym.Env):
         # Party-Wipe unterdrueckt werden (siehe POST_WIPE_REWARD_COOLDOWN_
         # STEPS). -1 = kein aktiver Wipe-Cooldown.
         self._post_wipe_reward_cooldown_until = -1
+        # V19 POST_WIPE_RECOVERY_MODE (siehe POST_WIPE_* Konstanten).
+        self.post_wipe_recovery = False
+        self.pre_wipe_best_stage = 0
+        self.pre_wipe_best_center_stage = 0
+        self.pre_wipe_badges = 0
 
         # Persistentes Explorationsgedaechtnis (bleibt ueber Episoden erhalten).
         self.persistent_known_edges = set()
@@ -1597,6 +1617,16 @@ class PokemonFireRedEnv(gym.Env):
         self.last_stage_timeout = "party_wiped"
         info["last_stage_timeout"] = "party_wiped"
         events.append("party_wiped:-100.0")
+        # V19 POST_WIPE_RECOVERY_MODE: KEIN Reset von seen_coords/visited_maps
+        # (absichtliches Sterben darf kein Farm-Trick werden). Wir merken uns
+        # nur, wie weit die Episode schon war, und schalten den Recovery-Modus
+        # ein: bis die alte Front (oder ein tieferer Center / Orden) wieder
+        # erreicht ist, sind Wildkaempfe fast wertlos und der Rueckweg zur
+        # Storyfront stark belohnt.
+        self.post_wipe_recovery = True
+        self.pre_wipe_best_stage = int(getattr(self, "episode_best_stage", 0))
+        self.pre_wipe_best_center_stage = int(getattr(self, "best_pokecenter_heal_stage", 0))
+        self.pre_wipe_badges = int(getattr(self, "last_badges", 0))
         return -100.0
 
     def _is_trainer_battle(self):
@@ -1607,19 +1637,25 @@ class PokemonFireRedEnv(gym.Env):
             return False
 
     def _battle_reward_scale(self, bank, map_id):
-        """V18: Multiplikator auf ALLE Kampf-Rewards (Schaden/Faint/Sieg).
-        * Trainer-/Arena-Kaempfe: TRAINER_BATTLE_REWARD_MULT (doppelt), nie
-          vom Wild-Abklingen betroffen.
+        """V18/V19: Multiplikator auf Kampf-Rewards (Schaden / Level-Up).
+        * Trainer-/Arena-/Brock-Kaempfe: TRAINER_BATTLE_REWARD_MULT (doppelt),
+          nie vom Wild-Abklingen ODER dem Post-Wipe-Modus betroffen.
         * Wildkampf auf einer WILD_TRAINING_MAP: 1.0 bis WILD_BATTLE_DECAY_AFTER
           Siege/Episode, danach WILD_BATTLE_DECAY_FACTOR.
+        * V19: waehrend post_wipe_recovery zusaetzlich * POST_WIPE_WILD_BATTLE_SCALE
+          - Wildkampf am Respawn soll nicht der lohnendste Rest-Strom sein.
         * Sonst 1.0."""
         if self._is_trainer_battle():
             return self.TRAINER_BATTLE_REWARD_MULT
-        if (int(bank), int(map_id)) not in self.WILD_TRAINING_MAPS:
-            return 1.0
-        if self.episode_wild_faints < self.WILD_BATTLE_DECAY_AFTER:
-            return 1.0
-        return self.WILD_BATTLE_DECAY_FACTOR
+        scale = 1.0
+        if (
+            (int(bank), int(map_id)) in self.WILD_TRAINING_MAPS
+            and self.episode_wild_faints >= self.WILD_BATTLE_DECAY_AFTER
+        ):
+            scale = self.WILD_BATTLE_DECAY_FACTOR
+        if getattr(self, "post_wipe_recovery", False):
+            scale *= self.POST_WIPE_WILD_BATTLE_SCALE
+        return scale
 
     # Rueckwaerts-kompatibler Alias (aeltere Aufrufer/Tests).
     _wild_battle_scale = _battle_reward_scale
@@ -2964,6 +3000,11 @@ class PokemonFireRedEnv(gym.Env):
         self.battle_state = BattleState(read_enemy_party(self.env))
         self.main_battle_reader = MainBattleReader()
         self.wipe_active = False
+        # V19 POST_WIPE_RECOVERY_MODE
+        self.post_wipe_recovery = False
+        self.pre_wipe_best_stage = 0
+        self.pre_wipe_best_center_stage = 0
+        self.pre_wipe_badges = 0
         self._image_frames = []
 
         self.total_steps = 0
@@ -3686,6 +3727,12 @@ class PokemonFireRedEnv(gym.Env):
                             self.SPECIES_CAUGHT_FIRST_REWARD
                             + max(_caught_level, 0) * self.SPECIES_CAUGHT_LEVEL_BONUS
                         )
+                        # V19: waehrend Post-Wipe-Recovery kein generischer
+                        # Fang-Reward - der Rueckweg zur Front soll die klar
+                        # beste Wahl sein. Der Pikachu-Wald-Bonus unten ist ein
+                        # eigener if und bleibt (wichtiger einmaliger Storyfang).
+                        if getattr(self, "post_wipe_recovery", False):
+                            _catch_reward = 0.0
                         reward += _catch_reward
                         reward_events.append(
                             f"species_caught_first:{new_species}:L{_caught_level}:"
@@ -4991,6 +5038,26 @@ class PokemonFireRedEnv(gym.Env):
                         f"pewter_with_pikachu:+{self.PEWTER_WITH_PIKACHU_REWARD:.0f}"
                     )
 
+            # V19 POST_WIPE_RECOVERY_MODE: Ende + Einmal-Bonus. Erreicht der
+            # Agent (aussen) wieder die Standort-Stufe der Vor-Wipe-Front, ODER
+            # hat er unterwegs einen tieferen Center-Respawn aktiviert, ODER
+            # einen Orden geholt -> Recovery beendet, einmal +300.
+            if getattr(self, "post_wipe_recovery", False):
+                _loc_now = self._current_world_stage(bank, map_id)
+                if (
+                    (_loc_now > 0 and _loc_now >= int(self.pre_wipe_best_stage))
+                    or int(self.best_pokecenter_heal_stage)
+                        > int(self.pre_wipe_best_center_stage)
+                    or int(self.last_badges) > int(self.pre_wipe_badges)
+                ):
+                    self.post_wipe_recovery = False
+                    if self.POST_WIPE_FRONT_RECOVERED_REWARD:
+                        reward += self.POST_WIPE_FRONT_RECOVERED_REWARD
+                        reward_events.append(
+                            "post_wipe_front_recovered:"
+                            f"+{self.POST_WIPE_FRONT_RECOVERED_REWARD:.0f}"
+                        )
+
             # Each geographic stage competes by north position, then reward.
             # A full runner may improve Route 1 even after reaching the forest.
             if (
@@ -5222,6 +5289,12 @@ class PokemonFireRedEnv(gym.Env):
                                 )
                                 else self.TARGET_PROGRESS_REWARD
                             )
+                            # V19: waehrend Post-Wipe-Recovery zieht der Rueckweg
+                            # zur alten Front deutlich staerker (+/-0.50).
+                            if getattr(self, "post_wipe_recovery", False):
+                                target_step_reward = (
+                                    self.POST_WIPE_TARGET_PROGRESS_REWARD
+                                )
                             prev_d = self._graph_distance(
                                 bank, map_id, (px, py), targets
                             )

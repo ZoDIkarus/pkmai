@@ -41,6 +41,21 @@ Trainer-ID-RAM nicht sicher vom ersten Brock-Pokémon zu trennen, falls der
 Arena-Trainer übersprungen wird. `pewter_gym_enter` inert bis `PEWTER_GYM_MAPS`
 eine bestätigte Map hat. Badge weiter über `info["badges"]`-Bitmaske (zuverlässig).
 
+**`POST_WIPE_RECOVERY_MODE`:** nach einem Wipe läuft die Episode weiter; besuchte
+Tiles/Maps zahlen zu Recht nicht erneut, wodurch Wildkampf am Respawn der beste
+Rest-Rewardstrom werden kann. `_record_party_wipe` setzt jetzt zusätzlich
+`post_wipe_recovery = True` und merkt sich `pre_wipe_best_stage /
+_best_center_stage / _badges` — **kein** Reset von `seen_coords` / `visited_maps`
+(absichtliches Sterben darf kein Farm-Trick sein). Während `post_wipe_recovery`:
+`_battle_reward_scale` multipliziert Wild-Rewards (Schaden + Level-Up) zusätzlich
+mit `POST_WIPE_WILD_BATTLE_SCALE = 0.05` (Trainer/Gym/Brock via `_is_trainer_battle`
+unberührt), generischer Fang-Reward → 0 (Pikachu-Wald-Bonus bleibt), die
+Graph-Distanz-Wegführung zur alten Front zieht mit `POST_WIPE_TARGET_PROGRESS_REWARD
+= ±0.50` statt ±0.20. Ende sobald `_current_world_stage(aktuelle Map) >=
+pre_wipe_best_stage` **oder** ein tieferer Center-Respawn aktiviert **oder** ein
+Orden gefallen — dann einmalig `post_wipe_front_recovered:+300`, `post_wipe_recovery
+= False`. `party_wiped:-100` und die Wipe-Teleport-/Center-Logik unverändert.
+
 ## 2026-09-06 — V18: per-run tile ladder, Pokécenter/Mart/badge globals, battle rebalance, dashboard fixes
 
 Full trainer + watcher + web restart, brain kept (learner ~21.5M, champion v9).

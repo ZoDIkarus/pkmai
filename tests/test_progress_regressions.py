@@ -216,6 +216,31 @@ class ProgressRegressionTests(unittest.TestCase):
         e._combined_transitions = lambda: [(3, 2, 1, 1, 3, 1, 2, 2)]  # Pewter->Viridian (rueck)
         self.assertEqual(e._v19_forward_targets(3, 2), [])
 
+    def test_post_wipe_recovery_mode(self):
+        self.assertEqual(PokemonFireRedEnv.POST_WIPE_WILD_BATTLE_SCALE, 0.05)
+        self.assertEqual(PokemonFireRedEnv.POST_WIPE_TARGET_PROGRESS_REWARD, 0.50)
+        self.assertEqual(PokemonFireRedEnv.POST_WIPE_FRONT_RECOVERED_REWARD, 300.0)
+        # Der Wipe setzt den Recovery-Modus + merkt sich die Front, ohne
+        # Novelty-Memory anzufassen.
+        import inspect
+        src = inspect.getsource(PokemonFireRedEnv._record_party_wipe)
+        self.assertIn("self.post_wipe_recovery = True", src)
+        self.assertIn("self.pre_wipe_best_stage", src)
+        for forbidden in ("seen_coords = set()", "seen_coords.clear",
+                          "visited_maps = set()", "visited_maps.clear",
+                          "seen_coords -=", "visited_maps -="):
+            self.assertNotIn(forbidden, src)
+        self.assertIn("party_wiped:-100.0", src)  # -100-Strafe erhalten
+        # Wild-Skala waehrend Recovery, Trainerkaempfe NICHT reduziert.
+        e = bare_env(episode_wild_faints=0, post_wipe_recovery=True)
+        e.battle_state = SimpleNamespace(raw_flags=0)          # Wildkampf
+        wild = next(iter(PokemonFireRedEnv.WILD_TRAINING_MAPS))
+        self.assertAlmostEqual(e._battle_reward_scale(*wild),
+                               PokemonFireRedEnv.POST_WIPE_WILD_BATTLE_SCALE)
+        e.battle_state = SimpleNamespace(raw_flags=0x8)        # Trainerkampf
+        self.assertEqual(e._battle_reward_scale(*wild),
+                         PokemonFireRedEnv.TRAINER_BATTLE_REWARD_MULT)
+
     def test_battle_rewards_only_continuous_signals(self):
         # V18: im Kampf zaehlen nur Schaden/Heilung/Level/Fangen - kein
         # pauschaler KO- oder Sieg-Bonus mehr.

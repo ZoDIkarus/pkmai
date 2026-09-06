@@ -26,6 +26,12 @@ battles pay double on damage and skip the wild decay (30 % after 6 wild wins).
 All edge/warp/corridor farm rewards stay off. Persistent claim history
 (`reward_events.json`) keeps every one-time bonus one-time across restarts.
 
+After a party wipe a **recovery mode** kicks in (no novelty-memory reset, so
+dying is never a farm): wild-battle rewards are cut to 5 %, generic catches pay 0,
+and graph-distance guidance back to the pre-wipe story front pulls at ±0.50 until
+that front (or a deeper Center respawn, or a badge) is re-reached — then a
+one-time +300. The −100 wipe penalty and the Center-respawn teleport are unchanged.
+
 ## 2026-09-06 — V18: per-run tile ladder, one-time fleet bonuses, battle rebalance, dashboard
 
 Full trainer + watcher + web restart (brain kept: learner ~21.5M, champion v9).

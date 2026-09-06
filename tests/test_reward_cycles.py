@@ -5,11 +5,16 @@ from pokemon_env import (
     battle_hp_stagnation_update,
     battle_stagnation_penalty,
     short_cycle_repeats,
+    stairs_no_new_edge_timeout,
     stuck_loop_penalty,
 )
 
 
 class ShortCycleRepeatsTests(unittest.TestCase):
+    def test_stairs_no_new_edge_timeout_only_triggers_after_a_bounded_verified_loop(self):
+        self.assertFalse(stairs_no_new_edge_timeout(255))
+        self.assertTrue(stairs_no_new_edge_timeout(256))
+
     def test_detects_repeating_backtrack_cycle(self):
         a = (3, 0, 10, 10)
         b = (3, 0, 11, 10)

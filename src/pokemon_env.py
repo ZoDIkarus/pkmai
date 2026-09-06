@@ -63,6 +63,11 @@ def stuck_loop_penalty(stuck_steps):
     return -0.001 * max(0, int(stuck_steps) - 59)
 
 
+def stairs_no_new_edge_timeout(steps_since_new_edge, limit=256):
+    """Stop a stairs specialist after a bounded run on verified known edges."""
+    return max(0, int(steps_since_new_edge)) >= max(1, int(limit))
+
+
 def battle_stagnation_penalty(stagnant_hp_reads, grace_reads=16, penalty=-0.5):
     """Penalize only repeated verified battle HP snapshots with no change."""
     reads = int(stagnant_hp_reads)
@@ -204,6 +209,7 @@ class PokemonFireRedEnv(gym.Env):
     OUTDOOR_CONFIRM_READS = 3
     INTRO_TIMEOUT_STEPS = 1800
     STAIRS_TIMEOUT_STEPS = 900
+    STAIRS_NO_NEW_EDGE_TIMEOUT = 256
     EXIT_TIMEOUT_STEPS = 7500
     EARLY_HOUSE_HARD_CAP = 12000
 
@@ -3460,7 +3466,18 @@ class PokemonFireRedEnv(gym.Env):
                 if self.total_steps - intro_step >= self.STAIRS_TIMEOUT_STEPS:
                     stage_timeout = "stairs_timeout"
 
-            elif self.stairs_down_rewarded:
+            if (
+                stage_timeout is None
+                and self.training_objective == "stairs"
+                and not self.stairs_down_rewarded
+                and stairs_no_new_edge_timeout(
+                    self.steps_since_new_edge,
+                    self.STAIRS_NO_NEW_EDGE_TIMEOUT,
+                )
+            ):
+                stage_timeout = "stairs_no_new_edge_timeout"
+
+            elif stage_timeout is None and self.stairs_down_rewarded:
                 stairs_step = self.episode_milestone_steps.get(
                     "stairs_down", 0
                 )

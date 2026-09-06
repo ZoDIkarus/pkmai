@@ -19,6 +19,7 @@ WATCHER_STATUS_FILE = RUNTIME_DIR / "watcher.json"
 CLUSTER_DIR = RUNTIME_DIR / "cluster"
 CLUSTER_POLICY_FILE = CLUSTER_DIR / "policy.json"
 CLUSTER_WORKERS_FILE = CLUSTER_DIR / "workers.json"
+LAST_WATCHER_FRAME: bytes | None = None
 
 
 def web_bind_settings() -> tuple[str, int]:
@@ -131,14 +132,21 @@ def get_cluster_status() -> dict:
 
 @app.get("/watcher.jpg")
 def get_watcher_frame():
+    global LAST_WATCHER_FRAME
     try:
-        return Response(
-            content=WATCHER_STREAM_FILE.read_bytes(),
-            media_type="image/jpeg",
-            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-        )
+        frame = WATCHER_STREAM_FILE.read_bytes()
+        if not frame:
+            raise OSError("empty watcher frame")
+        LAST_WATCHER_FRAME = frame
     except (FileNotFoundError, OSError):
-        return Response(status_code=404)
+        frame = LAST_WATCHER_FRAME
+        if frame is None:
+            return Response(status_code=404)
+    return Response(
+        content=frame,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.get("/watcher", include_in_schema=False)
@@ -180,7 +188,7 @@ const state={watchers:[],cluster:{workers:[]},selectedWatcher:null,selectedMap:n
 const $=id=>document.getElementById(id),esc=v=>String(v??'');const position=w=>w.position?.valid?`B${w.position.map_bank} M${w.position.map_id} · ${w.position.x},${w.position.y}`:'keine Koordinate';
 function make(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e}
 function renderSummary(){const c=state.cluster,w=c.workers||[],online=w.filter(x=>x.online).length;$('summary').replaceChildren(make('span',c.brain_online?'Brain online':'Brain offline','chip '+(c.brain_online?'online':'offline')),make('span',`Policy v${c.policy_version||0}`,'chip'),make('span',`${online}/${w.length} Trainer`,'chip'),make('span',`${Number(c.timesteps||0).toLocaleString('de-DE')} Steps`,'chip'))}
-function watcherPosition(w){const p=w.position||{};return p.valid?`B${p.map_bank} M${p.map_id} · ${p.x},${p.y}`:'Position wird gelesen'}function renderWatcherObserver(w){$('watcher-summary').textContent=`Best Brain v${w.policy_version} · Episode ${w.episode_steps||0} Schritte · Aktion ${w.action}`;$('watcher-mode').textContent=w.in_battle?'BATTLE':'OVERWORLD';$('watcher-model').textContent=`dynamic_policy_best · Policy v${w.policy_version}`;const stateRoot=$('watcher-state');stateRoot.replaceChildren();[['Episode '+(w.episode_steps||0),''],['Reward '+Number(w.reward||0).toFixed(3),w.reward<0?'bad':''],['Aktion '+w.action,w.action==='START'?'warn':''],[watcherPosition(w),''],[w.in_battle?'Battle aktiv':'Keine Battle',w.in_battle?'bad':'']].forEach(([label,kind])=>{const row=make('div',undefined,'observer-row');const dot=make('i');if(kind)dot.className=kind;row.append(dot,make('span',label));stateRoot.append(row)});const events=$('watcher-events');events.replaceChildren();[['Letzte Policy-Aktion',w.action,Number(w.reward||0)],['Episode-Schritt',String(w.episode_steps||0),0],['Kartenstatus',watcherPosition(w),0],...((w.milestones||[]).slice(-4).reverse().map(x=>['Milestone',x,0])].forEach(([name,value,reward])=>{const row=make('div',undefined,'event'),dot=make('i');dot.className=reward<0?'bad':reward>0?'good':'';row.append(dot,make('b',name+' · '+value),make('em',(reward>=0?'+':'')+reward.toFixed(3),reward>0?'good':''));events.append(row)});$('watcher-frame').src=w.stream_url+'?t='+Date.now()}function renderWatchers(){const root=$('watcher-list');root.replaceChildren();if(!state.watchers.length){root.append(make('div','Keine Watcher verfügbar.','empty'));return}if(!state.selectedWatcher)state.selectedWatcher=state.watchers[0].id;state.watchers.forEach(w=>{const b=make('button',undefined,'watcher'+(w.id===state.selectedWatcher?' selected':''));b.type='button';b.append(make('strong',w.name));b.append(make('div',`Policy v${w.policy_version} · ${w.action} · ${w.online?'live':'offline'}`,'muted'));b.onclick=()=>{state.selectedWatcher=w.id;renderWatchers()};root.append(b)});renderWatcherObserver(state.watchers.find(w=>w.id===state.selectedWatcher)||state.watchers[0])}
+function watcherPosition(w){const p=w.position||{};return p.valid?`B${p.map_bank} M${p.map_id} · ${p.x},${p.y}`:'Position wird gelesen'}function renderWatcherObserver(w){$('watcher-summary').textContent=`Best Brain v${w.policy_version} · Episode ${w.episode_steps||0} Schritte · Aktion ${w.action}`;$('watcher-mode').textContent=w.in_battle?'BATTLE':'OVERWORLD';$('watcher-model').textContent=`dynamic_policy_best · Policy v${w.policy_version}`;const stateRoot=$('watcher-state');stateRoot.replaceChildren();[['Episode '+(w.episode_steps||0),''],['Reward '+Number(w.reward||0).toFixed(3),w.reward<0?'bad':''],['Aktion '+w.action,w.action==='START'?'warn':''],[watcherPosition(w),''],[w.in_battle?'Battle aktiv':'Keine Battle',w.in_battle?'bad':'']].forEach(([label,kind])=>{const row=make('div',undefined,'observer-row');const dot=make('i');if(kind)dot.className=kind;row.append(dot,make('span',label));stateRoot.append(row)});const events=$('watcher-events');events.replaceChildren();[['Letzte Policy-Aktion',w.action,Number(w.reward||0)],['Episode-Schritt',String(w.episode_steps||0),0],['Kartenstatus',watcherPosition(w),0],...((w.milestones||[]).slice(-4).reverse().map(x=>['Milestone',x,0]))].forEach(([name,value,reward])=>{const row=make('div',undefined,'event'),dot=make('i');dot.className=reward<0?'bad':reward>0?'good':'';row.append(dot,make('b',name+' · '+value),make('em',(reward>=0?'+':'')+reward.toFixed(3),reward>0?'good':''));events.append(row)});$('watcher-frame').src=w.stream_url+'?t='+Date.now()}function renderWatchers(){const root=$('watcher-list');root.replaceChildren();if(!state.watchers.length){root.append(make('div','Keine Watcher verfügbar.','empty'));return}if(!state.selectedWatcher)state.selectedWatcher=state.watchers[0].id;state.watchers.forEach(w=>{const b=make('button',undefined,'watcher'+(w.id===state.selectedWatcher?' selected':''));b.type='button';b.append(make('strong',w.name));b.append(make('div',`Policy v${w.policy_version} · ${w.action} · ${w.online?'live':'offline'}`,'muted'));b.onclick=()=>{state.selectedWatcher=w.id;renderWatchers()};root.append(b)});renderWatcherObserver(state.watchers.find(w=>w.id===state.selectedWatcher)||state.watchers[0])}
 function renderTrainers(){const root=$('trainer-rows');root.replaceChildren();state.cluster.workers.forEach(w=>{const r=document.createElement('tr');[w.worker_id,w.online?'online':'offline',`v${w.policy_version}`,position(w),A[w.last_action]||w.last_action,Number(w.last_reward).toFixed(3),w.episode_steps,w.in_battle?'ja':'–',w.age_seconds+' s'].forEach((v,i)=>r.append(make('td',v,i===1?(w.online?'online':'offline'):'')));root.append(r)});if(!root.children.length)root.append(make('tr','Keine Trainertelemetrie.','empty'))}
 function mapKey(w){const p=w.position;return p?.valid?`B${p.map_bank} · M${p.map_id}`:null}function renderMap(){const workers=state.cluster.workers.filter(w=>w.position?.valid),keys=[...new Set(workers.map(mapKey).filter(Boolean))].sort();const select=$('map-select');if(!keys.includes(state.selectedMap))state.selectedMap=keys[0]||null;select.replaceChildren(...keys.map(k=>{const o=make('option',k);o.value=k;o.selected=k===state.selectedMap;return o}));select.disabled=!keys.length;const canvas=$('coordinate-map'),legend=$('map-legend');canvas.replaceChildren();legend.replaceChildren();workers.filter(w=>mapKey(w)===state.selectedMap).forEach(w=>{const p=w.position,d=make('div',w.worker_id.replace('local-trainer-',''), 'dot'+(w.in_battle?' battle':''));d.style.left=(8+(p.x%64)/64*84)+'%';d.style.top=(10+(p.y%64)/64*80)+'%';d.title=`${w.worker_id}: ${position(w)}`;canvas.append(d);legend.append(make('div',`${w.worker_id} · ${p.x},${p.y}${w.in_battle?' · Battle':''}`))});if(!workers.length){canvas.append(make('div','Warte auf gültige Overworld-Koordinaten.','empty'));legend.append(make('div','Positionen erscheinen nach dem nächsten Trainer-Heartbeat.','muted'))}}
 function renderStats(){const w=state.cluster.workers||[],valid=w.filter(x=>x.position?.valid),battle=w.filter(x=>x.in_battle),rewards=w.length?w.reduce((a,x)=>a+Number(x.last_reward||0),0)/w.length:0;const stats=[['Trainer online',w.filter(x=>x.online).length+'/'+w.length],['Policy-Version','v'+(state.cluster.policy_version||0)],['Trainingsschritte',Number(state.cluster.timesteps||0).toLocaleString('de-DE')],['Kartenpositionen',valid.length],['Aktive Battles',battle.length],['Ø letzter Reward',rewards.toFixed(3)]];$('stat-cards').replaceChildren(...stats.map(([k,v])=>{const e=make('div',undefined,'card');e.append(make('div',k,'muted'),make('div',v,'metric'));return e}))}

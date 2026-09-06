@@ -28,11 +28,13 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.original_workers = web_stream.CLUSTER_WORKERS_FILE
         self.original_watcher_status = web_stream.WATCHER_STATUS_FILE
         self.original_watcher_stream = web_stream.WATCHER_STREAM_FILE
+        self.original_last_watcher_frame = web_stream.LAST_WATCHER_FRAME
         web_stream.CLUSTER_DIR = root
         web_stream.CLUSTER_POLICY_FILE = root / "policy.json"
         web_stream.CLUSTER_WORKERS_FILE = root / "workers.json"
         web_stream.WATCHER_STATUS_FILE = root / "watcher.json"
         web_stream.WATCHER_STREAM_FILE = root / "watcher.jpg"
+        web_stream.LAST_WATCHER_FRAME = None
 
     def tearDown(self):
         web_stream.CLUSTER_DIR = self.original_dir
@@ -40,6 +42,7 @@ class ClusterStatusApiTests(unittest.TestCase):
         web_stream.CLUSTER_WORKERS_FILE = self.original_workers
         web_stream.WATCHER_STATUS_FILE = self.original_watcher_status
         web_stream.WATCHER_STREAM_FILE = self.original_watcher_stream
+        web_stream.LAST_WATCHER_FRAME = self.original_last_watcher_frame
         self.directory.cleanup()
 
     def test_watcher_list_exposes_the_live_best_brain_without_private_paths(self):
@@ -72,6 +75,14 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.assertIn("/api/watchers", page)
         self.assertIn("watchers[0]", page)
 
+    def test_dashboard_event_list_uses_a_closed_milestone_spread_expression(self):
+        page = web_stream.index()
+
+        self.assertIn(
+            "...((w.milestones||[]).slice(-4).reverse().map(x=>['Milestone',x,0]))]",
+            page,
+        )
+
     def test_legacy_watcher_url_returns_to_the_dashboard(self):
         response = web_stream.watcher_dashboard_redirect()
 
@@ -87,6 +98,17 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.body, frame)
         self.assertEqual(response.headers["content-length"], str(len(frame)))
+
+    def test_watcher_frame_reuses_the_last_complete_frame_during_a_replace_gap(self):
+        frame = b"\xff\xd8previous-complete-frame\xff\xd9"
+        web_stream.WATCHER_STREAM_FILE.write_bytes(frame)
+        web_stream.get_watcher_frame()
+        web_stream.WATCHER_STREAM_FILE.unlink()
+
+        response = web_stream.get_watcher_frame()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.body, frame)
 
     def test_cluster_status_omits_secret_paths_and_marks_live_worker(self):
         now = time.time()

@@ -164,6 +164,20 @@ class V17RewardTuningTests(unittest.TestCase):
             PokemonFireRedEnv._pewter_arrival_reward(env, 6, party, events), 0.0
         )
 
+    def test_first_pewter_trainer_battle_is_a_once_per_episode_milestone(self):
+        env = object.__new__(PokemonFireRedEnv)
+        env.episode_brock_battle_started = False
+        events = []
+        self.assertEqual(
+            PokemonFireRedEnv._brock_battle_start_reward(env, 6, True, events),
+            500.0,
+        )
+        self.assertEqual(events, ["brock_battle_start:+500"])
+        self.assertEqual(
+            PokemonFireRedEnv._brock_battle_start_reward(env, 6, True, events),
+            0.0,
+        )
+
     def test_stuck_penalty_grows_continuously_without_a_discontinuity(self):
         self.assertEqual(stuck_loop_penalty(59), 0.0)
         self.assertEqual(stuck_loop_penalty(60), -0.001)

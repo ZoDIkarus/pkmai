@@ -168,6 +168,7 @@ class PokemonFireRedEnv(gym.Env):
     POKEMART_FIRST_GLOBAL_REWARD = 1000.0
     PIKACHU_SPECIES_ID = 25
     PEWTER_WITH_PIKACHU_REWARD = 300.0
+    BROCK_BATTLE_START_REWARD = 500.0
     POKECENTER_MAPS = {(5, 4), (5, 5), (6, 5)}
     POKECENTER_HEAL_MAPS = {(5, 4), (6, 5)}
     POKEMART_MAPS = {(5, 3)}
@@ -256,6 +257,7 @@ class PokemonFireRedEnv(gym.Env):
         self.episode_caught_species = set()
         self.episode_pewter_reached = False
         self.episode_pewter_with_pikachu_rewarded = False
+        self.episode_brock_battle_started = False
         self.pokecenter_entered_this_episode = set()
         self.pokemart_entered_this_episode = set()
         self.best_pokecenter_heal_stage = 0
@@ -699,6 +701,20 @@ class PokemonFireRedEnv(gym.Env):
             f"pewter_with_pikachu:+{self.PEWTER_WITH_PIKACHU_REWARD:.0f}"
         )
         return self.PEWTER_WITH_PIKACHU_REWARD
+
+    def _brock_battle_start_reward(self, current_stage, is_trainer, reward_events):
+        """Reward the first verified trainer battle at the Pewter frontier only."""
+        if (
+            int(current_stage) != 6
+            or not is_trainer
+            or getattr(self, "episode_brock_battle_started", False)
+        ):
+            return 0.0
+        self.episode_brock_battle_started = True
+        reward_events.append(
+            f"brock_battle_start:+{self.BROCK_BATTLE_START_REWARD:.0f}"
+        )
+        return self.BROCK_BATTLE_START_REWARD
 
     @staticmethod
     def _warp_pair_key(from_bank, from_map, to_bank, to_map):
@@ -1994,6 +2010,7 @@ class PokemonFireRedEnv(gym.Env):
         self.episode_caught_species = set()
         self.episode_pewter_reached = False
         self.episode_pewter_with_pikachu_rewarded = False
+        self.episode_brock_battle_started = False
         self.pokecenter_entered_this_episode = set()
         self.pokemart_entered_this_episode = set()
         self.best_pokecenter_heal_stage = 0
@@ -2406,6 +2423,12 @@ class PokemonFireRedEnv(gym.Env):
             reward += self._complete_post_wipe_recovery(current_stage, reward_events)
             reward += self._pewter_arrival_reward(
                 current_stage, self.player_party_cache, reward_events
+            )
+        if previous_battle_state == 0 and in_battle == 1:
+            reward += self._brock_battle_start_reward(
+                current_stage,
+                bool(int(getattr(self.battle_state, "raw_flags", 0)) & 0x8),
+                reward_events,
             )
         if gameplay_ready and not self._wipe_cooldown_active():
             if map_key in self.POKECENTER_MAPS and map_key not in self.pokecenter_entered_this_episode:

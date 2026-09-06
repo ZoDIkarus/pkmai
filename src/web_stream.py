@@ -173,11 +173,18 @@ def get_cluster_status() -> dict:
             "key": key,
             "label": label,
             "category": category,
+            "objective": objective,
             "observed": evidence in observed_milestones or evidence in observed_events,
-            "active_trainers": objective_counts[objective],
+            "active_trainers": 0,
         }
         for key, label, category, objective, evidence in GOAL_CATALOG
     ]
+    for objective, count in objective_counts.items():
+        candidates = [goal for goal in goals if goal["objective"] == objective]
+        if candidates:
+            next(goal for goal in candidates if not goal["observed"] or goal is candidates[-1])["active_trainers"] = count
+    for goal in goals:
+        del goal["objective"]
     try:
         policy_mtime = CLUSTER_POLICY_FILE.stat().st_mtime
     except OSError:

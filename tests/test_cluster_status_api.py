@@ -224,6 +224,31 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.assertTrue(goals["brock_rush"]["observed"])
         self.assertEqual(goals["brock_rush"]["active_trainers"], 1)
 
+    def test_goal_assignments_do_not_count_one_trainer_for_multiple_goals(self):
+        now = time.time()
+        web_stream.CLUSTER_WORKERS_FILE.write_text(
+            json.dumps(
+                {
+                    f"worker-{index}": {
+                        "worker_id": f"worker-{index}",
+                        "last_seen": now,
+                        "milestones": ["intro_complete", "stairs_down", "left_house", "starter", "maps_3"],
+                        "training_objective": objective,
+                    }
+                    for index, objective in enumerate(
+                        ["intro", "stairs", "exit", "starter", "battle", "battle", "progress", "progress", "progress", "progress"]
+                    )
+                }
+            )
+        )
+
+        goals = {goal["key"]: goal for goal in web_stream.get_cluster_status()["goals"]}
+
+        self.assertEqual(sum(goal["active_trainers"] for goal in goals.values()), 10)
+        self.assertEqual(goals["maps_3"]["active_trainers"], 0)
+        self.assertEqual(goals["maps_5"]["active_trainers"], 4)
+        self.assertEqual(goals["progress_1"]["active_trainers"], 0)
+
     def test_dashboard_has_the_five_operational_pages(self):
         page = web_stream.index()
 

@@ -147,11 +147,12 @@ class PokemonFireRedEnv(gym.Env):
     BUILDING_FIRST_GLOBAL_REWARD = 500.0
     NEW_GLOBAL_DEPTH_REWARD = 300.0
     STARTER_REWARD = 500.0
-    ENEMY_DAMAGE_REWARD_PER_HP = 0.08
+    # Navigation must dominate repeatable wild-combat shaping.
+    ENEMY_DAMAGE_REWARD_PER_HP = 0.008
     # Continuous damage is learnable; discrete KOs otherwise incentivize grinding.
     ENEMY_FAINT_REWARD = 0.0
     BATTLE_WIN_REWARD = 0.0
-    LEVEL_GAIN_REWARD = 10.0
+    LEVEL_GAIN_REWARD = 5.0
     ENEMY_HP_READ_EVERY = 2
     BATTLE_STAGNATION_HP_READS = 16
     BATTLE_STAGNATION_PENALTY = -0.5

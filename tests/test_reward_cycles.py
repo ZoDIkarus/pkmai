@@ -6,6 +6,7 @@ from pokemon_env import (
     battle_hp_stagnation_update,
     battle_stagnation_penalty,
     intro_novelty_bonus,
+    location_discovery_scan_due,
     short_cycle_repeats,
     stairs_no_new_edge_timeout,
     stuck_loop_penalty,
@@ -15,6 +16,11 @@ from pokemon_env import (
 
 
 class ShortCycleRepeatsTests(unittest.TestCase):
+    def test_watcher_retries_location_discovery_on_every_invalid_location_read(self):
+        self.assertTrue(location_discovery_scan_due(True, False, 604, 120))
+        self.assertFalse(location_discovery_scan_due(False, False, 604, 120))
+        self.assertTrue(location_discovery_scan_due(False, False, 480, 120))
+
     def test_intro_visual_rewards_are_strictly_capped_before_map_control(self):
         self.assertEqual(intro_novelty_bonus(0.0, 9.9, True), 0.0)
         self.assertEqual(intro_novelty_bonus(0.0, 10.0, False), 0.0)

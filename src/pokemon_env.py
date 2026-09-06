@@ -90,6 +90,21 @@ def intro_novelty_bonus(total_rewarded, screen_diff, is_new_state, limit=5.0):
     return min(proposed, cap - total)
 
 
+def location_discovery_scan_due(
+    is_watcher, cached_location_valid, total_steps, rank,
+    read_every=4, discovery_every=512,
+):
+    """Let the one visible watcher find a newly valid SaveBlock without delay."""
+    if bool(cached_location_valid):
+        return False
+    if bool(is_watcher):
+        return True
+    discovery_slots = max(1, int(discovery_every) // max(1, int(read_every)))
+    discovery_slot = (max(0, int(rank)) * 17) % discovery_slots
+    read_slot = (max(0, int(total_steps)) // max(1, int(read_every))) % discovery_slots
+    return read_slot == discovery_slot
+
+
 def battle_stagnation_penalty(stagnant_hp_reads, grace_reads=16, penalty=-0.5):
     """Penalize only repeated verified battle HP snapshots with no change."""
     reads = int(stagnant_hp_reads)
@@ -2348,24 +2363,14 @@ class PokemonFireRedEnv(gym.Env):
             self.total_steps == 1
             or self.total_steps % self.LOCATION_READ_EVERY == 0
         ):
-            allow_discovery_scan = False
-
-            if not self.cached_loc.get("valid", False):
-                # V6 FIX: guaranteed discovery slot for every rank.
-                discovery_slots = max(
-                    1,
-                    self.LOCATION_DISCOVERY_EVERY
-                    // self.LOCATION_READ_EVERY
-                )
-                discovery_slot = (
-                    (self.rank * 17) % discovery_slots
-                )
-                read_slot = (
-                    self.total_steps // self.LOCATION_READ_EVERY
-                ) % discovery_slots
-                allow_discovery_scan = (
-                    read_slot == discovery_slot
-                )
+            allow_discovery_scan = location_discovery_scan_due(
+                getattr(self, "is_watcher", False),
+                self.cached_loc.get("valid", False),
+                self.total_steps,
+                self.rank,
+                self.LOCATION_READ_EVERY,
+                self.LOCATION_DISCOVERY_EVERY,
+            )
 
             self.cached_loc = read_player_location(
                 self.env,

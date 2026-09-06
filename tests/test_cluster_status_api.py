@@ -83,6 +83,12 @@ class ClusterStatusApiTests(unittest.TestCase):
                         "fps": 24.5,
                         "policy_version": 12,
                         "last_seen": now,
+                        "position": {"valid": True, "map_bank": 3, "map_id": 7, "x": 14, "y": 22},
+                        "last_action": 6,
+                        "last_reward": 1.25,
+                        "episode_steps": 128,
+                        "in_battle": True,
+                        "milestones": ["intro_complete", "stairs_down"],
                         "signature": "must-not-leak",
                     }
                 }
@@ -96,4 +102,15 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.assertTrue(payload["brain_online"])
         self.assertEqual(payload["workers"][0]["worker_id"], "worker-a")
         self.assertTrue(payload["workers"][0]["online"])
+        self.assertEqual(payload["workers"][0]["position"]["map_id"], 7)
+        self.assertEqual(payload["workers"][0]["milestones"], ["intro_complete", "stairs_down"])
         self.assertNotIn("signature", payload["workers"][0])
+
+    def test_dashboard_has_the_five_operational_pages(self):
+        page = web_stream.index()
+
+        for label in ("Watcher", "Trainer", "Overworld", "Live-Statistik", "Lernziele"):
+            self.assertIn(label, page)
+        self.assertIn('data-page="trainers"', page)
+        self.assertIn('data-page="overworld"', page)
+        self.assertIn('data-page="goals"', page)

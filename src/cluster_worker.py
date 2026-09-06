@@ -32,6 +32,25 @@ HEARTBEAT_SECONDS = max(3, int(os.getenv("PKMAI_HEARTBEAT_SECONDS", "10")))
 ROLLOUT_STEPS = max(8, int(os.getenv("PKMAI_ROLLOUT_STEPS", "32")))
 
 
+def live_telemetry(env: PokemonFireRedEnv, *, action: int, reward: float) -> dict:
+    location = getattr(env, "cached_loc", {}) or {}
+    valid = bool(location.get("valid", False))
+    return {
+        "position": {
+            "valid": valid,
+            "map_bank": max(0, int(location.get("map_bank", 0) or 0)),
+            "map_id": max(0, int(location.get("map_id", 0) or 0)),
+            "x": max(0, int(location.get("x_pos", 0) or 0)),
+            "y": max(0, int(location.get("y_pos", 0) or 0)),
+        },
+        "last_action": max(0, int(action)),
+        "last_reward": float(reward),
+        "episode_steps": max(0, int(getattr(env, "total_steps", 0) or 0)),
+        "in_battle": bool(getattr(env, "last_in_battle", False)),
+        "milestones": sorted(str(value) for value in getattr(env, "saved_milestones", ()) or ()),
+    }
+
+
 def worker_rank(hostname: str | None = None, explicit_rank: str | None = None) -> int:
     configured_rank = explicit_rank if explicit_rank is not None else os.getenv("PKMAI_WORKER_RANK")
     if configured_rank:
@@ -50,8 +69,8 @@ def build_id() -> str:
         return "unknown"
 
 
-def payload(policy_version: int = 0) -> dict:
-    return {
+def payload(policy_version: int = 0, telemetry: dict | None = None) -> dict:
+    result = {
         "worker_id": WORKER_ID,
         "hostname": socket.gethostname(),
         "build": build_id(),
@@ -62,6 +81,9 @@ def payload(policy_version: int = 0) -> dict:
         "policy_version": policy_version,
         "platform": platform.platform(),
     }
+    if telemetry:
+        result.update(telemetry)
+    return result
 
 
 def _key() -> str:
@@ -114,8 +136,9 @@ def load_policy() -> tuple[PKMAIPolicy, int]:
     return policy, int(artifact["version"])
 
 
-def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: dict) -> tuple[dict[str, np.ndarray], dict]:
+def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: dict) -> tuple[dict[str, np.ndarray], dict, dict]:
     rows = {name: [] for name in ("images", "nav", "actions", "rewards", "dones", "log_probs", "values")}
+    telemetry = live_telemetry(env, action=0, reward=0.0)
     for _ in range(ROLLOUT_STEPS):
         action, log_prob, value = choose_action(policy, observation)
         next_observation, reward, terminated, truncated, _ = env.step(action)
@@ -127,6 +150,7 @@ def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: di
         rows["dones"].append(done)
         rows["log_probs"].append(log_prob)
         rows["values"].append(value)
+        telemetry = live_telemetry(env, action=action, reward=reward)
         observation = env.reset()[0] if done else next_observation
     return {
         "images": np.asarray(rows["images"], dtype=np.uint8),
@@ -136,7 +160,7 @@ def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: di
         "dones": np.asarray(rows["dones"], dtype=np.bool_),
         "log_probs": np.asarray(rows["log_probs"], dtype=np.float32),
         "values": np.asarray(rows["values"], dtype=np.float32),
-    }, observation
+    }, observation, telemetry
 
 
 def main() -> None:
@@ -149,10 +173,11 @@ def main() -> None:
     policy = None
     version = int(registration.get("policy_version", -1))
     last_heartbeat = 0.0
+    telemetry = None
     try:
         while True:
             try:
-                response = request_json("/api/worker/heartbeat", payload(version))
+                response = request_json("/api/worker/heartbeat", payload(version, telemetry))
                 target_version = int(response.get("policy_version", version))
                 if policy is None or target_version != version:
                     policy, version = load_policy()
@@ -162,7 +187,7 @@ def main() -> None:
                 print(f"master/policy unavailable; retrying: {exc}", flush=True)
                 time.sleep(HEARTBEAT_SECONDS)
                 continue
-            batch, observation = collect_rollout(env, policy, observation)
+            batch, observation, telemetry = collect_rollout(env, policy, observation)
             try:
                 response = upload_rollout(batch)
                 print(f"uploaded samples={response.get('samples', 0)} policy={version}", flush=True)

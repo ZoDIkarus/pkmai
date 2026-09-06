@@ -1,4 +1,4 @@
-"""Small live dashboard for the local dynamic rollout cluster."""
+"""Live dashboard and public telemetry for the local dynamic rollout cluster."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import uvicorn
 from fastapi import FastAPI, Response
 from fastapi.responses import FileResponse, HTMLResponse
 
-app = FastAPI(title="PKMAI Watchers")
+app = FastAPI(title="PKMAI Dashboard")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = PROJECT_ROOT / "runtime"
 WATCHER_STREAM_FILE = RUNTIME_DIR / "watcher.jpg"
@@ -70,17 +70,31 @@ def get_cluster_status() -> dict:
         if not isinstance(row, dict):
             continue
         last_seen = float(row.get("last_seen", 0) or 0)
+        raw_position = row.get("position") if isinstance(row.get("position"), dict) else {}
+        milestones = [
+            str(value)
+            for value in (row.get("milestones") or [])
+            if isinstance(value, str) and value.replace("_", "").isalnum()
+        ][:16]
         workers.append(
             {
                 "worker_id": str(row.get("worker_id", worker_id)),
                 "hostname": str(row.get("hostname", "")),
                 "active_agents": max(0, int(row.get("active_agents", 0) or 0)),
-                "fps": (
-                    max(0.0, float(row["fps"]))
-                    if row.get("fps") is not None
-                    else None
-                ),
+                "fps": max(0.0, float(row["fps"])) if row.get("fps") is not None else None,
                 "policy_version": max(0, int(row.get("policy_version", 0) or 0)),
+                "position": {
+                    "valid": bool(raw_position.get("valid", False)),
+                    "map_bank": max(0, int(raw_position.get("map_bank", 0) or 0)),
+                    "map_id": max(0, int(raw_position.get("map_id", 0) or 0)),
+                    "x": max(0, int(raw_position.get("x", 0) or 0)),
+                    "y": max(0, int(raw_position.get("y", 0) or 0)),
+                },
+                "last_action": max(0, int(row.get("last_action", 0) or 0)),
+                "last_reward": round(float(row.get("last_reward", 0.0) or 0.0), 3),
+                "episode_steps": max(0, int(row.get("episode_steps", 0) or 0)),
+                "in_battle": bool(row.get("in_battle", False)),
+                "milestones": sorted(set(milestones)),
                 "age_seconds": round(max(0.0, now - last_seen), 1),
                 "online": now - last_seen < 15,
             }
@@ -119,53 +133,31 @@ def watcher_view() -> str:
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return """<!doctype html>
-<html lang="de">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>PKMAI Watchers</title>
-  <style>
-    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background:#080b10; color:#edf4ff; }
-    * { box-sizing:border-box; } body { margin:0; min-height:100vh; background:linear-gradient(145deg,#0c1320,#080b10 55%); }
-    header { padding:18px 24px; border-bottom:1px solid #233044; display:flex; justify-content:space-between; gap:16px; align-items:center; }
-    h1 { font-size:18px; margin:0; letter-spacing:.03em; } .sub { color:#91a0b5; font-size:12px; margin-top:4px; }
-    #cluster-summary { display:flex; flex-wrap:wrap; gap:8px; justify-content:end; }
-    .chip { background:#121b29; border:1px solid #26364d; border-radius:999px; padding:6px 10px; font-size:12px; color:#b9c8dc; }
-    .online { color:#73edab; } .offline { color:#ff9b9b; }
-    main { display:grid; grid-template-columns:minmax(230px,300px) minmax(0,1fr); min-height:calc(100vh - 76px); }
-    aside { padding:18px; border-right:1px solid #233044; background:rgba(10,15,23,.78); }
-    aside h2 { margin:0 0 12px; font-size:13px; color:#9cb0c9; text-transform:uppercase; letter-spacing:.1em; }
-    #watcher-list { display:grid; gap:9px; }
-    .watcher { width:100%; border:1px solid #26364d; border-radius:10px; padding:12px; text-align:left; background:#101826; color:inherit; cursor:pointer; }
-    .watcher:hover,.watcher.selected { border-color:#45dc9a; background:#132237; box-shadow:0 0 0 1px rgba(69,220,154,.22); }
-    .watcher-name { font-weight:750; font-size:14px; display:flex; justify-content:space-between; gap:8px; }
-    .watcher-meta { margin-top:6px; color:#9eafc3; font-size:12px; display:flex; justify-content:space-between; }
-    section { padding:18px; display:grid; grid-template-rows:auto minmax(0,1fr); gap:12px; min-height:0; }
-    .title { display:flex; align-items:baseline; justify-content:space-between; gap:12px; } .title h2 { margin:0; font-size:18px; } #watcher-detail { color:#9eafc3; font-size:13px; }
-    .preview { min-height:0; border:1px solid #26364d; border-radius:14px; background:#05070a; overflow:hidden; display:grid; place-items:center; }
-    #watcher-preview { width:100%; height:100%; max-height:calc(100vh - 160px); object-fit:contain; image-rendering:pixelated; }
-    .empty { color:#91a0b5; text-align:center; padding:24px; }
-    @media (max-width:720px) { header { align-items:start; flex-direction:column; } #cluster-summary { justify-content:start; } main { grid-template-columns:1fr; } aside { border-right:0; border-bottom:1px solid #233044; } #watcher-list { grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); } section { min-height:65vh; } }
-  </style>
-</head>
-<body>
-  <header><div><h1>PKMAI · Watchers</h1><div class="sub">Sichtbare Ausführung der besten veröffentlichten Policy</div></div><div id="cluster-summary"><span class="chip">Cluster wird geladen …</span></div></header>
-  <main>
-    <aside><h2>Watcher</h2><div id="watcher-list"><div class="empty">Watcher werden geladen …</div></div></aside>
-    <section><div class="title"><h2 id="watcher-title">Watcher</h2><span id="watcher-detail">Wird geladen …</span></div><div class="preview"><img id="watcher-preview" alt="Live Watcher"><div id="empty-state" class="empty" hidden>Kein Watcher verfügbar.</div></div></section>
-  </main>
-  <script>
-    const list=document.getElementById('watcher-list'), preview=document.getElementById('watcher-preview'), title=document.getElementById('watcher-title'), detail=document.getElementById('watcher-detail'), empty=document.getElementById('empty-state');
-    let selectedId=null, activeStream='';
-    const text=value=>String(value ?? '');
-    function choose(watcher) { selectedId=watcher.id; activeStream=watcher.stream_url; title.textContent=watcher.name; detail.textContent=`Policy v${watcher.policy_version} · Aktion: ${watcher.action}`; preview.hidden=false; empty.hidden=true; renderWatchers(window.currentWatchers || []); }
-    function renderWatchers(watchers) { list.innerHTML=''; if (!watchers.length) { list.innerHTML='<div class="empty">Keine Watcher konfiguriert.</div>'; preview.hidden=true; empty.hidden=false; return; } watchers.forEach(watcher=>{ const item=document.createElement('button'); item.className='watcher'+(watcher.id===selectedId?' selected':''); item.type='button'; const state=watcher.online?'online':'offline'; item.innerHTML=`<div class="watcher-name"><span></span><span class="${state}"></span></div><div class="watcher-meta"><span></span><span></span></div>`; const spans=item.querySelectorAll('span'); spans[0].textContent=text(watcher.name); spans[1].textContent=watcher.online?'live':'offline'; spans[2].textContent=`Policy v${watcher.policy_version}`; spans[3].textContent=text(watcher.action); item.onclick=()=>choose(watcher); list.appendChild(item); }); }
-    async function refreshWatchers() { try { const response=await fetch('/api/watchers?t='+Date.now(),{cache:'no-store'}); const payload=await response.json(); const watchers=payload.watchers || []; window.currentWatchers=watchers; const current=watchers.find(watcher=>watcher.id===selectedId); if (!current && watchers[0]) choose(watchers[0]); else { renderWatchers(watchers); if (current) { title.textContent=current.name; detail.textContent=`Policy v${current.policy_version} · Aktion: ${current.action}`; activeStream=current.stream_url; } } } catch { list.innerHTML='<div class="empty">Watcher-Status nicht erreichbar.</div>'; } }
-    async function refreshCluster() { try { const response=await fetch('/api/cluster-status?t='+Date.now(),{cache:'no-store'}); const cluster=await response.json(); const online=(cluster.workers || []).filter(worker=>worker.online).length; document.getElementById('cluster-summary').innerHTML=`<span class="chip ${cluster.brain_online?'online':'offline'}">Brain ${cluster.brain_online?'online':'offline'}</span><span class="chip">Policy v${cluster.policy_version}</span><span class="chip">${online}/${(cluster.workers || []).length} Trainer online</span><span class="chip">${Number(cluster.timesteps || 0).toLocaleString('de-DE')} Steps</span>`; } catch { document.getElementById('cluster-summary').innerHTML='<span class="chip offline">Cluster nicht erreichbar</span>'; } }
-    function refreshFrame() { if (activeStream) preview.src=activeStream+'?t='+Date.now(); }
-    refreshWatchers(); refreshCluster(); refreshFrame(); setInterval(refreshWatchers,1000); setInterval(refreshCluster,2000); setInterval(refreshFrame,120);
-  </script>
-</body></html>"""
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PKMAI Dashboard</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#080b10;color:#edf4ff}*{box-sizing:border-box}body{margin:0;background:linear-gradient(145deg,#0c1320,#080b10 60%);min-height:100vh}header{padding:16px 24px;border-bottom:1px solid #26364d;display:flex;gap:18px;justify-content:space-between;align-items:center}h1,h2,h3,p{margin:0}.sub,.muted{color:#9eafc3;font-size:13px}.nav{display:flex;gap:7px;flex-wrap:wrap}.nav button,.map-select{border:1px solid #31425c;background:#111a28;color:#c8d7eb;border-radius:8px;padding:8px 10px;cursor:pointer}.nav button.active{border-color:#45dc9a;background:#153126;color:#84efb4}.summary{display:flex;gap:8px;flex-wrap:wrap}.chip,.badge{padding:5px 8px;border:1px solid #26364d;border-radius:999px;background:#111a28;font-size:12px}.online{color:#73edab}.offline{color:#ff9b9b}main{padding:20px;max-width:1500px;margin:auto}.page{display:none}.page.active{display:block}.page-head{display:flex;justify-content:space-between;gap:12px;align-items:end;margin-bottom:15px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}.card,.panel{border:1px solid #26364d;border-radius:12px;background:rgba(15,24,38,.88);padding:14px}.metric{font-size:24px;font-weight:750;margin-top:7px}.grid{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:16px}.watcher{width:100%;text-align:left;margin-bottom:8px;border:1px solid #26364d;border-radius:9px;padding:11px;background:#101826;color:inherit;cursor:pointer}.watcher.selected{border-color:#45dc9a}.preview{background:#05070a;border:1px solid #26364d;border-radius:12px;min-height:500px;display:grid;place-items:center;overflow:hidden}.preview img{width:100%;height:100%;object-fit:contain;image-rendering:pixelated}.table-wrap{overflow:auto}.table{width:100%;border-collapse:collapse;font-size:13px}.table th,.table td{text-align:left;padding:10px;border-bottom:1px solid #26364d;white-space:nowrap}.table th{color:#9eafc3;font-weight:600}.map-layout{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:16px}.coordinate-map{position:relative;min-height:540px;border:1px solid #26364d;border-radius:12px;background:linear-gradient(#122238 1px,transparent 1px),linear-gradient(90deg,#122238 1px,transparent 1px),#09111c;background-size:32px 32px;overflow:hidden}.coordinate-map:before{content:'Kartenkoordinaten · keine Bildkarte';position:absolute;left:12px;top:10px;color:#7790ac;font-size:12px}.dot{position:absolute;width:25px;height:25px;border-radius:50%;border:2px solid #d9ffe9;background:#157b51;color:#fff;font-size:9px;display:grid;place-items:center;transform:translate(-50%,-50%);cursor:default}.dot.battle{background:#af513f}.legend{display:grid;gap:8px}.goal{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid #26364d}.goal:last-child{border-bottom:0}.empty{color:#9eafc3;padding:18px;text-align:center}@media(max-width:800px){header{align-items:start;flex-direction:column}.grid,.map-layout{grid-template-columns:1fr}.preview{min-height:340px}main{padding:14px}}
+</style></head><body>
+<header><div><h1>PKMAI · Lokaler Trainingscluster</h1><div class="sub">Live-Telemetrie ohne private Runtime- oder Modellpfade</div></div><nav class="nav" id="nav"><button class="active" data-page="watchers">Watcher</button><button data-page="trainers">Trainer</button><button data-page="overworld">Overworld</button><button data-page="stats">Live-Statistik</button><button data-page="goals">Lernziele</button></nav><div class="summary" id="summary"></div></header>
+<main>
+<section class="page active" id="page-watchers"><div class="page-head"><div><h2>Watcher</h2><p class="muted">Beste veröffentlichte Policy in einem separaten Emulator</p></div></div><div class="grid"><div class="panel"><h3>Aktive Watcher</h3><div id="watcher-list" class="muted">Wird geladen …</div></div><div class="preview"><img id="watcher-preview" alt="Live Watcher"></div></div></section>
+<section class="page" id="page-trainers"><div class="page-head"><div><h2>Trainer</h2><p class="muted">Individuelle lokale Rollout-Worker und ihre letzte Telemetrie</p></div></div><div class="panel table-wrap"><table class="table"><thead><tr><th>Trainer</th><th>Status</th><th>Policy</th><th>Position</th><th>Aktion</th><th>Reward</th><th>Episode</th><th>Battle</th><th>Alter</th></tr></thead><tbody id="trainer-rows"></tbody></table></div></section>
+<section class="page" id="page-overworld"><div class="page-head"><div><h2>Overworld</h2><p class="muted">Aktuelle Trainerpositionen auf der gewählten Kartenkoordinaten-Ebene</p></div><select class="map-select" id="map-select"></select></div><div class="map-layout"><div class="coordinate-map" id="coordinate-map"></div><div class="panel"><h3>Karten-Legende</h3><div id="map-legend" class="legend muted"></div></div></div></section>
+<section class="page" id="page-stats"><div class="page-head"><div><h2>Live-Statistik</h2><p class="muted">Aggregierte Signale aus Brain und Trainerfleet</p></div></div><div class="cards" id="stat-cards"></div></section>
+<section class="page" id="page-goals"><div class="page-head"><div><h2>Lernziele & Etappen</h2><p class="muted">Status basiert auf den von Trainern veröffentlichten Milestone-Signalen</p></div></div><div class="panel" id="goals"></div></section>
+</main>
+<script>
+const state={watchers:[],cluster:{workers:[]},selectedWatcher:null,selectedMap:null};const A=['A','B','START','UP','DOWN','LEFT','RIGHT'];
+const $=id=>document.getElementById(id),esc=v=>String(v??'');const position=w=>w.position?.valid?`B${w.position.map_bank} M${w.position.map_id} · ${w.position.x},${w.position.y}`:'keine Koordinate';
+function make(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e}
+function renderSummary(){const c=state.cluster,w=c.workers||[],online=w.filter(x=>x.online).length;$('summary').replaceChildren(make('span',c.brain_online?'Brain online':'Brain offline','chip '+(c.brain_online?'online':'offline')),make('span',`Policy v${c.policy_version||0}`,'chip'),make('span',`${online}/${w.length} Trainer`,'chip'),make('span',`${Number(c.timesteps||0).toLocaleString('de-DE')} Steps`,'chip'))}
+function renderWatchers(){const root=$('watcher-list');root.replaceChildren();if(!state.watchers.length){root.append(make('div','Keine Watcher verfügbar.','empty'));return}if(!state.selectedWatcher)state.selectedWatcher=state.watchers[0].id;state.watchers.forEach(w=>{const b=make('button',undefined,'watcher'+(w.id===state.selectedWatcher?' selected':''));b.type='button';b.append(make('strong',w.name));b.append(make('div',`Policy v${w.policy_version} · ${w.action} · ${w.online?'live':'offline'}`,'muted'));b.onclick=()=>{state.selectedWatcher=w.id;renderWatchers()};root.append(b)});const active=state.watchers.find(w=>w.id===state.selectedWatcher)||state.watchers[0];$('watcher-preview').src=active.stream_url+'?t='+Date.now()}
+function renderTrainers(){const root=$('trainer-rows');root.replaceChildren();state.cluster.workers.forEach(w=>{const r=document.createElement('tr');[w.worker_id,w.online?'online':'offline',`v${w.policy_version}`,position(w),A[w.last_action]||w.last_action,Number(w.last_reward).toFixed(3),w.episode_steps,w.in_battle?'ja':'–',w.age_seconds+' s'].forEach((v,i)=>r.append(make('td',v,i===1?(w.online?'online':'offline'):'')));root.append(r)});if(!root.children.length)root.append(make('tr','Keine Trainertelemetrie.','empty'))}
+function mapKey(w){const p=w.position;return p?.valid?`B${p.map_bank} · M${p.map_id}`:null}function renderMap(){const workers=state.cluster.workers.filter(w=>w.position?.valid),keys=[...new Set(workers.map(mapKey).filter(Boolean))].sort();const select=$('map-select');if(!keys.includes(state.selectedMap))state.selectedMap=keys[0]||null;select.replaceChildren(...keys.map(k=>{const o=make('option',k);o.value=k;o.selected=k===state.selectedMap;return o}));select.disabled=!keys.length;const canvas=$('coordinate-map'),legend=$('map-legend');canvas.replaceChildren();legend.replaceChildren();workers.filter(w=>mapKey(w)===state.selectedMap).forEach(w=>{const p=w.position,d=make('div',w.worker_id.replace('local-trainer-',''), 'dot'+(w.in_battle?' battle':''));d.style.left=(8+(p.x%64)/64*84)+'%';d.style.top=(10+(p.y%64)/64*80)+'%';d.title=`${w.worker_id}: ${position(w)}`;canvas.append(d);legend.append(make('div',`${w.worker_id} · ${p.x},${p.y}${w.in_battle?' · Battle':''}`))});if(!workers.length){canvas.append(make('div','Warte auf gültige Overworld-Koordinaten.','empty'));legend.append(make('div','Positionen erscheinen nach dem nächsten Trainer-Heartbeat.','muted'))}}
+function renderStats(){const w=state.cluster.workers||[],valid=w.filter(x=>x.position?.valid),battle=w.filter(x=>x.in_battle),rewards=w.length?w.reduce((a,x)=>a+Number(x.last_reward||0),0)/w.length:0;const stats=[['Trainer online',w.filter(x=>x.online).length+'/'+w.length],['Policy-Version','v'+(state.cluster.policy_version||0)],['Trainingsschritte',Number(state.cluster.timesteps||0).toLocaleString('de-DE')],['Kartenpositionen',valid.length],['Aktive Battles',battle.length],['Ø letzter Reward',rewards.toFixed(3)]];$('stat-cards').replaceChildren(...stats.map(([k,v])=>{const e=make('div',undefined,'card');e.append(make('div',k,'muted'),make('div',v,'metric'));return e}))}
+function renderGoals(){const found=new Set(state.cluster.workers.flatMap(w=>w.milestones||[]));const goals=[['intro_complete','Intro abschließen'],['stairs_down','Treppe erreichen'],['left_house','Haus verlassen'],['starter','Starter erhalten']];const root=$('goals');root.replaceChildren(...goals.map(([key,label])=>{const e=make('div',undefined,'goal');e.append(make('div',label),make('span',found.has(key)?'Milestone gespeichert':'noch kein Signal','badge '+(found.has(key)?'online':'')));return e}));const flow=make('div',undefined,'goal');flow.append(make('div','Kontinuierliche Policy-Lernschleife'),make('span',state.cluster.brain_online?'aktiv':'wartet','badge '+(state.cluster.brain_online?'online':'offline')));root.append(flow)}
+function render(){renderSummary();renderWatchers();renderTrainers();renderMap();renderStats();renderGoals()}async function refresh(){try{const [watchers,cluster]=await Promise.all([fetch('/api/watchers?t='+Date.now(),{cache:'no-store'}).then(r=>r.json()),fetch('/api/cluster-status?t='+Date.now(),{cache:'no-store'}).then(r=>r.json())]);state.watchers=watchers.watchers||[];state.cluster=cluster;render()}catch{ $('summary').replaceChildren(make('span','Cluster nicht erreichbar','chip offline')) }}
+$('nav').onclick=e=>{const page=e.target.dataset.page;if(!page)return;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page))};$('map-select').onchange=e=>{state.selectedMap=e.target.value;renderMap()};refresh();setInterval(refresh,1500);setInterval(()=>{if(state.selectedWatcher)renderWatchers()},150);
+</script></body></html>"""
 
 
 if __name__ == "__main__":

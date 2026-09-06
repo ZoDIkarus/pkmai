@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import secrets
 import threading
@@ -94,6 +95,12 @@ def _record(payload: dict, decision_reason: str) -> dict:
     worker_id = str(payload.get("worker_id", "")).strip()
     if not worker_id:
         raise HTTPException(status_code=400, detail="worker_id required")
+    raw_position = payload.get("position") if isinstance(payload.get("position"), dict) else {}
+    milestones = [
+        str(value)
+        for value in (payload.get("milestones") or [])
+        if isinstance(value, str) and value.replace("_", "").isalnum()
+    ][:16]
     record = {
         "worker_id": worker_id,
         "hostname": str(payload.get("hostname", "")),
@@ -106,6 +113,22 @@ def _record(payload: dict, decision_reason: str) -> dict:
             else None
         ),
         "policy_version": max(0, int(payload.get("policy_version", 0))),
+        "position": {
+            "valid": bool(raw_position.get("valid", False)),
+            "map_bank": max(0, int(raw_position.get("map_bank", 0) or 0)),
+            "map_id": max(0, int(raw_position.get("map_id", 0) or 0)),
+            "x": max(0, int(raw_position.get("x", 0) or 0)),
+            "y": max(0, int(raw_position.get("y", 0) or 0)),
+        },
+        "last_action": max(0, int(payload.get("last_action", 0) or 0)),
+        "last_reward": (
+            float(payload.get("last_reward", 0.0))
+            if math.isfinite(float(payload.get("last_reward", 0.0) or 0.0))
+            else 0.0
+        ),
+        "episode_steps": max(0, int(payload.get("episode_steps", 0) or 0)),
+        "in_battle": bool(payload.get("in_battle", False)),
+        "milestones": sorted(set(milestones)),
         "status": decision_reason,
         "last_seen": time.time(),
     }

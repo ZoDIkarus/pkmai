@@ -7,10 +7,15 @@ from pokemon_env import (
     short_cycle_repeats,
     stairs_no_new_edge_timeout,
     stuck_loop_penalty,
+    watcher_episode_start,
 )
 
 
 class ShortCycleRepeatsTests(unittest.TestCase):
+    def test_watcher_episode_start_never_resumes_a_curriculum_checkpoint(self):
+        self.assertEqual(watcher_episode_start(True, "starter"), "beginning")
+        self.assertEqual(watcher_episode_start(False, "starter"), "starter")
+
     def test_stairs_no_new_edge_timeout_only_triggers_after_a_bounded_verified_loop(self):
         self.assertFalse(stairs_no_new_edge_timeout(255))
         self.assertTrue(stairs_no_new_edge_timeout(256))

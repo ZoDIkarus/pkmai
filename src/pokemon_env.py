@@ -68,6 +68,11 @@ def stairs_no_new_edge_timeout(steps_since_new_edge, limit=256):
     return max(0, int(steps_since_new_edge)) >= max(1, int(limit))
 
 
+def watcher_episode_start(is_watcher, curriculum_start):
+    """Keep the visible observer on a full from-beginning journey."""
+    return "beginning" if bool(is_watcher) else curriculum_start
+
+
 def battle_stagnation_penalty(stagnant_hp_reads, grace_reads=16, penalty=-0.5):
     """Penalize only repeated verified battle HP snapshots with no change."""
     reads = int(stagnant_hp_reads)
@@ -1835,6 +1840,12 @@ class PokemonFireRedEnv(gym.Env):
     def _choose_episode_start(self):
         self.saved_milestones = self._discover_saved_milestones()
         self.full_chain_ready = self._champion_full_starter_ready()
+        if getattr(self, "is_watcher", False):
+            # The public watcher is a full-journey regression check, never a
+            # specialist replay.  On every process/episode reset it must
+            # visibly re-prove all earlier goals from the genuine game start.
+            self.training_objective = "full"
+            return watcher_episode_start(True, "beginning")
         role, _ = self._agent_role()
         self.training_objective = role
         saved = set(self.saved_milestones)

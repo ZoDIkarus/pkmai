@@ -12,7 +12,7 @@ import uvicorn
 from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from curriculum import GOAL_CATALOG
+from curriculum import GOAL_CATALOG, load_status
 
 app = FastAPI(title="PKMAI Dashboard")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +22,7 @@ WATCHER_STATUS_FILE = RUNTIME_DIR / "watcher.json"
 CLUSTER_DIR = RUNTIME_DIR / "cluster"
 CLUSTER_POLICY_FILE = CLUSTER_DIR / "policy.json"
 CLUSTER_WORKERS_FILE = CLUSTER_DIR / "workers.json"
+CURRICULUM_QUALITY_FILE = RUNTIME_DIR / "curriculum_quality.json"
 LAST_WATCHER_FRAME: bytes | None = None
 
 
@@ -168,6 +169,7 @@ def get_cluster_status() -> dict:
             + [event for trace in worker["reward_trace"] for event in trace["events"]]
         )
     }
+    curriculum_stages = load_status(str(CURRICULUM_QUALITY_FILE)).get("stages", {})
     goals = [
         {
             "key": key,
@@ -175,6 +177,11 @@ def get_cluster_status() -> dict:
             "category": category,
             "objective": objective,
             "observed": evidence in observed_milestones or evidence in observed_events,
+            "average_steps": (
+                max(0, int((curriculum_stages.get(key) or {}).get("average_steps")))
+                if (curriculum_stages.get(key) or {}).get("average_steps") is not None
+                else None
+            ),
             "active_trainers": 0,
         }
         for key, label, category, objective, evidence in GOAL_CATALOG
@@ -266,7 +273,7 @@ function renderTrainerDetail(w){const summary=$('trainer-detail-summary'),events
 function renderTrainers(){const root=$('trainer-rows'),workers=state.cluster.workers||[];root.replaceChildren();if(!workers.some(w=>w.worker_id===state.selectedTrainer))state.selectedTrainer=workers[0]?.worker_id||null;workers.forEach(w=>{const r=document.createElement('tr');r.className='trainer-row'+(w.worker_id===state.selectedTrainer?' selected':'');r.tabIndex=0;r.title='Trainer-Details anzeigen';[w.worker_id,w.online?'online':'offline',`${w.training_objective||'unbekannt'} · ${w.training_role||'–'}`,w.story_stage||'–',`v${w.policy_version}`,w.fps===null||w.fps===undefined?'–':Number(w.fps).toFixed(2),position(w),A[w.last_action]||w.last_action,Number(w.last_reward).toFixed(3),Number(w.episode_reward||0).toFixed(2),w.episode_steps,w.in_battle?'ja':'–',w.age_seconds+' s'].forEach((v,i)=>r.append(make('td',v,i===1?(w.online?'online':'offline'):'')));r.onclick=()=>{state.selectedTrainer=w.worker_id;renderTrainers()};r.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();r.click()}};root.append(r)});if(!root.children.length)root.append(make('tr','Keine Trainertelemetrie.','empty'));renderTrainerDetail(workers.find(w=>w.worker_id===state.selectedTrainer))}
 function mapKey(w){const p=w.position;return p?.valid?`B${p.map_bank} · M${p.map_id}`:null}function renderMap(){const workers=state.cluster.workers.filter(w=>w.position?.valid),keys=[...new Set(workers.map(mapKey).filter(Boolean))].sort();const select=$('map-select');if(!keys.includes(state.selectedMap))state.selectedMap=keys[0]||null;select.replaceChildren(...keys.map(k=>{const o=make('option',k);o.value=k;o.selected=k===state.selectedMap;return o}));select.disabled=!keys.length;const canvas=$('coordinate-map'),legend=$('map-legend');canvas.replaceChildren();legend.replaceChildren();workers.filter(w=>mapKey(w)===state.selectedMap).forEach(w=>{const p=w.position,d=make('div',w.worker_id.replace('local-trainer-',''), 'dot'+(w.in_battle?' battle':''));d.style.left=(8+(p.x%64)/64*84)+'%';d.style.top=(10+(p.y%64)/64*80)+'%';d.title=`${w.worker_id}: ${position(w)}`;canvas.append(d);legend.append(make('div',`${w.worker_id} · ${p.x},${p.y}${w.in_battle?' · Battle':''}`))});if(!workers.length){canvas.append(make('div','Warte auf gültige Overworld-Koordinaten.','empty'));legend.append(make('div','Positionen erscheinen nach dem nächsten Trainer-Heartbeat.','muted'))}}
 function renderStats(){const w=state.cluster.workers||[],valid=w.filter(x=>x.position?.valid),battle=w.filter(x=>x.in_battle),rewards=w.length?w.reduce((a,x)=>a+Number(x.last_reward||0),0)/w.length:0,episodeRewards=w.length?w.reduce((a,x)=>a+Number(x.episode_reward||0),0)/w.length:0;const stats=[['Trainer online',w.filter(x=>x.online).length+'/'+w.length],['Policy-Version','v'+(state.cluster.policy_version||0)],['Trainingsschritte',Number(state.cluster.timesteps||0).toLocaleString('de-DE')],['Kartenpositionen',valid.length],['Aktive Battles',battle.length],['Ø letzter Reward',rewards.toFixed(3)],['Ø Episoden-Reward',episodeRewards.toFixed(2)]];$('stat-cards').replaceChildren(...stats.map(([k,v])=>{const e=make('div',undefined,'card');e.append(make('div',k,'muted'),make('div',v,'metric'));return e}))}
-function renderGoals(){const goals=state.cluster.goals||[],objectives=state.cluster.learning_objectives||[],catalog=$('goal-catalog'),active=$('active-training-objectives');catalog.replaceChildren(...goals.map(g=>{const e=make('div',undefined,'goal'),status=[g.category,g.observed?'Milestone gespeichert':'noch kein Signal'].filter(Boolean).join(' · ');e.append(make('div',g.label),make('span',status,'badge '+(g.observed?'online':'')));return e}));active.replaceChildren(...objectives.map(o=>{const e=make('div',undefined,'goal');e.append(make('div',o.key),make('span',o.trainers+' Trainer','badge online'));return e}));const total=objectives.reduce((sum,o)=>sum+Number(o.trainers||0),0),summary=make('div',undefined,'goal');summary.append(make('div','Trainer gesamt'),make('span',total+' eindeutig zugeordnet','badge online'));active.append(summary)}
+function renderGoals(){const goals=state.cluster.goals||[],objectives=state.cluster.learning_objectives||[],catalog=$('goal-catalog'),active=$('active-training-objectives');catalog.replaceChildren(...goals.map(g=>{const e=make('div',undefined,'goal'),status=[g.category,g.observed?'Milestone gespeichert':'noch kein Signal'].filter(Boolean).join(' · '),average=g.average_steps===null||g.average_steps===undefined?'Ø Schritte: –':`Ø Schritte: ${Number(g.average_steps).toLocaleString('de-DE')}`;const details=make('div');details.append(make('div',g.label),make('div',average,'muted'));e.append(details,make('span',status,'badge '+(g.observed?'online':'')));return e}));active.replaceChildren(...objectives.map(o=>{const e=make('div',undefined,'goal');e.append(make('div',o.key),make('span',o.trainers+' Trainer','badge online'));return e}));const total=objectives.reduce((sum,o)=>sum+Number(o.trainers||0),0),summary=make('div',undefined,'goal');summary.append(make('div','Trainer gesamt'),make('span',total+' eindeutig zugeordnet','badge online'));active.append(summary)}
 function render(){renderSummary();renderWatchers();renderTrainers();renderMap();renderStats();renderGoals()}async function refresh(){try{const [watchers,cluster]=await Promise.all([fetch('/api/watchers?t='+Date.now(),{cache:'no-store'}).then(r=>r.json()),fetch('/api/cluster-status?t='+Date.now(),{cache:'no-store'}).then(r=>r.json())]);state.watchers=watchers.watchers||[];state.cluster=cluster;render()}catch{ $('summary').replaceChildren(make('span','Cluster nicht erreichbar','chip offline')) }}
 $('nav').onclick=e=>{const page=e.target.dataset.page;if(!page)return;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page))};$('map-select').onchange=e=>{state.selectedMap=e.target.value;renderMap()};refresh();setInterval(refresh,1500);setInterval(()=>{const active=state.watchers.find(w=>w.id===state.selectedWatcher)||state.watchers[0];if(active)$('watcher-frame').src=active.stream_url+'?t='+Date.now()},150);
 </script></body></html>"""

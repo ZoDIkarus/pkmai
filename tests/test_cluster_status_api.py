@@ -26,12 +26,14 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.original_dir = web_stream.CLUSTER_DIR
         self.original_policy = web_stream.CLUSTER_POLICY_FILE
         self.original_workers = web_stream.CLUSTER_WORKERS_FILE
+        self.original_curriculum_quality = web_stream.CURRICULUM_QUALITY_FILE
         self.original_watcher_status = web_stream.WATCHER_STATUS_FILE
         self.original_watcher_stream = web_stream.WATCHER_STREAM_FILE
         self.original_last_watcher_frame = web_stream.LAST_WATCHER_FRAME
         web_stream.CLUSTER_DIR = root
         web_stream.CLUSTER_POLICY_FILE = root / "policy.json"
         web_stream.CLUSTER_WORKERS_FILE = root / "workers.json"
+        web_stream.CURRICULUM_QUALITY_FILE = root / "curriculum_quality.json"
         web_stream.WATCHER_STATUS_FILE = root / "watcher.json"
         web_stream.WATCHER_STREAM_FILE = root / "watcher.jpg"
         web_stream.LAST_WATCHER_FRAME = None
@@ -40,6 +42,7 @@ class ClusterStatusApiTests(unittest.TestCase):
         web_stream.CLUSTER_DIR = self.original_dir
         web_stream.CLUSTER_POLICY_FILE = self.original_policy
         web_stream.CLUSTER_WORKERS_FILE = self.original_workers
+        web_stream.CURRICULUM_QUALITY_FILE = self.original_curriculum_quality
         web_stream.WATCHER_STATUS_FILE = self.original_watcher_status
         web_stream.WATCHER_STREAM_FILE = self.original_watcher_stream
         web_stream.LAST_WATCHER_FRAME = self.original_last_watcher_frame
@@ -195,10 +198,21 @@ class ClusterStatusApiTests(unittest.TestCase):
                 "label": "Intro abschließen",
                 "category": "Story",
                 "observed": True,
+                "average_steps": None,
                 "active_trainers": 1,
             },
         )
         self.assertEqual(payload["learning_objectives"], [{"key": "intro", "trainers": 1}, {"key": "scout", "trainers": 1}])
+
+    def test_cluster_status_exposes_stage_average_steps_from_durable_quality(self):
+        web_stream.CURRICULUM_QUALITY_FILE.write_text(
+            json.dumps({"stages": {"stairs_down": {"average_steps": 240}}})
+        )
+
+        goals = {goal["key"]: goal for goal in web_stream.get_cluster_status()["goals"]}
+
+        self.assertEqual(goals["stairs_down"]["average_steps"], 240)
+        self.assertIsNone(goals["starter"]["average_steps"])
 
     def test_cluster_status_includes_brock_and_frontier_goal_catalog(self):
         now = time.time()
@@ -262,12 +276,14 @@ class ClusterStatusApiTests(unittest.TestCase):
         page = web_stream.index()
 
         self.assertIn("state.cluster.goals", page)
+        self.assertIn("g.average_steps", page)
         self.assertIn("state.cluster.learning_objectives", page)
         self.assertIn("objectives.reduce", page)
         self.assertIn('id="goal-catalog"', page)
         self.assertIn('id="active-training-objectives"', page)
         self.assertIn("Zielkatalog", page)
         self.assertIn("Aktive Trainingsaufträge", page)
+        self.assertIn("Ø Schritte", page)
 
     def test_trainer_page_has_selectable_details_and_reward_trace(self):
         page = web_stream.index()

@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 
 from curriculum import (
@@ -8,12 +9,25 @@ from curriculum import (
     watcher_completion_stage,
     quality_snapshot,
     quality_is_better,
+    load_status,
+    record_stage_result,
     adaptive_stage_limit,
     curriculum_progress_report,
 )
 
 
 class CurriculumRolesTests(unittest.TestCase):
+    def test_stage_quality_tracks_average_steps_across_successes_and_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = f"{directory}/quality.json"
+            record_stage_result(path, "stairs_down", True, 100)
+            record_stage_result(path, "stairs_down", False, 300)
+
+            record = load_status(path)["stages"]["stairs_down"]
+
+        self.assertEqual(record["recent_steps"], [100, 300])
+        self.assertEqual(record["average_steps"], 200)
+
     def test_local_frontier_uses_two_battle_specialists_after_the_starter_chain(self):
         roles = local_frontier_roles(
             10,

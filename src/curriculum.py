@@ -194,11 +194,13 @@ def quality_is_better(candidate, baseline):
 
 
 def record_stage_result(path, stage, success, steps):
-    data = load_status(path); stages = data.setdefault("stages", {}); record = stages.setdefault(stage, {"recent": [], "success_steps": []})
+    data = load_status(path); stages = data.setdefault("stages", {}); record = stages.setdefault(stage, {"recent": [], "success_steps": [], "recent_steps": []})
     record["recent"] = (list(record.get("recent", [])) + [bool(success)])[-RECENT_WINDOW:]
+    record["recent_steps"] = (list(record.get("recent_steps", [])) + [max(0, int(steps))])[-RECENT_WINDOW:]
     if success: record["success_steps"] = (list(record.get("success_steps", [])) + [int(steps)])[-RECENT_WINDOW:]
     record["attempts"] = int(record.get("attempts", 0)) + 1; record["successes"] = int(record.get("successes", 0)) + int(bool(success))
     record["success_rate"] = round(sum(record["recent"]) / len(record["recent"]), 3)
+    record["average_steps"] = round(sum(record["recent_steps"]) / len(record["recent_steps"])) if record.get("recent_steps") else None
     record["median_success_steps"] = int(median(record["success_steps"])) if record.get("success_steps") else None
     record["confirmed"] = stage_is_confirmed(record)
     tmp = path + ".tmp"; os.makedirs(os.path.dirname(path), exist_ok=True)

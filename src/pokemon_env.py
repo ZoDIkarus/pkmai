@@ -15,7 +15,7 @@ from firered_ram import (
     read_player_party,
 )
 from reward_state import claim_event
-from curriculum import local_frontier_roles
+from curriculum import curriculum_roles, load_status, record_stage_result
 from loop_guard import LocalLoopGuard, ShortCycleGuard
 
 
@@ -32,6 +32,7 @@ CURRICULUM_DIR = os.path.join(RUNTIME_DIR, "curriculum_states")
 SHARED_CURRICULUM_DIR = os.path.join(RUNTIME_DIR, "curriculum_shared")
 STATS_DIR = os.path.join(RUNTIME_DIR, "training_stats")
 GLOBAL_PROGRESS_FILE = os.path.join(EXPLORATION_MEMORY_DIR, "global_progress.json")
+CURRICULUM_QUALITY_FILE = os.path.join(RUNTIME_DIR, "curriculum_quality.json")
 
 os.makedirs(INSTANCES_DIR, exist_ok=True)
 os.makedirs(CURRICULUM_DIR, exist_ok=True)
@@ -1804,7 +1805,11 @@ class PokemonFireRedEnv(gym.Env):
 
     def _agent_role(self):
         saved = set(getattr(self, "saved_milestones", ()) or ())
-        roles = local_frontier_roles(self.agent_count, saved)
+        roles = curriculum_roles(
+            self.agent_count,
+            saved,
+            load_status(CURRICULUM_QUALITY_FILE).get("stages", {}),
+        )
         role = roles[min(max(0, int(self.rank)), len(roles) - 1)]
         labels = {
             "intro": "Intro Regression",
@@ -1988,6 +1993,14 @@ class PokemonFireRedEnv(gym.Env):
 
         # Vorherige Episode fuer die Lernstatistik abschliessen.
         if self.total_steps > 0:
+            stage = {
+                "intro": "intro_complete", "stairs": "stairs_down",
+                "exit": "left_house", "starter": "starter",
+            }.get(self.training_objective)
+            if stage:
+                record_stage_result(
+                    CURRICULUM_QUALITY_FILE, stage, self.objective_success, self.total_steps
+                )
             self._finalize_run_stats()
             self.completed_episodes += 1
             self.total_episode_reward += float(self.current_reward)

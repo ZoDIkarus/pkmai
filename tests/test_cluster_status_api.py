@@ -131,6 +131,14 @@ class ClusterStatusApiTests(unittest.TestCase):
                         "episode_steps": 128,
                         "in_battle": True,
                         "milestones": ["intro_complete", "stairs_down"],
+                        "training_objective": "stairs",
+                        "training_role": "scout",
+                        "story_stage": "F2_TO_STAIRS",
+                        "last_reward_events": ["new_tile:+0.20"],
+                        "episode_reward": 12.5,
+                        "reward_trace": [
+                            {"step": 127, "action": 6, "reward": 0.2, "events": ["new_tile:+0.20"]}
+                        ],
                         "signature": "must-not-leak",
                     }
                 }
@@ -146,6 +154,10 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.assertTrue(payload["workers"][0]["online"])
         self.assertEqual(payload["workers"][0]["position"]["map_id"], 7)
         self.assertEqual(payload["workers"][0]["milestones"], ["intro_complete", "stairs_down"])
+        self.assertEqual(payload["workers"][0]["training_objective"], "stairs")
+        self.assertEqual(payload["workers"][0]["training_role"], "scout")
+        self.assertEqual(payload["workers"][0]["last_reward_events"], ["new_tile:+0.20"])
+        self.assertEqual(payload["workers"][0]["reward_trace"][0]["events"], ["new_tile:+0.20"])
         self.assertNotIn("signature", payload["workers"][0])
 
     def test_dashboard_has_the_five_operational_pages(self):
@@ -156,3 +168,12 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.assertIn('data-page="trainers"', page)
         self.assertIn('data-page="overworld"', page)
         self.assertIn('data-page="goals"', page)
+
+    def test_trainer_page_has_selectable_details_and_reward_trace(self):
+        page = web_stream.index()
+
+        self.assertIn('id="trainer-detail"', page)
+        self.assertIn('id="trainer-reward-trace"', page)
+        self.assertIn("selectedTrainer", page)
+        self.assertIn("reward_trace", page)
+        self.assertIn("training_objective", page)

@@ -91,6 +91,27 @@ def _check_key(value: str | None) -> None:
         raise HTTPException(status_code=401, detail="invalid cluster key")
 
 
+def _public_events(values) -> list[str]:
+    return [str(value)[:120] for value in (values or []) if isinstance(value, str)][-8:]
+
+
+def _public_reward_trace(values) -> list[dict]:
+    result = []
+    for row in (values or [])[-12:]:
+        if not isinstance(row, dict):
+            continue
+        reward = float(row.get("reward", 0.0) or 0.0)
+        result.append(
+            {
+                "step": max(0, int(row.get("step", 0) or 0)),
+                "action": max(0, int(row.get("action", 0) or 0)),
+                "reward": round(reward if math.isfinite(reward) else 0.0, 4),
+                "events": _public_events(row.get("events")),
+            }
+        )
+    return result
+
+
 def _record(payload: dict, decision_reason: str) -> dict:
     worker_id = str(payload.get("worker_id", "")).strip()
     if not worker_id:
@@ -129,6 +150,12 @@ def _record(payload: dict, decision_reason: str) -> dict:
         "episode_steps": max(0, int(payload.get("episode_steps", 0) or 0)),
         "in_battle": bool(payload.get("in_battle", False)),
         "milestones": sorted(set(milestones)),
+        "training_objective": str(payload.get("training_objective", "unknown"))[:32],
+        "training_role": str(payload.get("training_role", "unknown"))[:32],
+        "story_stage": str(payload.get("story_stage", "unknown"))[:48],
+        "last_reward_events": _public_events(payload.get("last_reward_events")),
+        "episode_reward": round(float(payload.get("episode_reward", 0.0) or 0.0), 3),
+        "reward_trace": _public_reward_trace(payload.get("reward_trace")),
         "status": decision_reason,
         "last_seen": time.time(),
     }

@@ -32,7 +32,23 @@ HEARTBEAT_SECONDS = max(3, int(os.getenv("PKMAI_HEARTBEAT_SECONDS", "10")))
 ROLLOUT_STEPS = max(8, int(os.getenv("PKMAI_ROLLOUT_STEPS", "32")))
 
 
-def live_telemetry(env: PokemonFireRedEnv, *, action: int, reward: float) -> dict:
+def _public_reward_events(events) -> list[str]:
+    return [
+        str(value)[:120]
+        for value in (events or [])
+        if isinstance(value, str)
+    ][-8:]
+
+
+def live_telemetry(
+    env: PokemonFireRedEnv,
+    *,
+    action: int,
+    reward: float,
+    info: dict | None = None,
+    reward_trace: list[dict] | None = None,
+) -> dict:
+    info = info or {}
     location = getattr(env, "cached_loc", {}) or {}
     valid = bool(location.get("valid", False))
     return {
@@ -48,6 +64,12 @@ def live_telemetry(env: PokemonFireRedEnv, *, action: int, reward: float) -> dic
         "episode_steps": max(0, int(getattr(env, "total_steps", 0) or 0)),
         "in_battle": bool(getattr(env, "last_in_battle", False)),
         "milestones": sorted(str(value) for value in getattr(env, "saved_milestones", ()) or ()),
+        "training_objective": str(info.get("training_objective", "unknown"))[:32],
+        "training_role": str(info.get("training_role", "unknown"))[:32],
+        "story_stage": str(info.get("story_stage", "unknown"))[:48],
+        "last_reward_events": _public_reward_events(info.get("reward_events")),
+        "episode_reward": round(float(info.get("episode_reward", 0.0) or 0.0), 3),
+        "reward_trace": list(reward_trace or [])[-12:],
     }
 
 
@@ -139,9 +161,10 @@ def load_policy() -> tuple[PKMAIPolicy, int]:
 def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: dict) -> tuple[dict[str, np.ndarray], dict, dict]:
     rows = {name: [] for name in ("images", "nav", "actions", "rewards", "dones", "log_probs", "values")}
     telemetry = live_telemetry(env, action=0, reward=0.0)
+    reward_trace = []
     for _ in range(ROLLOUT_STEPS):
         action, log_prob, value = choose_action(policy, observation)
-        next_observation, reward, terminated, truncated, _ = env.step(action)
+        next_observation, reward, terminated, truncated, info = env.step(action)
         rows["images"].append(np.asarray(observation["image"], dtype=np.uint8))
         rows["nav"].append(np.asarray(observation["nav"], dtype=np.float32))
         rows["actions"].append(action)
@@ -150,7 +173,17 @@ def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: di
         rows["dones"].append(done)
         rows["log_probs"].append(log_prob)
         rows["values"].append(value)
-        telemetry = live_telemetry(env, action=action, reward=reward)
+        reward_trace.append(
+            {
+                "step": max(0, int(info.get("episode_steps", getattr(env, "total_steps", 0)) or 0)),
+                "action": max(0, int(action)),
+                "reward": round(float(reward), 4),
+                "events": _public_reward_events(info.get("reward_events")),
+            }
+        )
+        telemetry = live_telemetry(
+            env, action=action, reward=reward, info=info, reward_trace=reward_trace
+        )
         observation = env.reset()[0] if done else next_observation
     return {
         "images": np.asarray(rows["images"], dtype=np.uint8),

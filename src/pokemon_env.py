@@ -214,6 +214,15 @@ class PokemonFireRedEnv(gym.Env):
     GLOBAL_NEW_TILE_BONUS = 1.0
     NEW_TILE_REWARD = 2.0        # Fallback fuer Aussenmaps ohne Stage-Eintrag
     EPISODE_TILE_REWARD = 0.0
+    # V18: pro Karte UND Episode zahlen nur die ersten TILE_REWARD_CAP_PER_MAP
+    # neuen Kacheln die volle Leiter, danach nur noch der Bruchteil
+    # TILE_REWARD_AFTER_CAP_FACTOR. Ohne das wird das reine Abgrasen einer
+    # grossen Startmap (Pallet hat ~80 begehbare Kacheln * 2 = ~160 Reward,
+    # jede Episode neu) ein farmbarer Loop, der die Flotte in Alabastia haelt.
+    # Der fleet-weit einmalige +1-Zusatz bleibt ungedeckelt (echter Frontier-
+    # Fund, nicht farmbar).
+    TILE_REWARD_CAP_PER_MAP = 15
+    TILE_REWARD_AFTER_CAP_FACTOR = 0.0
     # V17.4: kein fleet-weiter Einmal-Jackpot mehr fuer die allererste Map-
     # Entdeckung (ehem. NEW_MAP_REWARD=500, ging strukturell nur an einen
     # einzigen Agenten je Map) - jetzt EIN Wert pro Run, fuer JEDEN Agenten
@@ -542,7 +551,12 @@ class PokemonFireRedEnv(gym.Env):
         # vermerkt (claim_event), sodass sie auch nach jedem Neustart erledigt
         # bleiben - der Nutzer sah sonst bei jedem Watcher-Neustart wieder
         # new_warp_global fuer Alabastia<->Route 1.
-        self._known_warp_pairs = self._derive_warp_pairs(shared_transitions)
+        # Leer starten: das Iterieren des manager.dict-Proxys ist waehrend
+        # __init__ im SubprocVecEnv-Worker noch nicht sicher moeglich. Die
+        # bekannten Warp-Paare werden beim ersten _refresh_shared_snapshots()
+        # (laeuft in step() vor jeder Warp-Reward-Pruefung) aus
+        # shared_transitions nachgezogen.
+        self._known_warp_pairs = set()
 
         # V7.3.2 Navigation caches.
         # Revision wird nur erhoeht, wenn sich die bekannte Graph-Struktur aendert.
@@ -689,6 +703,7 @@ class PokemonFireRedEnv(gym.Env):
         self.battle_steps = 0
         self.current_battle_steps = 0
         self.seen_coords = set()
+        self._episode_tiles_by_map = {}
         self.visited_maps = set()
         self._saved_outdoor_depth = 0
 
@@ -1852,14 +1867,23 @@ class PokemonFireRedEnv(gym.Env):
 
     @classmethod
     def _derive_warp_pairs(cls, transitions):
-        """Grobe (map_a<->map_b)-Paare aus koordinatengenauen 8-Tupel-Warps."""
+        """Grobe (map_a<->map_b)-Paare aus koordinatengenauen 8-Tupel-Warps.
+
+        Robust gegen einen noch nicht verbundenen multiprocessing-Manager-Proxy
+        (waehrend __init__ im SubprocVecEnv-Worker) - dann eben leer, die
+        Paare werden beim ersten _refresh_shared_snapshots() nachgezogen.
+        """
         pairs = set()
         try:
-            for t in (transitions or ()):
+            snapshot = list(transitions) if transitions else []
+        except Exception:
+            return pairs
+        for t in snapshot:
+            try:
                 if len(t) == 8:
                     pairs.add(cls._warp_pair_key(t[0], t[1], t[4], t[5]))
-        except (TypeError, ValueError):
-            pass
+            except (TypeError, ValueError):
+                continue
         return pairs
 
     def _refresh_shared_snapshots(self):
@@ -2900,6 +2924,7 @@ class PokemonFireRedEnv(gym.Env):
         # ab WILD_BATTLE_DECAY_AFTER greift WILD_BATTLE_DECAY_FACTOR.
         self.episode_wild_faints = 0
         self.seen_coords = set()
+        self._episode_tiles_by_map = {}
         self.visited_maps = set()
         self._saved_outdoor_depth = 0
         # V10.23: pro Episode erneut belohnen, wenn eine bekannte Map oder ein
@@ -4837,6 +4862,14 @@ class PokemonFireRedEnv(gym.Env):
                             _tile_reward = self.INTERIOR_TILE_REWARD_BY_BANK.get(
                                 int(bank), self.INTERIOR_TILE_REWARD_DEFAULT
                             )
+                        # Pro Karte/Episode: nach TILE_REWARD_CAP_PER_MAP neuen
+                        # Kacheln nur noch der Bruchteil - Abgrasen einer grossen
+                        # Startmap ist dann kein farmbarer Loop mehr.
+                        _map_tiles = self._episode_tiles_by_map.get(map_key, 0)
+                        self._episode_tiles_by_map[map_key] = _map_tiles + 1
+                        _capped = _map_tiles >= self.TILE_REWARD_CAP_PER_MAP
+                        if _capped:
+                            _tile_reward *= self.TILE_REWARD_AFTER_CAP_FACTOR
                         _tile_global = (
                             self.GLOBAL_NEW_TILE_BONUS
                             if self._claim_shared(self.shared_tiles, coord_key)
@@ -4846,7 +4879,8 @@ class PokemonFireRedEnv(gym.Env):
                         reward += _tile_reward
                         reward_events.append(
                             f"new_tile:s{_tile_stage}"
-                            f"{'+g' if _tile_global else ''}:+{_tile_reward:.2f}"
+                            f"{'+g' if _tile_global else ''}"
+                            f"{':capped' if _capped else ''}:+{_tile_reward:.2f}"
                         )
 
             # -----------------------------------------------------

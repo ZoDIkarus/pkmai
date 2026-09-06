@@ -32,6 +32,76 @@ and graph-distance guidance back to the pre-wipe story front pulls at ±0.50 unt
 that front (or a deeper Center respawn, or a badge) is re-reached — then a
 one-time +300. The −100 wipe penalty and the Center-respawn teleport are unchanged.
 
+## 2026-09-06 — V19 BROCK RUSH + POST_WIPE_RECOVERY
+
+`BUILD_TAG = "V19_BROCK_RUSH"`. Goal: faster real story progress to badge 1,
+without re-introducing reward loops. Existing logic reused; every V17/V18
+anti-farm fix kept. 72 unit tests pass. Deployed with a map/global reset (brain
+kept — see below); all fleet-once bonuses re-fire against the new reward shape.
+
+**Forward push moved off exploration novelty.** Tiles are now just a flat
+"keep moving" trickle: `TILE_REWARD_BY_STAGE = {1:0.1, 2:1.5, 3:2.0, 4:2.5,
+5:3.0, 6:3.0}`, first 20 per map per episode then 10 %, +1 fleet-once. The real
+pull comes from:
+- `STAGE_ADVANCE_REWARD = 250` per new world-stage — paid only on a new episode
+  best (`_world_stage()` is monotone within an episode, so walking back pays 0).
+- `TARGET_PROGRESS_REWARD = ±0.20` graph-distance shaping. New helper
+  `_v19_forward_targets(bank, map_id)` returns the on-map transition coords that
+  lead to a *higher* world-stage map (or the current city's Center while unhealed,
+  or the Pewter gym while Brock is unfought). Pure graph distance, no compass;
+  symmetric so a there-and-back nets zero. Wired as a third fallback in the
+  existing `target_closer` / `target_farther` block (the older generic target
+  sources deliberately return nothing for world roles — they used to prefer
+  houses and dead ends).
+
+**Milestones toward Brock** (each once per episode via an episode flag, never
+farmable by re-entering or re-starting a battle):
+- reach Pewter with Pikachu in the party: +300 (`PEWTER_WITH_PIKACHU_REWARD`)
+- Pewter gym entered: +200 (inert until `PEWTER_GYM_MAPS` has a confirmed id)
+- Brock/gym battle started (trainer flag + `bank == 6` or world-stage 6): +500
+- first gym KO in such a battle: +300 (**approximate** — without a trainer-id RAM
+  read this can't be told apart from Brock's first Pokémon if the gym trainer is
+  skipped)
+- badge itself: `BADGE_EARNED_REWARD` 3000/run + `BADGE_FIRST_GLOBAL_REWARD` 5000-once
+
+**Other value changes:** `FRONTIER_SCOUT_SLOTS` 2→3 · `EPISODE_NEW_MAP_REWARD`
+25→50 · `CITY_EPISODE_REWARD` 250→300 · `LEVEL_GAIN_REWARD` 10→15 ·
+`POKECENTER_ENTER_REWARD` 100→50 · `POKECENTER_ADVANCE_HEAL_REWARD` 250→**500**
+(the wipe-respawn anchor) · `SPECIES_CAUGHT_FIRST_REWARD` 120→50, level bonus 4→2 ·
+`PIKACHU_FOREST_CAUGHT_REWARD` 1000→400 (Pikachu stays useful for Misty but is
+not a Brock prerequisite) · `TILE_REWARD_AFTER_CAP_FACTOR` 0.2→0.1. All
+edge / warp / corridor farm rewards stay at 0.
+
+**`POST_WIPE_RECOVERY_MODE`.** After a wipe the episode keeps going and visited
+tiles/maps rightly don't repay, so wild grass at the respawn can become the best
+remaining reward stream and the policy just fights there instead of walking back
+to the front. `_record_party_wipe()` now also sets `post_wipe_recovery = True`
+and stores `pre_wipe_best_stage / _best_center_stage / _badges` — **no** reset of
+`seen_coords` / `visited_maps` / any novelty memory (dying on purpose must never
+be a farm). While recovering:
+- wild-battle rewards (damage + level-up) are additionally ×`0.05`
+  (`POST_WIPE_WILD_BATTLE_SCALE`); trainer / gym / Brock battles are untouched
+- the generic catch reward is 0 (the Pikachu-forest bonus is a separate branch and stays)
+- the graph-distance guidance back to the old front pulls at ±`0.50`
+  (`POST_WIPE_TARGET_PROGRESS_REWARD`)
+
+Recovery ends — checked out of battle on the outdoor-coordinate path — when the
+agent's *current map* stage reaches `pre_wipe_best_stage`, or a deeper Center
+respawn was activated, or a badge was won. Then a one-time
+`post_wipe_front_recovered: +300` (`POST_WIPE_FRONT_RECOVERED_REWARD`) and
+`post_wipe_recovery = False`. The `party_wiped: -100` charge and the
+Center-respawn teleport are unchanged.
+
+**Story priority the shaping encodes:** Route 1 → Viridian → Viridian Center →
+Route 2 → Viridian Forest → (optional Pikachu) → Pewter → Pewter Center →
+Pewter Gym → Brock → badge 1.
+
+**Deploy:** full stop, backup + delete `exploration_memory/agent_*.json` +
+`reward_events.json`, `global_progress.json` → `max_world_stage 0` (fleet and the
+watcher's isolated dir), keep all model / skill zips, `champion_score.json`,
+`model_version.json`, savestates and stage checkpoints; full start. Backups under
+`brain_backups/V19_*`.
+
 ## 2026-09-06 — V18: per-run tile ladder, one-time fleet bonuses, battle rebalance, dashboard
 
 Full trainer + watcher + web restart (brain kept: learner ~21.5M, champion v9).

@@ -41,7 +41,7 @@ os.makedirs(STATS_DIR, exist_ok=True)
 
 
 class PokemonFireRedEnv(gym.Env):
-    BUILD_TAG = "V16_CLEAN_FULL_BRAIN"
+    BUILD_TAG = "V19_BROCK_RUSH"
     metadata = {"render_modes": []}
 
     # Training V2 nutzt feste Spezialisten statt einer 90/10-Zufallsquote.
@@ -82,10 +82,11 @@ class PokemonFireRedEnv(gym.Env):
     # neu validierte Stage bekommt ihre eigenen FRONTIER_SCOUT_SLOTS Scouts
     # dazu, bestehende Stages behalten ihre.
     # V18: 5 -> 2 zurueck. Die Scouts kommen gut durch, die Full-Runner nicht -
-    # bei 5 Scouts/Stage (und mehreren Stages) fraessen sie zu viel Flotte auf,
-    # sodass zu wenige Agenten den vollstaendigen Lauf ab Pallet ueben. Der
-    # Loewenanteil soll wieder Champion-vergleichbare Full-Runs liefern.
-    FRONTIER_SCOUT_SLOTS = 2
+    # bei 5 Scouts/Stage (und mehreren Stages) fraessen sie zu viel Flotte auf.
+    # V19: 2 -> 3. Der Weg bis Brock ist laenger (Route 2 / Wald / Marmoria /
+    # Arena) - etwas mehr Scout-Lerndaten an den tiefen Checkpoints helfen,
+    # ohne die Full-Runner-Mehrheit zu gefaehrden.
+    FRONTIER_SCOUT_SLOTS = 3
     PROGRESS_STALL_TIMEOUT = 12000
     POST_STARTER_STALL_TIMEOUT = 12000
     STARTER_RUSH_TIMEOUT = 5000
@@ -196,18 +197,22 @@ class PokemonFireRedEnv(gym.Env):
     # der Kachel gebunden, NICHT am Gesamtfortschritt): Alabastia zahlt fast
     # nichts (Spawn-Gebiet), ab Route 1 springt es hoch. So schlaegt die
     # "Menge Kacheln hier" (Pallet) nie die "hoehere Rate da vorne" (Route 1+).
+    # V19 BROCK RUSH: flachere Kachel-Leiter. Kacheln sind nur noch die
+    # "bleib in Bewegung"-Wuerze; den echten Zug nach vorn machen jetzt
+    # STAGE_ADVANCE_REWARD (+250/neue Stufe), TARGET_PROGRESS_REWARD
+    # (Graph-Distanz +/-0.20) und die Stadt-/Gym-Meilensteine.
     TILE_REWARD_BY_STAGE = {
-        1: 0.2,   # Alabastia / Pallet Town - Spawn-Gebiet, Erkunden bringt fast
-                  #   nichts; erst der Vorstoss nach vorne zahlt richtig.
-        2: 3.0,   # Route 1
-        3: 4.0,   # Vertania / Viridian City
-        4: 5.0,   # Route 2
-        5: 5.0,   # Vertania-Wald / Viridian Forest
-        6: 6.0,   # Marmoria / Pewter City
+        1: 0.1,   # Alabastia / Pallet Town - Spawn, praktisch wertlos
+        2: 1.5,   # Route 1
+        3: 2.0,   # Vertania / Viridian City
+        4: 2.5,   # Route 2
+        5: 3.0,   # Vertania-Wald / Viridian Forest
+        6: 3.0,   # Marmoria / Pewter City
     }
-    # Innenraeume nach Stadt-Bank: Alabastia-Haeuser (4) = 0.2 (wie Alabastia
-    # aussen), Vertania (5) = 2, Marmoria (6) = 3.
-    INTERIOR_TILE_REWARD_BY_BANK = {4: 0.2, 5: 2.0, 6: 3.0}
+    # Innenraeume nach Stadt-Bank, jeweils unter der Aussen-Kachel ihrer Stadt:
+    # Alabastia-Haeuser (4) = 0.1 (wie Alabastia aussen), Vertania (5) = 1.0,
+    # Marmoria (6) = 1.5 (~halbe Stadt).
+    INTERIOR_TILE_REWARD_BY_BANK = {4: 0.1, 5: 1.0, 6: 1.5}
     INTERIOR_TILE_REWARD_DEFAULT = 1.0
     # Fleet-weit EINMALIGER Zusatz obendrauf, sobald irgendein Agent eine
     # Kachel zum allerersten Mal ueberhaupt betritt (shared_tiles). Trimmt das
@@ -227,18 +232,16 @@ class PokemonFireRedEnv(gym.Env):
     # Innenraeume kleiner gedeckelt (15): ein neues Haus soll man einmal
     # aufdecken koennen, danach zaehlt nichts mehr - kein Gebaeude-Tour-Farm.
     INTERIOR_TILE_CAP_PER_MAP = 15
-    # V18: nach dem Deckel zahlen neue Kacheln noch 20 % - kein Farm (duenn
-    # verteilt, eine Fahrt zur naechsten Stadt bleibt 100x mehr wert), aber ein
-    # durchgehendes "lauf ins Unerkundete = leicht positiv"-Signal, sodass eine
-    # festgefahrene Policy auf einer gedeckelten Karte nie in einer Totzone
-    # ohne Gradient zum Ausgang haengt (sonst: nur noch Kaempfen am Ort).
-    TILE_REWARD_AFTER_CAP_FACTOR = 0.2
+    # V18/V19: nach dem Deckel zahlen neue Kacheln nur noch 10 % - minimaler
+    # "lauf ins Unerkundete"-Krumen gegen Totzonen, aber die Graph-Distanz-
+    # Belohnung (TARGET_PROGRESS_REWARD) uebernimmt jetzt die Wegfuehrung.
+    TILE_REWARD_AFTER_CAP_FACTOR = 0.1
     # V17.4: kein fleet-weiter Einmal-Jackpot mehr fuer die allererste Map-
     # Entdeckung (ehem. NEW_MAP_REWARD=500, ging strukturell nur an einen
     # einzigen Agenten je Map) - jetzt EIN Wert pro Run, fuer JEDEN Agenten
     # gleich. Route/Gebaeude 100, echte Stadt 250 (siehe CITY_EPISODE_REWARD
     # unten).
-    EPISODE_NEW_MAP_REWARD = 25.0
+    EPISODE_NEW_MAP_REWARD = 50.0   # V19: 25 -> 50 (neue Route erstmals/Lauf)
     # V18: Innenraeume einer echten Stadt (Bank 5 = Vertania, Bank 6 = Marmoria)
     # sind es wert, einmal reinzuschauen - Arena (Orden!), Laden, Haeuser.
     # Fleet-weit EINMALIGER Fund pro Gebaeude-Map (claim_event key
@@ -282,8 +285,10 @@ class PokemonFireRedEnv(gym.Env):
     # bessere Wahl bleibt) plus ein levelskalierter Aufschlag: bei gleicher
     # Art lohnt sich das staerkere Exemplar, ohne dass Grinden in tiefem Gras
     # sinnvoll wird (Cap bei Level 20).
-    SPECIES_CAUGHT_FIRST_REWARD = 120.0
-    SPECIES_CAUGHT_LEVEL_BONUS = 4.0
+    # V19: 120 -> 50 / Level-Bonus 4 -> 2. Fangen soll bis Brock kein
+    # ernsthafter Anreiz gegen den Story-Vorstoss sein.
+    SPECIES_CAUGHT_FIRST_REWARD = 50.0
+    SPECIES_CAUGHT_LEVEL_BONUS = 2.0
     SPECIES_CAUGHT_LEVEL_BONUS_CAP = 20
     SPECIES_CAUGHT_DUPLICATE_PENALTY = 0.0
     # Pikachu ist im Vertania-Wald selten und nicht der reguelaere Weg
@@ -293,7 +298,13 @@ class PokemonFireRedEnv(gym.Env):
     # Run wieder gebraucht, nicht nur beim allerersten Fund ueberhaupt.
     PIKACHU_SPECIES_ID = 25
     PIKACHU_FOREST_MAP = (1, 0)
-    PIKACHU_FOREST_CAUGHT_REWARD = 1000.0
+    # V19: 1000 -> 400. Pikachu bleibt sinnvoll (Wasser-Konter fuer Rocko/Misty)
+    # und soll VOR Misty mitgenommen werden, ist aber KEIN Pflichtziel fuer
+    # Brock - der grosse Zug geht direkt Richtung Marmoria/Arena.
+    PIKACHU_FOREST_CAUGHT_REWARD = 400.0
+    # V19: einmal pro Episode, wenn Marmoria (Pewter) zum ersten Mal erreicht
+    # wird UND Pikachu schon in der Party ist. Anti-Farm: Episode-Flag.
+    PEWTER_WITH_PIKACHU_REWARD = 300.0
     # Kaempfe sind unbegrenzt wiederholbar (Wildgras respawnt), anders als
     # Kanten/Maps/Stufen, die pro Fleet-Leben nur einmal zahlen. Auf dem alten
     # Niveau (0.5/30/50) waere ein Kampf ~80-100 Reward in 20-40 Schritten -
@@ -322,12 +333,12 @@ class PokemonFireRedEnv(gym.Env):
     # V18: Trainer-/Arena-Kaempfe zahlen doppelt (Schaden) und sind vom
     # Wild-Abklingen ausgenommen - sie sind der eigentliche Story-Weg.
     TRAINER_BATTLE_REWARD_MULT = 2.0
-    LEVEL_GAIN_REWARD = 10.0
+    LEVEL_GAIN_REWARD = 15.0   # V19: 10 -> 15
     # V17.4: erster echter Orden-Reward als benannte Konstante statt
     # hartcodierter Inline-Zahl - gilt pro gewonnenem Orden (jede Episode
     # neu, kein Fleet-Claim: die Party wird bei jedem Reset zurueckgesetzt,
     # der Orden muss also in jedem Run neu erkaempft werden).
-    BADGE_EARNED_REWARD = 2000.0
+    BADGE_EARNED_REWARD = 3000.0   # V19: 2000 -> 3000 (pro Lauf)
     # V18: fleet-weit EINMALIGER Bonus, wenn die Flotte einen Orden zum
     # allerersten Mal ueberhaupt holt (pro Ordensnummer, reward_events.json
     # key badge_<n>_ever). Der 2000er oben bleibt pro Lauf (Party resettet).
@@ -352,8 +363,8 @@ class PokemonFireRedEnv(gym.Env):
     #     genutzte: Stadt-grosser Bonus, weil der Respawn vorgerueckt ist
     #   * Allererste Heilung ueberhaupt in GENAU diesem Center, fleet-weit
     #     dauerhaft (reward_events.json, key pc_heal_<bank>_<map>)
-    POKECENTER_ENTER_REWARD = 100.0
-    POKECENTER_ADVANCE_HEAL_REWARD = 250.0
+    POKECENTER_ENTER_REWARD = 50.0        # V19: 100 -> 50
+    POKECENTER_ADVANCE_HEAL_REWARD = 500.0  # V19: 250 -> 500 (Respawn-Anker!)
     POKECENTER_FIRST_HEAL_GLOBAL_REWARD = 1000.0
     # Bekannte Center-Innenraum-Maps -> world_stage ihrer Stadt. Wird
     # erweitert, sobald Scouts weitere Center-Map-IDs bestaetigen.
@@ -423,7 +434,11 @@ class PokemonFireRedEnv(gym.Env):
     # bestraft. So vergisst PPO den guten Weg nicht, wenn Novelty weg ist.
     # Welt-Exploration bekommt keine generischen Koordinaten-Ziele mehr.
     # Diese Ziele bevorzugten wiederholt Haeuser und Sackgassen.
-    TARGET_PROGRESS_REWARD = 0.0
+    # V19 BROCK RUSH: Graph-Distanz-Wegfuehrung wieder AN. Naeher zum
+    # bekannten Stage-Ziel (_target_coords_for_stage / _progress_targets_for_map,
+    # Graph-Distanz - NICHT Kompassrichtung) = +0.20, weiter weg = -0.20.
+    # Symmetrisch -> Hin-/Rueckweg netto 0, kein Nord-Bonus.
+    TARGET_PROGRESS_REWARD = 0.20
     EARLY_STORY_STEP_REWARD = 0.0
 
     EXPLORATION_MEMORY_ENABLED = True
@@ -439,7 +454,11 @@ class PokemonFireRedEnv(gym.Env):
     # sonst ist Im-Kreis-Laufen gratis (V15.1).
     V9_EXPLORER_NEW_TILE_BONUS = 0.0
     V9_EXPLORER_REPEAT_TILE_PENALTY = 0.0
-    STAGE_ADVANCE_REWARD = 0.0
+    # V19 BROCK RUSH: 0 -> 250. Zahlt NUR beim neuen Episode-Bestwert der
+    # world_stage (episode_best_stage) - Zuruecklaufen auf eine schon erreichte
+    # Stufe zahlt nichts (bestehende Logik, siehe unten). * stage_gain, also
+    # ein Stufensprung 1->2 = +250.
+    STAGE_ADVANCE_REWARD = 250.0
 
     # V13.4 NORD-KORRIDOR: NUR die geraden Nord-Strecken vor dem Wald. Auf
     # diesen Maps ist "hoch = Weg". Pro neuer noerdlichster Y-Reihe gibt es
@@ -529,7 +548,19 @@ class PokemonFireRedEnv(gym.Env):
     # Stadt vorstossen statt nur beim einmaligen globalen Fund belohnt zu
     # werden.
     CITY_MAPS = {STAGE_PALLET, STAGE_VIRIDIAN, STAGE_PEWTER}
-    CITY_EPISODE_REWARD = 250.0
+    CITY_EPISODE_REWARD = 300.0   # V19: 250 -> 300
+
+    # V19 BROCK RUSH: Pewter/Brock in kleine, anti-farm-gesicherte Meilensteine
+    # aufgeteilt. Alle nur EINMAL pro Episode (Episode-Flags), nicht durch
+    # Rein-/Rauslaufen oder wiederholtes Kampfstarten wiederholbar.
+    #   PEWTER_GYM_MAPS: Innenraum-Map(s) der Marmoria-Arena. ID noch NICHT
+    #     bestaetigt (Bank 6, wie Center (6,5)). Bis ein Scout sie meldet
+    #     bleibt der Betreten-Bonus inert; die Brock-/Trainer-Erkennung laeuft
+    #     ueber Trainer-Flag + world_stage 6 und ist davon unabhaengig.
+    PEWTER_GYM_MAPS = set()          # z.B. {(6, 4)} sobald bestaetigt
+    PEWTER_GYM_ENTER_REWARD = 200.0
+    BROCK_BATTLE_START_REWARD = 500.0
+    PEWTER_GYM_TRAINER_REWARD = 300.0
     SCOUT_STAGES = (2, 3, 4, 5, 6)  # FRONTIER_SCOUT_SLOTS scouts per validated checkpoint after Pallet.
     WORLD_ROLES = ("progress", "battle", "level", "badge", "full", "scout")
 
@@ -609,6 +640,12 @@ class PokemonFireRedEnv(gym.Env):
         self.pokecenter_entered_this_episode = set()
         self.pokemart_entered_this_episode = set()
         self.best_pokecenter_heal_stage = 0
+        # V19 BROCK RUSH: Pewter/Brock-Meilensteine - je einmal pro Episode.
+        self.episode_pewter_reached = False
+        self.episode_pewter_with_pikachu_rewarded = False
+        self.episode_pewter_gym_entered = False
+        self.episode_brock_battle_started = False
+        self.episode_pewter_gym_trainer_beaten = False
         self.last_party_total_level = 0
         self.indoor_steps_without_transition = 0
         self.battle_activity_open = False
@@ -1274,6 +1311,39 @@ class PokemonFireRedEnv(gym.Env):
             key=lambda p: abs(p[0] - x) + abs(p[1] - y)
         )[:8]
         return nearest
+
+    def _v19_forward_targets(self, bank, map_id):
+        """V19 BROCK RUSH: Koordinaten auf DIESER Karte, deren bekannte
+        Transition auf eine Karte mit HOEHERER world_stage fuehrt - bzw. auf
+        das Center der aktuellen Stadt (solange dieser Lauf dort noch nicht
+        geheilt hat) oder die Marmoria-Arena (solange Brock noch nicht lief).
+        Rein graph-basiert (_combined_transitions + _graph_distance im Aufrufer),
+        KEINE Kompassrichtung. Leer -> keine Wegfuehrung, dann greifen nur
+        Kachel-/Stage-Reward. Der Aufrufer bewertet symmetrisch (+/-), also
+        kein Farm-Loop durch Hin-und-Her.
+        """
+        here = (int(bank), int(map_id))
+        here_stage = self._current_world_stage(bank, map_id)
+        fwd_maps = {m for m, s in self.WORLD_STAGE_BY_MAP.items() if s > here_stage}
+        if here == self.STAGE_VIRIDIAN and self.best_pokecenter_heal_stage < 3:
+            fwd_maps |= {m for m, s in self.POKECENTER_MAPS.items() if s == 3}
+        if here == self.STAGE_PEWTER and not getattr(
+            self, "episode_brock_battle_started", False
+        ):
+            fwd_maps |= set(self.PEWTER_GYM_MAPS)
+        if not fwd_maps:
+            return []
+        targets = []
+        for t in self._combined_transitions():
+            if len(t) != 8:
+                continue
+            a = (int(t[0]), int(t[1]), int(t[2]), int(t[3]))
+            b = (int(t[4]), int(t[5]), int(t[6]), int(t[7]))
+            if (a[0], a[1]) == here and (b[0], b[1]) in fwd_maps:
+                targets.append((a[2], a[3]))
+            if (b[0], b[1]) == here and (a[0], a[1]) in fwd_maps:
+                targets.append((b[2], b[3]))
+        return list(dict.fromkeys(targets))
 
     def _nav_target(self, bank, map_id, x, y):
         cache_key = (
@@ -2923,6 +2993,12 @@ class PokemonFireRedEnv(gym.Env):
         self.pokecenter_entered_this_episode = set()
         self.pokemart_entered_this_episode = set()
         self.best_pokecenter_heal_stage = 0
+        # V19 BROCK RUSH: Pewter/Brock-Meilensteine - je einmal pro Episode.
+        self.episode_pewter_reached = False
+        self.episode_pewter_with_pikachu_rewarded = False
+        self.episode_pewter_gym_entered = False
+        self.episode_brock_battle_started = False
+        self.episode_pewter_gym_trainer_beaten = False
         self.last_party_total_level = 0
         self.indoor_steps_without_transition = 0
         self.battle_activity_open = False
@@ -3367,6 +3443,25 @@ class PokemonFireRedEnv(gym.Env):
             self.enemy_hp_min = {}
             self.enemy_fainted_rewarded = set()
             self._save_run_stats()
+            # V19 BROCK RUSH: erster Trainerkampf in Marmoria (Stadt-Map oder
+            # ein Bank-6-Innenraum = Arena) pro Episode = Brock-/Arenakampf
+            # gestartet. Anti-Farm: Episode-Flag, kein Re-Trigger durch
+            # Kampf-Neustart. Kompass-/Trainer-ID-unabhaengig.
+            _in_pewter = (
+                int(bank) == 6
+                or self._current_world_stage(bank, map_id) == 6
+            )
+            if (
+                _in_pewter
+                and self._is_trainer_battle()
+                and not self.episode_brock_battle_started
+            ):
+                self.episode_brock_battle_started = True
+                if self.BROCK_BATTLE_START_REWARD:
+                    reward += self.BROCK_BATTLE_START_REWARD
+                    reward_events.append(
+                        f"brock_battle_start:+{self.BROCK_BATTLE_START_REWARD:.0f}"
+                    )
         elif battle_just_ended:
             alive_pokemon = sum(
                 1 for mon in self.player_party_cache
@@ -3524,6 +3619,25 @@ class PokemonFireRedEnv(gym.Env):
                         f"pokemart_first_global:{_mart_key[0]}_{_mart_key[1]}:"
                         f"+{self.POKEMART_FIRST_GLOBAL_REWARD:.0f}"
                     )
+
+        # V19 BROCK RUSH: Marmoria-Arena erstmals pro Episode betreten.
+        # Anti-Farm: Episode-Flag. Inert bis PEWTER_GYM_MAPS eine bestaetigte
+        # Innenraum-Map enthaelt.
+        if (
+            (int(bank), int(map_id)) in self.PEWTER_GYM_MAPS
+            and not self.episode_pewter_gym_entered
+            and in_battle == 0
+        ):
+            self.episode_pewter_gym_entered = True
+            if (
+                not self.wipe_active
+                and self.route_steps >= self._post_wipe_reward_cooldown_until
+                and self.PEWTER_GYM_ENTER_REWARD
+            ):
+                reward += self.PEWTER_GYM_ENTER_REWARD
+                reward_events.append(
+                    f"pewter_gym_enter:+{self.PEWTER_GYM_ENTER_REWARD:.0f}"
+                )
 
         # V10.27A: Die gesamte Party statt nur Pokemon-Slot 1 bewerten.
         if self.player_party_cache:
@@ -3903,6 +4017,24 @@ class PokemonFireRedEnv(gym.Env):
                                 reward_events.append(
                                     f"enemy_faint{_faint_tag}:+{faint_reward:.2f}"
                                 )
+                            # V19 BROCK RUSH: erstes gegnerisches KO in einem
+                            # Trainerkampf in Marmoria pro Episode. NAEHERUNG:
+                            # ohne Trainer-ID-RAM nicht sicher vom ersten
+                            # Brock-Pokemon zu trennen, falls der Arena-Trainer
+                            # uebersprungen wird. Anti-Farm: Episode-Flag.
+                            if (
+                                not self.episode_pewter_gym_trainer_beaten
+                                and self._is_trainer_battle()
+                                and (int(bank) == 6
+                                     or self._current_world_stage(bank, map_id) == 6)
+                            ):
+                                self.episode_pewter_gym_trainer_beaten = True
+                                if self.PEWTER_GYM_TRAINER_REWARD:
+                                    reward += self.PEWTER_GYM_TRAINER_REWARD
+                                    reward_events.append(
+                                        "pewter_gym_trainer_ko:"
+                                        f"+{self.PEWTER_GYM_TRAINER_REWARD:.0f}"
+                                    )
                         self._save_run_stats()
 
         # ---------------------------------------------------------
@@ -4839,6 +4971,26 @@ class PokemonFireRedEnv(gym.Env):
                             f"+{self.GLOBAL_STAGE_RECORD_REWARD:.0f}"
                         )
 
+            # V19 BROCK RUSH: Marmoria (Pewter, Stage 6) erstmals in dieser
+            # Episode erreicht - mit Pikachu bereits in der Party einmalig
+            # extra (Pikachu VOR Misty mitnehmen, aber kein Brock-Pflichtziel).
+            # Anti-Farm: Episode-Flag.
+            if (
+                _location_stage == 6
+                and loc.get("trusted")
+                and not self.episode_pewter_reached
+            ):
+                self.episode_pewter_reached = True
+                _has_pika = any(
+                    int(m.get("species_id", 0)) == self.PIKACHU_SPECIES_ID
+                    for m in (self.player_party_cache or [])
+                )
+                if _has_pika and self.PEWTER_WITH_PIKACHU_REWARD:
+                    reward += self.PEWTER_WITH_PIKACHU_REWARD
+                    reward_events.append(
+                        f"pewter_with_pikachu:+{self.PEWTER_WITH_PIKACHU_REWARD:.0f}"
+                    )
+
             # Each geographic stage competes by north position, then reward.
             # A full runner may improve Route 1 even after reaching the forest.
             if (
@@ -5054,6 +5206,12 @@ class PokemonFireRedEnv(gym.Env):
                             targets = self._progress_targets_for_map(
                                 bank, map_id, x, y
                             )
+                        # V19: fuer die Welt-Rollen auf einer Aussenmap liefern
+                        # die beiden oben bewusst nichts (generische Ziele
+                        # bevorzugten Haeuser/Sackgassen). Stattdessen exakt die
+                        # Transition Richtung naechster Stufe / Center / Arena.
+                        if not targets and self.left_house_rewarded:
+                            targets = self._v19_forward_targets(bank, map_id)
                         if targets:
                             target_step_reward = (
                                 self.EARLY_STORY_STEP_REWARD

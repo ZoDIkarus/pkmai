@@ -42,14 +42,14 @@ class WorldStageTests(unittest.TestCase):
         # V18: Kachel-Erstfund zahlt PRO LAUF (seen_coords, jede Episode neu),
         # handgesetzte Leiter pro Story-Aussenmap, Innenraeume nach Stadt-Bank,
         # plus ein fleet-weit einmaliger +GLOBAL_NEW_TILE_BONUS obendrauf.
-        # V18: Alabastia (Spawn) fast wertlos pro Kachel, danach steile Leiter -
-        # "Menge hier" darf "Rate da vorne" nicht schlagen.
+        # V19: Alabastia (Spawn) fast wertlos, monoton steigende Leiter - die
+        # Kacheln sind nur "bleib in Bewegung"-Wuerze, der Zug nach vorn kommt
+        # von STAGE_ADVANCE_REWARD + TARGET_PROGRESS_REWARD + Meilensteinen.
         self.assertLessEqual(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[1], 0.5)  # Pallet
-        self.assertEqual(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[2], 3.0)   # Route 1
-        self.assertEqual(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[3], 4.0)   # Viridian
-        self.assertEqual(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[6], 6.0)   # Pewter
-        self.assertGreater(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[2],
-                           PokemonFireRedEnv.TILE_REWARD_BY_STAGE[1] * 4)
+        _tld = PokemonFireRedEnv.TILE_REWARD_BY_STAGE
+        for s in range(1, 6):
+            self.assertLessEqual(_tld[s], _tld[s + 1])
+        self.assertGreater(_tld[2], _tld[1] * 4)
         self.assertEqual(PokemonFireRedEnv.GLOBAL_NEW_TILE_BONUS, 1.0)
         # V18: pro Karte/Episode zahlen nur die ersten N neuen Kacheln die
         # Leiter - sonst wird das Abgrasen einer grossen Karte ein farmbarer

@@ -177,6 +177,45 @@ class ProgressRegressionTests(unittest.TestCase):
         # A non-wild map (e.g. a city / trainer fight) never decays.
         self.assertEqual(e._wild_battle_scale(3, 1), 1.0)
 
+    def test_v19_brock_rush_milestones_and_flags(self):
+        self.assertEqual(PokemonFireRedEnv.BUILD_TAG, "V19_BROCK_RUSH")
+        self.assertEqual(PokemonFireRedEnv.STAGE_ADVANCE_REWARD, 250.0)
+        self.assertEqual(PokemonFireRedEnv.TARGET_PROGRESS_REWARD, 0.20)
+        self.assertEqual(PokemonFireRedEnv.FRONTIER_SCOUT_SLOTS, 3)
+        # neue Meilenstein-Konstanten
+        self.assertEqual(PokemonFireRedEnv.PEWTER_WITH_PIKACHU_REWARD, 300.0)
+        self.assertEqual(PokemonFireRedEnv.PEWTER_GYM_ENTER_REWARD, 200.0)
+        self.assertEqual(PokemonFireRedEnv.BROCK_BATTLE_START_REWARD, 500.0)
+        self.assertEqual(PokemonFireRedEnv.PEWTER_GYM_TRAINER_REWARD, 300.0)
+        # jeder Meilenstein hat ein Episode-Flag, in __init__ UND reset() auf
+        # False gesetzt (Anti-Farm: einmal pro Episode).
+        import inspect
+        src = inspect.getsource(PokemonFireRedEnv)
+        for f in ("episode_pewter_reached", "episode_pewter_with_pikachu_rewarded",
+                  "episode_pewter_gym_entered", "episode_brock_battle_started",
+                  "episode_pewter_gym_trainer_beaten"):
+            self.assertGreaterEqual(src.count(f"self.{f} = False"), 2, f)
+        # V19: alte Edge-/Warp-Farm-Rewards bleiben aus
+        for c in ("NEW_EDGE_REWARD", "EPISODE_EDGE_REWARD", "REPLAY_EDGE_REWARD",
+                  "REPLAY_TRANSITION_REWARD", "EPISODE_TRANSITION_REWARD",
+                  "CORRIDOR_STEP_REWARD", "NORTH_CORRIDOR_ROW_REWARD"):
+            self.assertEqual(getattr(PokemonFireRedEnv, c), 0.0, c)
+
+    def test_v19_forward_targets_point_only_forward(self):
+        e = bare_env(best_pokecenter_heal_stage=3, episode_brock_battle_started=False)
+        # Route 1 (stage 2) kennt eine Transition nach Viridian (3) und eine
+        # zurueck nach Pallet (1).
+        e._combined_transitions = lambda: [
+            (3, 19, 4, 0, 3, 1, 20, 39),    # Route 1 -> Viridian (vorwaerts)
+            (3, 19, 4, 39, 3, 0, 5, 0),     # Route 1 -> Pallet (rueckwaerts)
+        ]
+        t = e._v19_forward_targets(3, 19)
+        self.assertIn((4, 0), t)            # nur der Vorwaerts-Ausgang
+        self.assertNotIn((4, 39), t)        # NICHT der Rueckweg
+        # Auf der tiefsten bekannten Karte ohne Vorwaerts-Transition: leer.
+        e._combined_transitions = lambda: [(3, 2, 1, 1, 3, 1, 2, 2)]  # Pewter->Viridian (rueck)
+        self.assertEqual(e._v19_forward_targets(3, 2), [])
+
     def test_battle_rewards_only_continuous_signals(self):
         # V18: im Kampf zaehlen nur Schaden/Heilung/Level/Fangen - kein
         # pauschaler KO- oder Sieg-Bonus mehr.
@@ -186,16 +225,16 @@ class ProgressRegressionTests(unittest.TestCase):
         self.assertGreater(PokemonFireRedEnv.LEVEL_GAIN_REWARD, 0.0)
         self.assertGreater(PokemonFireRedEnv.SPECIES_CAUGHT_FIRST_REWARD, 0.0)
 
-    def test_advancing_pokecenter_heal_beats_a_new_species_but_not_a_city(self):
-        # V18: reaching a deeper Center (respawn point moves forward) must
-        # out-weigh catching yet another mon, yet stay below a real city so
-        # pushing forward is still the better choice.
+    def test_advancing_pokecenter_heal_is_a_serious_progress_anchor(self):
+        # V19: der tiefere Center verschiebt den Wipe-Respawn dauerhaft nach
+        # vorn - das ist der wichtigste Anti-Rueckschlag-Anker und darf einen
+        # neuen Fang klar schlagen (Fangen ist bis Brock bewusst klein).
         cap = PokemonFireRedEnv.SPECIES_CAUGHT_LEVEL_BONUS_CAP
         best_catch = (PokemonFireRedEnv.SPECIES_CAUGHT_FIRST_REWARD
                       + cap * PokemonFireRedEnv.SPECIES_CAUGHT_LEVEL_BONUS)
         self.assertLess(best_catch, PokemonFireRedEnv.POKECENTER_ADVANCE_HEAL_REWARD)
-        self.assertLessEqual(PokemonFireRedEnv.POKECENTER_ADVANCE_HEAL_REWARD,
-                             PokemonFireRedEnv.CITY_EPISODE_REWARD)
+        self.assertGreaterEqual(PokemonFireRedEnv.POKECENTER_ADVANCE_HEAL_REWARD,
+                                PokemonFireRedEnv.CITY_EPISODE_REWARD)
         for m in PokemonFireRedEnv.POKECENTER_HEAL_MAPS:
             self.assertIn(m, PokemonFireRedEnv.POKECENTER_MAPS)
 

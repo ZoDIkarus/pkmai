@@ -3,6 +3,44 @@
 > **Big deferred changes** (FighterBrain, forest-exit house) live in
 > `docs/BIG_CHANGES_TODO.md`.
 
+## 2026-09-06 — V19 BROCK RUSH (`BUILD_TAG = "V19_BROCK_RUSH"`)
+
+Ziel: schnellerer echter Story-Fortschritt bis Orden 1, ohne neue Reward-Loops.
+Bestehende Logik weiterverwendet, alle Anti-Farm-Fixes erhalten. 71 Tests grün.
+
+**Geänderte Konstanten:** `FRONTIER_SCOUT_SLOTS` 2→3 · `TILE_REWARD_BY_STAGE`
+{1:0.1, 2:1.5, 3:2.0, 4:2.5, 5:3.0, 6:3.0} (flacher — Kacheln sind nur noch
+Bewegungs-Würze) · `TILE_REWARD_AFTER_CAP_FACTOR` 0.2→0.1 · `INTERIOR_TILE_REWARD_BY_BANK`
+{4:0.1, 5:1.0, 6:1.5} · `EPISODE_NEW_MAP_REWARD` 25→50 · `CITY_EPISODE_REWARD` 250→300
+· `STAGE_ADVANCE_REWARD` 0→**250** (nur neuer Episode-Bestwert, `_world_stage()` ist
+monoton je Episode → nicht durch Zurücklaufen farmbar) · `TARGET_PROGRESS_REWARD`
+0→**0.20** · `SPECIES_CAUGHT_FIRST_REWARD` 120→50 · `SPECIES_CAUGHT_LEVEL_BONUS` 4→2
+· `PIKACHU_FOREST_CAUGHT_REWARD` 1000→400 · `LEVEL_GAIN_REWARD` 10→15 ·
+`POKECENTER_ENTER_REWARD` 100→50 · `POKECENTER_ADVANCE_HEAL_REWARD` 250→**500** ·
+`BADGE_EARNED_REWARD` 2000→3000. Deaktiviert bleiben alle Edge-/Warp-/Korridor-Rewards.
+
+**Neue Konstanten:** `PEWTER_WITH_PIKACHU_REWARD 300` · `PEWTER_GYM_MAPS` (leer, ID
+unbestätigt) · `PEWTER_GYM_ENTER_REWARD 200` · `BROCK_BATTLE_START_REWARD 500` ·
+`PEWTER_GYM_TRAINER_REWARD 300`.
+
+**Neue Episode-Flags** (Anti-Farm, in `__init__` + `reset()` auf False):
+`episode_pewter_reached`, `episode_pewter_with_pikachu_rewarded`,
+`episode_pewter_gym_entered`, `episode_brock_battle_started`,
+`episode_pewter_gym_trainer_beaten`.
+
+**Graph-Distanz-Wegführung:** `_v19_forward_targets(bank, map_id)` liefert die
+Transition-Koords auf der aktuellen Karte, die auf eine Karte höherer world_stage
+führen (bzw. Viridian-Center solange ungeheilt, Marmoria-Arena solange kein
+Brock-Kampf). Eingehängt als 3. Fallback im bestehenden `target_closer/target_farther`-
+Block (symmetrisch ±0.20, Hin/Rück netto 0, keine Kompassrichtung).
+
+**Gym/Brock-Erkennung:** `brock_battle_start` = erster Trainerkampf (`_is_trainer_battle`,
+`raw_flags & 0x8`) mit `bank == 6` **oder** `_current_world_stage == 6`, 1×/Episode.
+`pewter_gym_trainer_ko` = erstes gegn. KO in so einem Kampf — **Näherung**, ohne
+Trainer-ID-RAM nicht sicher vom ersten Brock-Pokémon zu trennen, falls der
+Arena-Trainer übersprungen wird. `pewter_gym_enter` inert bis `PEWTER_GYM_MAPS`
+eine bestätigte Map hat. Badge weiter über `info["badges"]`-Bitmaske (zuverlässig).
+
 ## 2026-09-06 — V18: per-run tile ladder, Pokécenter/Mart/badge globals, battle rebalance, dashboard fixes
 
 Full trainer + watcher + web restart, brain kept (learner ~21.5M, champion v9).

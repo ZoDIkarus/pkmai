@@ -10,15 +10,20 @@ Only the trainer learns. The watcher evaluates current `pokemon_model_resume.zip
 snapshots, independently of champion promotion. The protected fallback is stored
 as `pokemon_model_champion.zip`. Snapshot publication is atomic.
 
-Reward model as of V18 (see the dated section below for detail): tiles pay
-**per run** on a steep hand-set ladder (Pallet ~0, Route 1 3 … Pewter 6), first
-20 per map per episode then 20 %, plus +1 fleet-once. New route 25/run, city
-building 500-once, city 250/run, first global stage unlock 1000-once, per-run
-stage bonus 0, no directional bonus. Pokécenter, Poké Mart and the first badge
-each add a one-time fleet-wide bonus (1000 / 1000 / 5000) on top of their per-run
-value. **In a battle only continuous signals pay** — dealt/taken damage, healing,
-level-up, catching; no flat KO or win bonus. Trainer battles pay double on damage
-and skip the wild decay (30 % after 6 wild wins). Persistent claim history
+Reward model as of **V19 BROCK RUSH** (see the dated section in `docs/STATUS_TODO.md`
+for the full list): the push forward comes from `STAGE_ADVANCE_REWARD` (+250 per new
+world-stage, new episode best only) and `TARGET_PROGRESS_REWARD` (±0.20 graph-distance
+toward the transition that leads to the next stage / the city's Center / the gym —
+symmetric, no compass bias). Tiles are just a flat "keep moving" trickle (Pallet 0.1
+… Pewter 3.0, first 20/map/episode then 10 %, +1 fleet-once). New route 50/run, city
+300/run, city building 500-once, first global stage unlock 1000-once. Pokécenter
+enter 50/run, **deeper heal 500/run** (wipe respawn anchor), 1000-once; Poké Mart
+100/run + 1000-once; badge 3000/run + 5000-once. Pewter/Brock split into small
+episode-flagged milestones (reach Pewter with Pikachu +300, gym enter +200, Brock
+battle start +500, first gym KO +300). **In a battle only continuous signals pay** —
+dealt/taken damage, healing, level-up, catching; no flat KO or win bonus. Trainer
+battles pay double on damage and skip the wild decay (30 % after 6 wild wins).
+All edge/warp/corridor farm rewards stay off. Persistent claim history
 (`reward_events.json`) keeps every one-time bonus one-time across restarts.
 
 ## 2026-09-06 — V18: per-run tile ladder, one-time fleet bonuses, battle rebalance, dashboard

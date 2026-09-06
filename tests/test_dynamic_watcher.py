@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from dynamic_watcher import (
+    append_recent_reward_events,
     annotate_frame,
     choose_watcher_action,
     select_published_model,
@@ -60,6 +61,14 @@ class DynamicWatcherTests(unittest.TestCase):
 
         self.assertEqual(telemetry["reward"], -0.501)
         self.assertEqual(telemetry["reward_events"], ["battle_hp_stagnant:-0.50"])
+
+    def test_retains_a_recent_training_event_beyond_the_trigger_step(self):
+        events = append_recent_reward_events(
+            ["battle_hp_stagnant:-0.50"],
+            [],
+        )
+
+        self.assertEqual(events, ["battle_hp_stagnant:-0.50"])
 
     def test_samples_the_policy_distribution_instead_of_always_taking_argmax(self):
         class BalancedPolicy:

@@ -79,6 +79,17 @@ def watcher_telemetry(
     }
 
 
+def append_recent_reward_events(
+    recent_events: list[str], current_events: list[str] | None
+) -> list[str]:
+    """Keep recent public reward events visible beyond their single trigger step."""
+    return [
+        str(event)[:120]
+        for event in [*recent_events, *(current_events or [])]
+        if isinstance(event, str)
+    ][-8:]
+
+
 def write_watcher_status(
     status_file: Path, policy_version: int, action: int, telemetry: dict | None = None
 ) -> None:
@@ -113,6 +124,7 @@ def main() -> None:
     policy_version = -1
     signature = None
     last_reload = 0.0
+    recent_reward_events: list[str] = []
     observation, _ = env.reset()
     try:
         while True:
@@ -132,6 +144,10 @@ def main() -> None:
                     continue
             action = choose_watcher_action(policy, observation)
             observation, reward, terminated, truncated, info = env.step(action)
+            recent_reward_events = append_recent_reward_events(
+                recent_reward_events,
+                info.get("reward_events"),
+            )
             write_watcher_stream_frame(
                 annotate_frame(env.env.get_screen(), policy_version, action),
                 PROJECT_ROOT / "runtime" / "watcher.jpg",
@@ -140,7 +156,7 @@ def main() -> None:
                 WATCHER_STATUS_FILE,
                 policy_version,
                 action,
-                watcher_telemetry(env, reward, info.get("reward_events")),
+                watcher_telemetry(env, reward, recent_reward_events),
             )
             if terminated or truncated:
                 observation, _ = env.reset()

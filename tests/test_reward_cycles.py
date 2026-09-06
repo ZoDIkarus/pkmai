@@ -81,6 +81,25 @@ class V17RewardTuningTests(unittest.TestCase):
             PokemonFireRedEnv._warp_pair_key(5, 4, 3, 0),
         )
 
+    def test_tile_ladder_caps_each_map_but_keeps_a_small_rest_value(self):
+        env = object.__new__(PokemonFireRedEnv)
+        env._episode_tiles_by_map = {(3, 19): set(range(20))}
+        self.assertAlmostEqual(
+            PokemonFireRedEnv._tile_reward(env, 3, 19, 20, 1),
+            0.6,
+        )
+        self.assertEqual(
+            PokemonFireRedEnv._tile_reward(env, 5, 4, 0, 1),
+            2.0,
+        )
+
+    def test_scout_backtracking_does_not_pay_below_its_start_stage(self):
+        env = object.__new__(PokemonFireRedEnv)
+        env.training_objective = "scout"
+        env.scout_start_stage = 3
+        self.assertFalse(PokemonFireRedEnv._can_reward_exploration(env, 2))
+        self.assertTrue(PokemonFireRedEnv._can_reward_exploration(env, 4))
+
     def test_stuck_penalty_grows_continuously_without_a_discontinuity(self):
         self.assertEqual(stuck_loop_penalty(59), 0.0)
         self.assertEqual(stuck_loop_penalty(60), -0.001)

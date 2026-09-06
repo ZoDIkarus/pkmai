@@ -234,12 +234,17 @@ class PokemonFireRedEnv(gym.Env):
         self.last_in_battle = 0
         self.battle_state = BattleState()
         self.wipe_active = False
+        self._party_had_living_member = False
+        self._pending_party_wipe = False
+        self._known_party_species = set()
+        self._pending_catches = []
         self._post_wipe_reward_cooldown_until = 0
         self.episode_caught_species = set()
         self.pokecenter_entered_this_episode = set()
         self.pokemart_entered_this_episode = set()
         self.best_pokecenter_heal_stage = 0
         self._episode_tiles_by_map = {}
+        self.scout_start_stage = None
         self.episode_battles_started = 0
         self.episode_battles_completed = 0
         self.enemy_party_cache = []
@@ -618,6 +623,37 @@ class PokemonFireRedEnv(gym.Env):
         if self.training_objective == "scout":
             return self.SCOUT_STALL_TIMEOUT
         return self.PROGRESS_STALL_TIMEOUT
+
+    @staticmethod
+    def _tile_stage(bank, map_id):
+        """Coarse FireRed frontier stage used only for exploration shaping."""
+        if int(bank) in PokemonFireRedEnv.INTERIOR_TILE_REWARD_BY_BANK:
+            return 1
+        return {
+            (3, 0): 1,   # Pallet
+            (3, 19): 2,  # Route 1
+            (3, 20): 3,  # Viridian approach
+        }.get((int(bank), int(map_id)), 4)
+
+    def _can_reward_exploration(self, stage):
+        if self.training_objective != "scout":
+            return True
+        return int(stage) > int(getattr(self, "scout_start_stage", stage))
+
+    def _tile_reward(self, bank, map_id, x, y):
+        map_key = (int(bank), int(map_id))
+        tiles = self._episode_tiles_by_map.setdefault(map_key, set())
+        tile = (int(x), int(y))
+        if tile in tiles:
+            return 0.0
+        tiles.add(tile)
+        if int(bank) in self.INTERIOR_TILE_REWARD_BY_BANK:
+            base = self.INTERIOR_TILE_REWARD_BY_BANK[int(bank)]
+        else:
+            base = self.TILE_REWARD_BY_STAGE[self._tile_stage(bank, map_id)]
+        if len(tiles) > self.TILE_REWARD_CAP_PER_MAP:
+            base *= self.TILE_REWARD_AFTER_CAP_FACTOR
+        return base
 
     @staticmethod
     def _warp_pair_key(from_bank, from_map, to_bank, to_map):
@@ -1875,12 +1911,17 @@ class PokemonFireRedEnv(gym.Env):
         self.episode_enemy_faints = 0
         self.battle_state = BattleState()
         self.wipe_active = False
+        self._party_had_living_member = False
+        self._pending_party_wipe = False
+        self._known_party_species = set()
+        self._pending_catches = []
         self._post_wipe_reward_cooldown_until = 0
         self.episode_caught_species = set()
         self.pokecenter_entered_this_episode = set()
         self.pokemart_entered_this_episode = set()
         self.best_pokecenter_heal_stage = 0
         self._episode_tiles_by_map = {}
+        self.scout_start_stage = None
         self.seen_coords = set()
         self.visited_maps = set()
         # V10.23: pro Episode erneut belohnen, wenn eine bekannte Map oder ein
@@ -2222,6 +2263,29 @@ class PokemonFireRedEnv(gym.Env):
             except Exception:
                 pass
 
+        if self.player_party_cache:
+            current_species = {
+                int(mon.get("species_id", 0))
+                for mon in self.player_party_cache
+                if int(mon.get("species_id", 0)) > 0
+            }
+            if self.has_starter:
+                for mon in self.player_party_cache:
+                    species = int(mon.get("species_id", 0))
+                    if species > 0 and species not in self._known_party_species:
+                        self._pending_catches.append((species, int(mon.get("level", 1))))
+            self._known_party_species.update(current_species)
+            party_has_living_member = any(
+                int(mon.get("cur_hp", 0)) > 0
+                for mon in self.player_party_cache
+            )
+            if self._party_had_living_member and not party_has_living_member:
+                self._pending_party_wipe = True
+                self.wipe_active = True
+            elif party_has_living_member:
+                self.wipe_active = False
+            self._party_had_living_member = party_has_living_member
+
         if (
             self.total_steps == 1
             or self.total_steps % self.SHARED_SNAPSHOT_EVERY == 0
@@ -2240,6 +2304,46 @@ class PokemonFireRedEnv(gym.Env):
         reward_events = []
         truncated = False
         objective_done = False
+
+        if self._pending_party_wipe:
+            reward += self._record_party_wipe(reward_events)
+            self._pending_party_wipe = False
+
+        while self._pending_catches:
+            species, level = self._pending_catches.pop(0)
+            if species not in self.episode_caught_species:
+                self.episode_caught_species.add(species)
+                catch_reward = self.SPECIES_CAUGHT_FIRST_REWARD + 4.0 * min(level, 20)
+                reward += catch_reward
+                reward_events.append(f"new_species:{species}:+{catch_reward:.0f}")
+
+        map_key = (bank, map_id)
+        if gameplay_ready and not self._wipe_cooldown_active():
+            if map_key in self.POKECENTER_MAPS and map_key not in self.pokecenter_entered_this_episode:
+                self.pokecenter_entered_this_episode.add(map_key)
+                reward += self.POKECENTER_ENTER_REWARD
+                reward_events.append(f"pokecenter_enter:{bank}:{map_id}:+{self.POKECENTER_ENTER_REWARD:.0f}")
+                party_is_fully_healed = bool(self.player_party_cache) and all(
+                    int(mon.get("max_hp", 0)) > 0
+                    and int(mon.get("cur_hp", 0)) == int(mon.get("max_hp", 0))
+                    for mon in self.player_party_cache
+                )
+                if map_key in self.POKECENTER_HEAL_MAPS and party_is_fully_healed:
+                    stage = self._tile_stage(bank, map_id)
+                    if stage > self.best_pokecenter_heal_stage:
+                        self.best_pokecenter_heal_stage = stage
+                        reward += self.POKECENTER_HEAL_ADVANCE_REWARD
+                        reward_events.append(f"pokecenter_heal_advance:+{self.POKECENTER_HEAL_ADVANCE_REWARD:.0f}")
+                    if claim_event(SHARED_CURRICULUM_DIR, f"pc_heal_{bank}_{map_id}"):
+                        reward += self.POKECENTER_FIRST_HEAL_GLOBAL_REWARD
+                        reward_events.append(f"pokecenter_heal_global:+{self.POKECENTER_FIRST_HEAL_GLOBAL_REWARD:.0f}")
+            if map_key in self.POKEMART_MAPS and map_key not in self.pokemart_entered_this_episode:
+                self.pokemart_entered_this_episode.add(map_key)
+                reward += self.POKEMART_ENTER_REWARD
+                reward_events.append(f"pokemart_enter:{bank}:{map_id}:+{self.POKEMART_ENTER_REWARD:.0f}")
+                if claim_event(SHARED_CURRICULUM_DIR, f"mart_enter_{bank}_{map_id}"):
+                    reward += self.POKEMART_FIRST_GLOBAL_REWARD
+                    reward_events.append(f"pokemart_global:+{self.POKEMART_FIRST_GLOBAL_REWARD:.0f}")
 
         if blocked_battle_start:
             reward += self.BATTLE_BLOCKED_START_PENALTY
@@ -2512,11 +2616,19 @@ class PokemonFireRedEnv(gym.Env):
                 reward += self.V9_STUCK_PENALTY
                 reward_events.append("v9_stuck_same_pos:-2")
 
-            if self.training_objective == "progress":
+            if self.training_objective in ("progress", "scout"):
                 if pos_key not in self.v9_episode_tiles:
                     self.v9_episode_tiles.add(pos_key)
-                    reward += self.V9_EXPLORER_NEW_TILE_BONUS
-                    reward_events.append("v9_explorer_new_tile:+0.5")
+                    stage = self._tile_stage(bank, map_id)
+                    if self.scout_start_stage is None and self.training_objective == "scout":
+                        self.scout_start_stage = stage
+                    if (
+                        not self._wipe_cooldown_active()
+                        and self._can_reward_exploration(stage)
+                    ):
+                        tile_reward = self._tile_reward(bank, map_id, x, y)
+                        reward += tile_reward
+                        reward_events.append(f"new_tile:+{tile_reward:.2f}")
                 else:
                     reward += self.V9_EXPLORER_REPEAT_TILE_PENALTY
 
@@ -3056,7 +3168,10 @@ class PokemonFireRedEnv(gym.Env):
                         bank, map_id, x, y
                     )
 
-                    if transition_key not in self.learning_seen_transitions:
+                    if (
+                        transition_key not in self.learning_seen_transitions
+                        and not self._wipe_cooldown_active()
+                    ):
                         self.learning_seen_transitions.add(transition_key)
                         if transition_key in self.persistent_known_transitions:
                             reward += self.REPLAY_TRANSITION_REWARD
@@ -3065,6 +3180,7 @@ class PokemonFireRedEnv(gym.Env):
                     if (
                         transition_key
                         not in self.persistent_known_transitions
+                        and not self._wipe_cooldown_active()
                     ):
                         self.persistent_known_transitions.add(
                             transition_key
@@ -3073,10 +3189,11 @@ class PokemonFireRedEnv(gym.Env):
                         self._invalidate_navigation_cache()
                         self.steps_since_new_edge = 0
 
-                        if self._claim_shared(
-                            self.shared_transitions,
-                            transition_key
-                        ):
+                        warp_pair = self._warp_pair_key(pb, pm, bank, map_id)
+                        warp_claim = "warp_" + "_".join(
+                            str(part) for endpoint in warp_pair for part in endpoint
+                        )
+                        if claim_event(SHARED_CURRICULUM_DIR, warp_claim):
                             self.last_progress_advance_step = self.total_steps
                             reward += self.NEW_TRANSITION_REWARD
                             reward_events.append(

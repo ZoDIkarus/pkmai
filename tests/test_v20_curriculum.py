@@ -316,15 +316,25 @@ class Test10_ScoutDeepButFullShallow(unittest.TestCase):
 # --------------------------------------------------------------------------
 class TestModeAllocation(unittest.TestCase):
     def test_reference_ratio_33(self):
-        # 2026-09-06: FIGHTER (4) is carved off the top at n >= 20; the
-        # remaining 29 follow the 12/12/6/3 ratio.
+        # 2026-09-06: FIGHTER (4) is carved off the top at n >= 20.
+        # 2026-09-07: remaining ranks follow the 12/9.5/8.5/3 ratio (4 ranks
+        # shifted BRIDGE -> FRONTIER).
         s = curriculum_v20.allocation_summary(33)
         self.assertEqual(sum(s.values()), 33)
         self.assertEqual(s[curriculum_v20.MODE_FIGHTER], 4)
         self.assertGreaterEqual(s[MODE_FULL], 10)
-        self.assertGreaterEqual(s[MODE_BRIDGE], 9)
-        self.assertEqual(s[MODE_FRONTIER], 5)
+        self.assertGreaterEqual(s[MODE_BRIDGE], 7)
+        self.assertGreaterEqual(s[MODE_FRONTIER], 6)
         self.assertEqual(s[MODE_RETENTION], 2)
+
+    def test_four_ranks_shifted_bridge_to_frontier_at_60(self):
+        # 2026-09-07 (user): explicit split at the live fleet size.
+        s = curriculum_v20.allocation_summary(60)
+        self.assertEqual(s[MODE_BRIDGE], 16)
+        self.assertEqual(s[MODE_FRONTIER], 14)
+        self.assertEqual(s[MODE_FULL], 21)
+        self.assertEqual(s[MODE_RETENTION], 5)
+        self.assertEqual(s[curriculum_v20.MODE_FIGHTER], 4)
 
     def test_small_fleet_has_no_fighters(self):
         s = curriculum_v20.allocation_summary(12)

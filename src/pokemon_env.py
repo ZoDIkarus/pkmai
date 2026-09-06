@@ -366,7 +366,7 @@ class PokemonFireRedEnv(gym.Env):
     # V18: Trainer-/Arena-Kaempfe zahlen doppelt (Schaden) und sind vom
     # Wild-Abklingen ausgenommen - sie sind der eigentliche Story-Weg.
     TRAINER_BATTLE_REWARD_MULT = 2.0
-    LEVEL_GAIN_REWARD = 5.0   # V19: 10 -> 15; 2026-09-06: 15 -> 10 -> 5 (user)
+    LEVEL_GAIN_REWARD = 1.0   # V19: 10 -> 15; 2026-09-06: 15 -> 10 -> 5; 2026-09-07: -> 1 (user)
     # V17.4: erster echter Orden-Reward als benannte Konstante statt
     # hartcodierter Inline-Zahl - gilt pro gewonnenem Orden (jede Episode
     # neu, kein Fleet-Claim: die Party wird bei jedem Reset zurueckgesetzt,

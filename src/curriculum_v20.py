@@ -59,12 +59,15 @@ ALL_MODES = (MODE_FULL, MODE_BRIDGE, MODE_FRONTIER, MODE_RETENTION)
 FIGHTER_SLOTS = 4
 FIGHTER_MIN_FLEET = 20
 
-# Reference allocation from the brief for ~33 envs.  Applied as ratios so it
-# scales to any fleet size.
+# Reference allocation applied as ratios so it scales to any fleet size.
+# 2026-09-07 (user): 4 ranks moved from BRIDGE to FRONTIER - the Route 1 ->
+# Viridian hop is 0/246, discovering it is FRONTIER's job and BRIDGE had
+# nothing to master past stage 1 yet. At NUM_ENVS=60 (56 after FIGHTER):
+# FULL 21 / BRIDGE 16 / FRONTIER 14 / RETENTION 5 / FIGHTER 4.
 _ALLOC_RATIO = {
     MODE_FULL: 12.0 / 33.0,
-    MODE_BRIDGE: 12.0 / 33.0,
-    MODE_FRONTIER: 6.0 / 33.0,
+    MODE_BRIDGE: 9.5 / 33.0,
+    MODE_FRONTIER: 8.5 / 33.0,
     MODE_RETENTION: 3.0 / 33.0,
 }
 

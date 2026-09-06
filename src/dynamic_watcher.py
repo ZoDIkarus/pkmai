@@ -55,7 +55,9 @@ def choose_watcher_action(
     return int(torch.multinomial(probabilities, 1, generator=generator).item())
 
 
-def watcher_telemetry(env: PokemonFireRedEnv, reward: float) -> dict:
+def watcher_telemetry(
+    env: PokemonFireRedEnv, reward: float, reward_events: list[str] | None = None
+) -> dict:
     location = getattr(env, "cached_loc", {}) or {}
     return {
         "reward": round(float(reward), 3),
@@ -69,6 +71,11 @@ def watcher_telemetry(env: PokemonFireRedEnv, reward: float) -> dict:
             "y": max(0, int(location.get("y_pos", 0) or 0)),
         },
         "milestones": sorted(str(value) for value in getattr(env, "saved_milestones", ()) or ()),
+        "reward_events": [
+            str(event)[:120]
+            for event in (reward_events or [])
+            if isinstance(event, str)
+        ][-8:],
     }
 
 
@@ -124,7 +131,7 @@ def main() -> None:
                     time.sleep(reload_seconds)
                     continue
             action = choose_watcher_action(policy, observation)
-            observation, reward, terminated, truncated, _ = env.step(action)
+            observation, reward, terminated, truncated, info = env.step(action)
             write_watcher_stream_frame(
                 annotate_frame(env.env.get_screen(), policy_version, action),
                 PROJECT_ROOT / "runtime" / "watcher.jpg",
@@ -133,7 +140,7 @@ def main() -> None:
                 WATCHER_STATUS_FILE,
                 policy_version,
                 action,
-                watcher_telemetry(env, reward),
+                watcher_telemetry(env, reward, info.get("reward_events")),
             )
             if terminated or truncated:
                 observation, _ = env.reset()

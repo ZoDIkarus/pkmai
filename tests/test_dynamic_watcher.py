@@ -7,7 +7,13 @@ import cv2
 import numpy as np
 import torch
 
-from dynamic_watcher import annotate_frame, choose_watcher_action, select_published_model, write_watcher_status
+from dynamic_watcher import (
+    annotate_frame,
+    choose_watcher_action,
+    select_published_model,
+    watcher_telemetry,
+    write_watcher_status,
+)
 
 
 class DynamicWatcherTests(unittest.TestCase):
@@ -33,6 +39,27 @@ class DynamicWatcherTests(unittest.TestCase):
                     "action": "RIGHT",
                 },
             )
+
+    def test_telemetry_includes_the_watcher_training_reward_events(self):
+        env = type(
+            "WatcherEnvironment",
+            (),
+            {
+                "cached_loc": {},
+                "total_steps": 32,
+                "last_in_battle": True,
+                "saved_milestones": {"starter"},
+            },
+        )()
+
+        telemetry = watcher_telemetry(
+            env,
+            -0.501,
+            ["battle_hp_stagnant:-0.50"],
+        )
+
+        self.assertEqual(telemetry["reward"], -0.501)
+        self.assertEqual(telemetry["reward_events"], ["battle_hp_stagnant:-0.50"])
 
     def test_samples_the_policy_distribution_instead_of_always_taking_argmax(self):
         class BalancedPolicy:

@@ -52,6 +52,7 @@ class ClusterStatusApiTests(unittest.TestCase):
                     "id": "dynamic-watcher",
                     "policy_version": 42,
                     "action": "RIGHT",
+                    "reward_events": ["battle_hp_stagnant:-0.50"],
                     "model_path": "/private/runtime/cluster/dynamic_policy_best.pt",
                 }
             )
@@ -64,6 +65,9 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.assertEqual(payload["watchers"][0]["action"], "RIGHT")
         self.assertTrue(payload["watchers"][0]["online"])
         self.assertEqual(payload["watchers"][0]["stream_url"], "/watcher.jpg")
+        self.assertEqual(
+            payload["watchers"][0]["reward_events"], ["battle_hp_stagnant:-0.50"]
+        )
         self.assertNotIn("model_path", payload["watchers"][0])
 
     def test_dashboard_starts_with_a_watcher_list_and_first_live_preview(self):
@@ -74,6 +78,8 @@ class ClusterStatusApiTests(unittest.TestCase):
             self.assertIn(f'id="{element_id}"', page)
         self.assertIn("/api/watchers", page)
         self.assertIn("watchers[0]", page)
+        self.assertIn("w.reward_events", page)
+        self.assertIn("Trainings-Reward", page)
 
     def test_dashboard_event_list_uses_a_closed_milestone_spread_expression(self):
         page = web_stream.index()

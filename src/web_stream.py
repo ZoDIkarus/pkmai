@@ -37,6 +37,7 @@ def _load_json(path: Path) -> dict:
 
 def get_watchers() -> dict:
     status = _load_json(WATCHER_STATUS_FILE)
+    position = status.get("position") if isinstance(status.get("position"), dict) else {}
     try:
         updated_at = WATCHER_STATUS_FILE.stat().st_mtime
     except OSError:
@@ -50,6 +51,21 @@ def get_watchers() -> dict:
                 "action": str(status.get("action", "waiting")),
                 "online": bool(updated_at and time.time() - updated_at < 5),
                 "stream_url": "/watcher.jpg",
+                "reward": round(float(status.get("reward", 0.0) or 0.0), 3),
+                "episode_steps": max(0, int(status.get("episode_steps", 0) or 0)),
+                "in_battle": bool(status.get("in_battle", False)),
+                "position": {
+                    "valid": bool(position.get("valid", False)),
+                    "map_bank": max(0, int(position.get("map_bank", 0) or 0)),
+                    "map_id": max(0, int(position.get("map_id", 0) or 0)),
+                    "x": max(0, int(position.get("x", 0) or 0)),
+                    "y": max(0, int(position.get("y", 0) or 0)),
+                },
+                "milestones": sorted(
+                    str(value)
+                    for value in (status.get("milestones") or [])
+                    if isinstance(value, str) and value.replace("_", "").isalnum()
+                )[:16],
             }
         ]
     }
@@ -127,7 +143,16 @@ def get_watcher_frame():
 
 @app.get("/watcher", response_class=HTMLResponse)
 def watcher_view() -> str:
-    return """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>PKMAI Watcher</title><style>html,body{margin:0;height:100%;background:#080b10}img{width:100%;height:100%;object-fit:contain}</style></head><body><img id="watcher" alt="PKMAI Watcher wird geladen"><script>const image=document.getElementById('watcher');setInterval(()=>image.src='/watcher.jpg?t='+Date.now(),100);</script></body></html>"""
+    return """<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PKMAI · Live Watcher</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#101010;color:#e7e7e7}*{box-sizing:border-box}body{margin:0;background:#101010;min-height:100vh}header{height:69px;border-bottom:1px solid #292929;padding:8px 20px}h1{margin:0;font-size:20px;letter-spacing:.02em}.subtitle{color:#cdbf9e;font-weight:600;font-size:13px;margin-top:10px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 278px;gap:9px;padding:0 12px 10px}.screen{height:calc(100vh - 79px);min-height:540px;background:#000;display:grid;place-items:center;overflow:hidden}.screen img{width:100%;height:100%;object-fit:contain;image-rendering:pixelated}.sidebar{display:grid;grid-template-rows:auto minmax(0,1fr);gap:9px;padding-top:4px}.panel{background:#272324;border:1px solid #464143;padding:10px}.mode{display:inline-block;background:#67df68;color:#123d17;font-weight:800;padding:6px 12px;font-size:12px}.model{font-size:12px;color:#b5afb0;margin-top:8px}.state{display:grid;gap:7px;margin-top:16px;font-size:13px}.row{display:flex;gap:8px;align-items:center}.dot{width:12px;height:12px;border-radius:50%;background:#6ce775;flex:none}.dot.warn{background:#ddc364}.dot.bad{background:#e94b65}.positive{color:#6ce775}.negative{color:#e94b65}.hint{font-size:10px;color:#8b8586;margin-top:12px}.event-head{font-size:13px;color:#9ae29a;font-weight:800;margin-bottom:8px}.events{display:grid;gap:9px;overflow:auto;max-height:calc(100vh - 340px)}.event{display:grid;grid-template-columns:12px 1fr auto;gap:7px;align-items:center;color:#c5bfc0;font-size:12px}.event b{font-weight:650}.event em{font-style:normal;color:#e94b65}.event em.good{color:#6ce775}@media(max-width:760px){.layout{grid-template-columns:1fr}.screen{height:58vh;min-height:360px}.events{max-height:240px}}
+</style></head><body>
+<header><h1>PKMAI - LIVE WATCHER</h1><div class="subtitle" id="summary">Beste Dynamic Policy wird geladen …</div></header>
+<main class="layout"><section class="screen"><img id="watcher-frame" alt="Live PKMAI Watcher"></section><aside class="sidebar"><section class="panel"><span class="mode" id="watcher-mode">OVERWORLD</span><div class="model" id="watcher-model">dynamic_policy_best</div><div class="state" id="watcher-state"></div><div class="hint">Gleiche Policy-Verteilung wie die Rollout-Trainer. Inferenz only, kein Lernen.</div></section><section class="panel"><div class="event-head">REWARD EVENTS <span style="float:right;color:#7d7778;font-size:10px">neueste zuerst</span></div><div class="events" id="watcher-events"></div></section></aside></main>
+<script>
+const $=id=>document.getElementById(id);let last='';function el(tag,text,cls){const n=document.createElement(tag);n.textContent=text;if(cls)n.className=cls;return n}function pos(w){const p=w.position||{};return p.valid?`Route B${p.map_bank}/M${p.map_id} · ${p.x},${p.y}`:'Position wird gelesen'}function render(w){$('summary').textContent=`Best Brain v${w.policy_version} | Episode ${w.episode_steps||0} Schritte | Aktion ${w.action}`;$('watcher-mode').textContent=w.in_battle?'BATTLE':'OVERWORLD';$('watcher-model').textContent=`dynamic_policy_best · Policy v${w.policy_version}`;const state=$('watcher-state');state.replaceChildren();const rows=[['Episode '+(w.episode_steps||0),'dot'],['Reward '+Number(w.reward||0).toFixed(3),'dot '+(w.reward>=0?'':'bad')],['Aktion '+w.action,'dot '+(w.action==='START'?'warn':'')],[pos(w),'dot'],[w.in_battle?'Battle aktiv':'Keine Battle','dot '+(w.in_battle?'bad':'')]];rows.forEach(([label,cls])=>{const r=el('div',undefined,'row');r.append(el('span','',cls),el('span',label));state.append(r)});const events=$('watcher-events');events.replaceChildren();const eventData=[['Letzte Policy-Aktion',w.action,Number(w.reward||0)],['Episode-Schritt',String(w.episode_steps||0),0],['Kartenstatus',pos(w),0],...((w.milestones||[]).slice(-4).reverse().map(x=>['Milestone',x,0])];eventData.forEach(([name,value,reward])=>{const r=el('div',undefined,'event');r.append(el('span','','dot '+(reward<0?'bad':reward>0?'':'warn')),el('b',name+' · '+value),el('em',(reward>=0?'+':'')+reward.toFixed(3),reward>0?'good':''));events.append(r)})}async function tick(){try{const payload=await fetch('/api/watchers?t='+Date.now(),{cache:'no-store'}).then(r=>r.json());const w=payload.watchers?.[0];if(!w)return;render(w);$('watcher-frame').src=w.stream_url+'?t='+Date.now()}catch{ $('summary').textContent='Watcher-Status nicht erreichbar' }}tick();setInterval(tick,150);
+</script></body></html>"""
 
 
 @app.get("/", response_class=HTMLResponse)

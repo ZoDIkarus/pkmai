@@ -55,7 +55,26 @@ def choose_watcher_action(
     return int(torch.multinomial(probabilities, 1, generator=generator).item())
 
 
-def write_watcher_status(status_file: Path, policy_version: int, action: int) -> None:
+def watcher_telemetry(env: PokemonFireRedEnv, reward: float) -> dict:
+    location = getattr(env, "cached_loc", {}) or {}
+    return {
+        "reward": round(float(reward), 3),
+        "episode_steps": max(0, int(getattr(env, "total_steps", 0) or 0)),
+        "in_battle": bool(getattr(env, "last_in_battle", False)),
+        "position": {
+            "valid": bool(location.get("valid", False)),
+            "map_bank": max(0, int(location.get("map_bank", 0) or 0)),
+            "map_id": max(0, int(location.get("map_id", 0) or 0)),
+            "x": max(0, int(location.get("x_pos", 0) or 0)),
+            "y": max(0, int(location.get("y_pos", 0) or 0)),
+        },
+        "milestones": sorted(str(value) for value in getattr(env, "saved_milestones", ()) or ()),
+    }
+
+
+def write_watcher_status(
+    status_file: Path, policy_version: int, action: int, telemetry: dict | None = None
+) -> None:
     status_file.parent.mkdir(parents=True, exist_ok=True)
     temporary = status_file.with_suffix(".json.tmp")
     temporary.write_text(
@@ -64,6 +83,7 @@ def write_watcher_status(status_file: Path, policy_version: int, action: int) ->
                 "id": "dynamic-watcher",
                 "policy_version": policy_version,
                 "action": ACTION_NAMES[action],
+                **(telemetry or {}),
             },
             separators=(",", ":"),
         ),
@@ -115,12 +135,17 @@ def main() -> None:
                     time.sleep(reload_seconds)
                     continue
             action = choose_watcher_action(policy, observation)
-            observation, _, terminated, truncated, _ = env.step(action)
+            observation, reward, terminated, truncated, _ = env.step(action)
             write_watcher_stream_frame(
                 annotate_frame(env.env.get_screen(), policy_version, action),
                 PROJECT_ROOT / "runtime" / "watcher.jpg",
             )
-            write_watcher_status(WATCHER_STATUS_FILE, policy_version, action)
+            write_watcher_status(
+                WATCHER_STATUS_FILE,
+                policy_version,
+                action,
+                watcher_telemetry(env, reward),
+            )
             if terminated or truncated:
                 observation, _ = env.reset()
                 print("watcher reset to the true initial game state", flush=True)

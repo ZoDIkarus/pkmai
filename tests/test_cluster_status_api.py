@@ -114,3 +114,11 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.assertIn('data-page="trainers"', page)
         self.assertIn('data-page="overworld"', page)
         self.assertIn('data-page="goals"', page)
+
+    def test_standalone_watcher_uses_the_live_observer_layout(self):
+        page = web_stream.watcher_view()
+
+        for element_id in ("watcher-frame", "watcher-state", "watcher-events"):
+            self.assertIn(f'id="{element_id}"', page)
+        self.assertIn("/api/watchers", page)
+        self.assertIn("REWARD EVENTS", page)

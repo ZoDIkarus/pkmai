@@ -1,5 +1,19 @@
 # PKMAI — Live Work Log
 
+## 2026-09-06 — User correction: preserve full reset, no old brain
+
+The user explicitly corrected the temporary backup restoration: training must
+start fresh. Stopped all services, moved active models (including watcher
+recovery), curriculum, exploration, watcher memory and telemetry into
+`brain_backups/fresh_reset_20260906_141332/`, and restarted root `start_all.sh`.
+No old policy remains in active checkpoints. Trainer initializes a new PPO on
+CPU (stability baseline, not a confirmed diagnosis of prior NaNs), validates
+initial weights and immediately publishes resume for the watcher. All current
+V20 rules and 9+5 frame input timing remain. Mapper/tunnels retain the normal
+disabled defaults. Live: learner passed 4,860 steps from zero, watcher follows
+fresh resume and reports 59.7 FPS. 106 tests pass. Earlier recovery entries
+below are historical and superseded by this explicit fresh reset.
+
 ## 2026-09-06 — Watcher recovered from invalid policy parameters
 
 Current resume and candidate (164,820 steps) both contain 8 non-finite policy

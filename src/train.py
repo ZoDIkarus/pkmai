@@ -59,7 +59,7 @@ PPO_ENT_COEF = 0.02
 
 # "auto" = MPS auf Apple Silicon wenn verfuegbar, sonst CPU.
 # Alternativ: "cpu" oder "mps"
-TRAIN_DEVICE = "auto"
+TRAIN_DEVICE = "cpu"  # Fresh-run stability baseline after non-finite checkpoints.
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 RUNTIME_DIR = os.path.join(PROJECT_ROOT, "runtime")
@@ -1419,6 +1419,15 @@ def main():
             verbose=1,
             device=device
         )
+
+    # Validate and publish the initial policy so a fresh watcher can act
+    # immediately, even before the first periodic checkpoint.
+    if any(not torch.isfinite(value).all()
+           for value in model.policy.state_dict().values()):
+        vec_env.close()
+        manager.shutdown()
+        raise ValueError("Training policy contains non-finite parameters")
+    save_model_atomic(model, RESUME_MODEL)
 
     print(
         "⚡ PPO: "

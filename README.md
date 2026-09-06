@@ -27,12 +27,15 @@ an old-frame backlog. The browser uses `/watcher.mjpg` instead of polling a JPEG
 every 500 ms; hidden watcher views disconnect. Snapshot endpoints remain available.
 Model loading and reward computation can still introduce pauses between actions.
 
-The current local recovery policy is an intact **22,420,620-step** resume from
-`brain_backups/V20_CLEAN_RESET_20260906_134853/checkpoints/`, copied to
-`runtime/checkpoints/watcher_recovery.zip`. The newer 164,820-step resume and
-candidate contain non-finite weights and are rejected. The recovery copy does
-not overwrite either training checkpoint. A future valid resume automatically
-takes precedence; this is not a permanent freeze of the learner.
+**Current run: fresh reset, as requested by the user.** No old learned policy is
+active. The temporary recovery model and existing progress were moved into
+`brain_backups/fresh_reset_20260906_141332/`. Trainer, watcher, web and status
+were restarted with empty curriculum/exploration state and a newly initialized
+PPO policy. CPU training is the current stability baseline; the origin of the
+previous non-finite checkpoint values has not been conclusively established.
+The trainer checks initial policy weights and atomically publishes the fresh
+resume immediately, allowing the watcher to act before periodic checkpoints.
+The 9+5 inputs and per-frame display remain enabled.
 
 **Verified:** 106 tests passed; the running watcher executed actions and reported
 59.7 displayed FPS, with about 24 JPEG updates/s measured locally. These are
@@ -42,7 +45,7 @@ This behavior is the source default used by `src/watch.py` and `src/web_stream.p
 Restart those processes after updating and reload the dashboard. Model archives,
 backups, ROMs and runtime data are deliberately excluded from Git. On another
 machine, supply a compatible, valid checkpoint locally; Git alone does not carry
-the recovery policy. Details: [live work log](docs/AI_STATUS.md).
+model weights. Details: [live work log](docs/AI_STATUS.md).
 
 As of **V20 CURRICULUM MODES** (`BUILD_TAG = "V20_CURRICULUM_MODES"`) the fleet
 is split into four mutually exclusive training modes that all train the **same**

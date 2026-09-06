@@ -89,7 +89,10 @@ class ShortCycleGuard:
             return {"penalty": 0.0, "suppress_shaping": self.in_cycle,
                     "truncate": False, "cycle": self.in_cycle, "period": 0}
 
-        self.positions.append(position)
+        # RAM positions are cached for several agent actions. Detect cycles
+        # in actual moves, while counting penalties/time in agent actions.
+        if not self.positions or self.positions[-1] != position:
+            self.positions.append(position)
         period = self._detect_period()
 
         if period == 0:

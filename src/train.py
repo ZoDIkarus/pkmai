@@ -568,6 +568,16 @@ class MilestoneCheckpointCallback(BaseCallback):
             "level": level,
             "steps": int(info.get("ppo_episode_steps", info.get("episode_steps", 0)) or 0),
             "arrivals": dict(info.get("stage_arrival_steps", {})),
+            # V20 frontier redesign - dashboard/debug stats only, NOT scored.
+            "explored_tiles": int(info.get("explored_tiles", 0) or 0),
+            "frontier_tiles": int(info.get("frontier_tiles", 0) or 0),
+            "max_frontier_graph_depth": int(info.get("max_frontier_graph_depth", 0) or 0),
+            "best_frontier_value": float(info.get("best_frontier_value", 0.0) or 0.0),
+            "new_frontier_highwaters": int(info.get("new_frontier_highwaters", 0) or 0),
+            "warp_loops": int(info.get("warp_loops", 0) or 0),
+            "local_loops": int(info.get("local_loops", 0) or 0),
+            "proven_progress_edges": int(info.get("proven_progress_edges", 0) or 0),
+            "proven_exit_reached": int(info.get("proven_exit_reached", 0) or 0),
         }
 
     @staticmethod
@@ -646,6 +656,34 @@ class MilestoneCheckpointCallback(BaseCallback):
             "max_stage": max_stage,
             "max_level": max((r.get("level", 0) for r in full), default=0),
             "full_best_stage_steps": min(stage_steps) if stage_steps else 0,
+        }
+
+    def _frontier_stats(self):
+        """V20 frontier redesign - dashboard/debug aggregates over recent
+        episodes. Deliberately NOT part of _score / champion eval."""
+        rows = list(self.recent)
+        if not rows:
+            return {}
+        scouts = [r for r in rows if r.get("role") == "scout"]
+        pool = scouts or rows
+
+        def _mx(key):
+            return max((r.get(key, 0) or 0 for r in pool), default=0)
+
+        def _sm(key):
+            return sum(int(r.get(key, 0) or 0) for r in rows)
+
+        return {
+            "episodes": len(rows),
+            "scout_episodes": len(scouts),
+            "max_graph_depth": int(_mx("max_frontier_graph_depth")),
+            "best_frontier_value": round(float(_mx("best_frontier_value")), 2),
+            "max_explored_tiles": int(_mx("explored_tiles")),
+            "new_frontier_highwaters": _sm("new_frontier_highwaters"),
+            "warp_loops": _sm("warp_loops"),
+            "local_loops": _sm("local_loops"),
+            "proven_progress_edges": _sm("proven_progress_edges"),
+            "proven_exit_reached": _sm("proven_exit_reached"),
         }
 
     def _metrics_floor(self, metrics):
@@ -743,6 +781,7 @@ class MilestoneCheckpointCallback(BaseCallback):
                 "last_eval_metrics": dict(self.last_eval_metrics),
                 "last_eval_result": str(self.last_eval_result),
                 "last_eval_at_step": int(self.last_eval_at_step),
+                "frontier": self._frontier_stats(),
                 "training_phase": "full_brain" if full_only else (
                     "1_intro" if int(effective_scores.get("intro", 1000)) < 880
                     else "2_stairs" if int(effective_scores.get("stairs", 1000)) < 880
@@ -1194,34 +1233,8 @@ def main():
         if _dirty:
             _cur.record_discovery(_seed_stage)
 
-        # One-time bootstrap of transition 1 (Pallet->Route1). The whole
-        # premise is "full runners fail AROUND Route 1" - i.e. they DO leave
-        # Pallet reliably. If the champion / global record already shows Full
-        # depth >= Route 1 and transition 1 has no stats yet, pre-confirm it so
-        # the detected bottleneck starts at Route1->Viridian (brief section 17)
-        # instead of spending the first eval windows re-proving Pallet->Route1.
-        try:
-            _champ_stage = 0
-            _cf = os.path.join(RUNTIME_DIR, "champion_score.json")
-            if os.path.exists(_cf):
-                with open(_cf) as _f:
-                    _champ_stage = int(
-                        (json.load(_f) or {}).get("metrics", {}).get(
-                            "max_stage", 0
-                        ) or 0
-                    )
-            _evidence_stage = max(_champ_stage, _seed_stage)
-            if (_evidence_stage >= 2
-                    and 1 not in _cur.transitions):
-                for _ in range(curriculum_v20.TRANSITION_MASTERY_MIN_ATTEMPTS):
-                    _cur.record_transition_attempt(1, True, full_chain=True)
-                _dirty = True
-                print(
-                    "🧭 V20 bootstrap: Pallet->Route1 pre-confirmed from "
-                    f"existing Full depth (stage {_evidence_stage})"
-                )
-        except Exception:
-            pass
+        # Discovery evidence must not fabricate successful training attempts.
+        # Mastery is earned by observed episodes and Full confirmations.
 
         if _dirty:
             _cur.save(pokemon_env.V20_STATE_FILE)
@@ -1235,7 +1248,8 @@ def main():
         print(
             "🧭 V20 CURRICULUM MODES | "
             f"FULL={_alloc['FULL']} BRIDGE={_alloc['BRIDGE']} "
-            f"FRONTIER={_alloc['FRONTIER']} RETENTION={_alloc['RETENTION']}"
+            f"FRONTIER={_alloc['FRONTIER']} RETENTION={_alloc['RETENTION']} "
+            f"FIGHTER={_alloc.get('FIGHTER', 0)}"
         )
         if _bn is not None:
             _bn_txt = (
@@ -1354,16 +1368,12 @@ def main():
         ]
     , start_method="spawn")
 
-    # Jeder neue Trainingsprozess beginnt an der letzten bestaetigten Basis.
-    # Ein unbewerteter Resume-Zwischenstand darf keine Regression konservieren.
-    if os.environ.get("PKMAI_RESUME_SAVED") == "1" and os.path.exists(RESUME_MODEL):
-        # Explicit maintenance restart: continue the just-saved learner without
-        # promoting it to champion or discarding work since the last evaluation.
+    # Continue the saved learner by default. Champion remains an evaluation
+    # artifact, never an implicit rollback at every service restart.
+    if os.path.exists(RESUME_MODEL):
         load_model = RESUME_MODEL
     elif os.path.exists(BEST_MODEL):
         load_model = BEST_MODEL
-    elif os.path.exists(RESUME_MODEL):
-        load_model = RESUME_MODEL
     else:
         load_model = LATEST_MODEL
 
@@ -1391,18 +1401,8 @@ def main():
         # bei einem Neustart vor der ersten Evaluation nicht stillschweigend
         # zum bestaetigten Champion werden.
 
-        # V11: nach einem Reset ist RESUME eine neu geseedete Skill-Policy.
-        # Ihr eingebauter Step-Zaehler (~11 Mio) ist irrefuehrend - es ist ein
-        # frischer V11-Lauf. Ohne echten Champion (keine champion_score.json)
-        # den Zaehler auf 0 setzen, damit das Dashboard „V11-Steps" zeigt.
-        if (not os.path.exists(CHAMPION_FILE)
-                and os.environ.get("PKMAI_RESUME_SAVED") != "1"):
-            model.num_timesteps = 0
-            try:
-                model._num_timesteps_at_start = 0
-            except Exception:
-                pass
-            print("🔄 Clean-Reset erkannt -> Step-Zaehler auf 0")
+        # A fresh PPO already starts at zero. Loaded policies retain their
+        # real step count even before the first champion is published.
 
     else:
         print("🌱 Initialisiere neues PPO-Modell...")

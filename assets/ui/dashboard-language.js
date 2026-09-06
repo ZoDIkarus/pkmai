@@ -217,3 +217,104 @@ window.addEventListener('DOMContentLoaded',()=>{
   }
  }});
 });
+
+// Live fleet tools use the existing uncached UI asset: no web/watch restart.
+function fleetRole(agent) {
+ if (Number(agent.id) === 120) return 'watcher';
+ const modes = ['FULL','BRIDGE','FRONTIER','RETENTION','FIGHTER'];
+ const mode = String(agent.training_mode || '').toUpperCase();
+ if (modes.includes(mode)) return mode.toLowerCase();
+ const named = String(agent.name || '').match(/\b(FULL|BRIDGE|FRONTIER|RETENTION|FIGHTER)\b/);
+ return named ? named[1].toLowerCase() : String(agent.training_objective || agent.agent_role || 'unknown').toLowerCase();
+}
+function fleetHealth(agent) {
+ const party = Array.isArray(agent.party) ? agent.party : [];
+ const hp = party.reduce((n,m)=>n+Number(m.cur_hp||0),0);
+ const max = party.reduce((n,m)=>n+Number(m.max_hp||0),0);
+ return {hp,max,alive:party.filter(m=>Number(m.cur_hp)>0).length,total:party.length,
+         critical:party.some(m=>Number(m.max_hp)>0 && Number(m.cur_hp)/Number(m.max_hp)<0.3)};
+}
+function fleetMatches(agent, filter) {
+ const h = fleetHealth(agent);
+ if (filter.role && fleetRole(agent)!==filter.role) return false;
+ if (filter.health==='critical' && !h.critical) return false;
+ if (filter.health==='battle' && !agent.in_battle) return false;
+ if (filter.health==='checkpoint' && (!agent.episode_start || agent.episode_start==='beginning')) return false;
+ const q=String(filter.query||'').trim().toLowerCase();
+ const id=q.match(/^(?:a|agent\s*)?(\d+)$/);
+ if(id) return Number(agent.id)===Number(id[1]);
+ return !q || [agent.name,fleetRole(agent),agent.room,agent.episode_start,
+     `${agent.bank}/${agent.map}`].join(' ').toLowerCase().includes(q);
+}
+window.addEventListener('DOMContentLoaded',()=>{
+ if(typeof renderStatusDashboard!=='function') return;
+ const filter={role:'',health:'',query:''};
+ let lastState=null;
+ const labels={full:'Full',bridge:'Bridge',frontier:'Frontier',retention:'Retention',fighter:'Fighter',watcher:'Watcher',scout:'Scout (Legacy)'};
+ Object.assign(FLEET_ROLE_LABELS,labels);
+ Object.assign(STATUS_ROLE_ICONS,{bridge:'🌉',frontier:'🔭',retention:'🔁',fighter:'⚔️'});
+ const displayAgent=i=>({...i,training_objective:fleetRole(i)});
+ const oldStatus=renderStatusDashboard, oldChips=agentChipsHtml, oldDetail=renderAgentDetail;
+ const esc=statusEsc;
+ const style=document.createElement('style');
+ style.textContent='.fleet-tools{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.fleet-tools input,.fleet-tools select,.fleet-tools button{background:#171e2b;color:#eef3ff;border:1px solid #3a4965;border-radius:7px;padding:9px;font:inherit}.fleet-tools input{flex:1;min-width:140px}.fleet-health{font-size:11px;line-height:1.7;border-top:1px solid #303a4c;margin-top:8px;padding-top:6px;color:#b4c4dc}.fleet-health.critical{color:#ff8686}.fleet-results{font-size:12px;color:#9cafc7;margin:8px 0}.fleet-role-help{color:#a8bad1;font-size:12px;line-height:1.7;margin:10px 0}';
+ document.head.appendChild(style);
+ function refresh(){
+  if(lastState) renderStatusDashboard(lastState);
+  renderWatcherTab();
+  document.querySelectorAll('.fleet-tools').forEach(bar=>{
+   bar.querySelector('[data-key="role"]').value=filter.role;
+   bar.querySelector('[data-key="health"]').value=filter.health;
+   const input=bar.querySelector('input');if(input!==document.activeElement)input.value=filter.query;
+  });
+ }
+ for(const [anchorId,scope] of [['status-agent-detail','status'],['wt-grid','watcher']]){
+  const anchor=document.getElementById(anchorId);if(!anchor)continue;
+  const bar=document.createElement('div');bar.className='fleet-tools';bar.id=scope+'-fleet-filters';
+  bar.innerHTML='<input aria-label="Agent suchen" placeholder="ID, Name, Map oder Startpunkt" data-key="query">'
+   +'<select aria-label="Rolle filtern" data-key="role"><option value="">Alle Rollen</option>'
+   +Object.entries(labels).filter(([r])=>r!=='scout').map(([r,n])=>`<option value="${r}">${n}</option>`).join('')+'</select>'
+   +'<select aria-label="Zustand filtern" data-key="health"><option value="">Alle Zustände</option><option value="critical">Team angeschlagen</option><option value="battle">Im Kampf</option><option value="checkpoint">Ab Savestate</option></select><button type="button">Zurücksetzen</button>';
+  bar.addEventListener('input',event=>{if(event.target.dataset.key){filter[event.target.dataset.key]=event.target.value;refresh();}});
+  bar.querySelector('button').onclick=()=>{Object.assign(filter,{role:'',health:'',query:''});refresh();};
+  anchor.before(bar);
+  const count=document.createElement('div');count.id=scope+'-fleet-results';count.className='fleet-results';anchor.before(count);
+ }
+ function healthHtml(i){
+  const h=fleetHealth(i),start=i.episode_start_health||{};
+  const startText=start.party_max_hp ? `${start.party_hp}/${start.party_max_hp} KP` : 'noch nicht gemeldet';
+  return `<div class="fleet-health ${h.critical?'critical':''}">♥ Team: ${h.hp}/${h.max} KP · ${h.alive}/${h.total} einsatzfähig<br>💾 Start: ${esc(i.episode_start||'–')} · Start-Team: ${esc(startText)}</div>`;
+ }
+ renderStatusDashboard=function(state){
+  lastState=state;
+  oldStatus({...state,instances:(state.instances||[]).map(displayAgent)});
+  const rows=(state.instances||[]).filter(i=>Number(i.id)!==120&&Number(i.id)>=0);
+  let visible=0;
+  document.querySelectorAll('#status-agent-grid [data-aid]').forEach(card=>{
+   const row=rows.find(i=>Number(i.id)===Number(card.dataset.aid));if(!row)return;
+   card.hidden=!fleetMatches(row,filter);if(!card.hidden)visible++;
+   card.insertAdjacentHTML('beforeend',healthHtml(row));
+  });
+  const count=document.getElementById('status-fleet-results');if(count)count.textContent=`${visible} / ${rows.length} Agenten`;
+  const cards=document.querySelectorAll('#status-role-grid .status-role');
+  cards.forEach(card=>{const text=card.textContent.toLowerCase();const role=Object.keys(labels).find(r=>text.includes(labels[r].toLowerCase()));if(role){card.style.cursor='pointer';card.onclick=()=>{filter.role=role;refresh();};}});
+ };
+ agentChipsHtml=function(list){return oldChips(list.filter(i=>fleetMatches(i,filter)).map(displayAgent));};
+ renderAgentDetail=function(id){
+  oldDetail(id);
+  const box=document.getElementById(id),row=(latestInstances||[]).find(i=>Number(i.id)===wtSelected);
+  if(!box||box.hidden||!row)return;
+  const sub=box.querySelector('.wt-sub');if(sub)sub.textContent=`${labels[fleetRole(row)]||fleetRole(row)} · ${row.room||''} · Start: ${row.episode_start||'–'}`;
+  box.insertAdjacentHTML('beforeend',healthHtml(row));
+ };
+ const oldWatcher=renderWatcherTab;
+ renderWatcherTab=function(){oldWatcher();const rows=latestInstances||[];const text=`${rows.filter(i=>fleetMatches(i,filter)).length} / ${rows.length} Agenten`;for(const id of ['wt-count','watcher-fleet-results']){const el=document.getElementById(id);if(el)el.textContent=text;}};
+ const oldPass=agentPassesFilter;
+ agentPassesFilter=i=>oldPass(displayAgent(i));
+ const roleSelect=document.getElementById('af-role');
+ if(roleSelect){const value=roleSelect.value;roleSelect.innerHTML='<option value="">Alle Rollen</option>'+Object.entries(labels).map(([r,n])=>`<option value="${r}">${n}</option>`).join('');roleSelect.value=value;}
+ const help=document.createElement('div');help.className='fleet-role-help';
+ help.textContent='Full: Gesamtweg · Bridge: unsicheren Übergang üben · Frontier: neue Wege entdecken · Retention: gelernte Übergänge erhalten · Fighter: Kämpfe üben. Alle Rollen trainieren dasselbe Netz.';
+ document.getElementById('status-role-grid').before(help);
+ if(typeof updateDashboard==='function')updateDashboard();
+});

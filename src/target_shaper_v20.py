@@ -40,6 +40,7 @@ class TargetShaper:
         self.backtrack_margin = int(backtrack_margin)
         self.best_target_distance = None
         self._objective_key = None
+        self._best_by_objective = {}
 
     # -- lifecycle ---------------------------------------------------
     def start_objective(self, key, initial_distance=None):
@@ -57,6 +58,7 @@ class TargetShaper:
     def reset(self):
         self.best_target_distance = None
         self._objective_key = None
+        self._best_by_objective = {}
 
     # -- per step --------------------------------------------------
     def update(self, key, new_distance):
@@ -70,8 +72,12 @@ class TargetShaper:
         new_distance = int(new_distance)
 
         if key != self._objective_key:
-            # Objective changed under us - re-anchor, pay nothing this step.
-            self.start_objective(key, new_distance)
+            # Save the previous objective before switching maps. A return to
+            # an already visited objective retains its high-watermark.
+            if self._objective_key is not None:
+                self._best_by_objective[self._objective_key] = self.best_target_distance
+            previous_best = self._best_by_objective.get(key)
+            self.start_objective(key, previous_best if previous_best is not None else new_distance)
             return 0.0, None
 
         if self.best_target_distance is None:

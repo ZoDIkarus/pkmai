@@ -4,6 +4,19 @@ PKMAI is an experimental reinforcement-learning project that trains a PPO agent 
 
 > This repository does not contain a Pokémon ROM or proprietary game assets. You must provide your own legally obtained game data and local Stable-Retro integration.
 
+## Consolidated behavior — 2026-09-06
+
+**Authoritative current reference:** [Roles, rewards, checkpoints and update timing](docs/CURRENT_LOGIC.md).
+This supersedes conflicting numbers and restart advice in the historical release notes below.
+
+- 60 learners: **FULL 21 / BRIDGE 20 / FRONTIER 10 / RETENTION 5 / FIGHTER 4**, one shared PPO.
+- Fighter receives **only combat rewards**, at the same values as other roles; only wild-battle decay after six fainted opponents is disabled for Fighter.
+- Healthy Frontier starts require every party member at least 80% HP, no status ailment and usable PP. The local Route-1 anchor was repaired to 62/62 HP with its original position and team preserved.
+- Frontier/Fighter episodes end after a party wipe. Frontier resets after 120 trusted travel steps below its starting stage; Fighter resets after 400 consecutive non-battle steps.
+- Default training restart resumes the saved learner and its real step count; no champion rollback or fresh reset.
+- Trainer is intentionally stopped. Watcher remains running; do not restart it during the stream. Reload only the dashboard when convenient to get the filters.
+- PPO updates every 512 actions per environment (30,720 samples at 60 environments). Longer episode limits do not postpone updates until episode end.
+
 ## Current training and watcher behavior
 
 Only the trainer learns. The watcher evaluates valid `pokemon_model_resume.zip`
@@ -36,22 +49,22 @@ limit or display callback in training. Only the watcher is paced at 59.7 FPS.
 The origin of the previous non-finite checkpoint values is still unconfirmed.
 The trainer checks initial policy weights and atomically publishes the fresh
 resume immediately, allowing the watcher to act before periodic checkpoints.
-The 9+5 inputs and per-frame watcher display remain enabled. For a maintenance
-restart, `PKMAI_RESUME_SAVED=1` preserves the saved fresh-run step counter even
-before a champion exists. Do not restart the watcher during an active stream.
+The 9+5 inputs and per-frame watcher display remain enabled. Every ordinary trainer restart preserves the saved learner and its step counter,
+even before a champion exists; no environment flag is required. Do not restart the watcher during an active stream.
 
 **Verified:** 106 tests passed; the running watcher executed actions and reported
 59.7 displayed FPS, with about 24 JPEG updates/s measured locally. These are
 observed values, not guaranteed performance on every machine.
 
 This behavior is the source default used by `src/watch.py` and `src/web_stream.py`.
-Restart those processes after updating and reload the dashboard. Model archives,
+The stopped trainer picks up source changes on its next start. Reload the dashboard
+to get UI changes; preserve the active watcher process during streaming. Model archives,
 backups, ROMs and runtime data are deliberately excluded from Git. On another
 machine, supply a compatible, valid checkpoint locally; Git alone does not carry
 model weights. Details: [live work log](docs/AI_STATUS.md).
 
 As of **V20 CURRICULUM MODES** (`BUILD_TAG = "V20_CURRICULUM_MODES"`) the fleet
-is split into four mutually exclusive training modes that all train the **same**
+is split into five mutually exclusive training modes that all train the **same**
 PPO policy (no second network):
 
 | Mode | Start | Purpose |
@@ -60,9 +73,11 @@ PPO policy (no second network):
 | `BRIDGE` | entry checkpoint of the current bottleneck stage | learn the first hop Full runs cannot reproduce |
 | `FRONTIER` | deepest discovered frontier | discover the next unknown story transition |
 | `RETENTION` | rotates mastered-transition entry checkpoints | prevent catastrophic forgetting |
+| `FIGHTER` | healthy Route-1 frontier anchor | train only combat rewards |
 
 plus the existing dynamic `POST_WIPE_RECOVERY` overlay. Allocation is the
-12 / 12 / 6 / 3 ratio scaled to `NUM_ENVS` (at 60 envs: 24 / 21 / 10 / 5).
+12 / 12 / 6 / 3 ratio applied after reserving four Fighter slots
+(at 60 envs: 21 / 20 / 10 / 5 / 4).
 
 Two separate progress concepts now exist:
 
@@ -108,18 +123,130 @@ truncates the episode after sustained cycling. Persistent claim history
 Checkpoints are now two kinds (the old "north-most Y wins" replacement is gone —
 invalid in forests, caves, buildings): `stage_<n>` is the **entry** checkpoint,
 saved on first safe entry and **immutable** thereafter; `stage_frontier_<n>` is
-an optional discovery anchor that advances only on a strictly higher exploration
-score, never on Y.
+an optional discovery anchor that advances only on a strictly higher **topological
+frontier value** (see the FRONTIER-redesign section below), never on Y or tile
+count.
 
-The long-Full-probe horizon bug is fixed: `_episode_step_limit()` gives the
-deeper half of the FULL ranks the real `LONG_FULL_PROBE_STEPS` (32768) instead of
-silently capping every Full episode at `MAX_EPISODE_STEPS` (12000).
+`_episode_step_limit()` now gives **every** FULL run (and the watcher)
+`LONG_FULL_PROBE_STEPS` (32768) — the old code silently capped most Full episodes
+at `MAX_EPISODE_STEPS` (12000), which is nowhere near enough for the full
+journey. `MAX_EPISODE_STEPS` still bounds `progress` / `badge` runs.
 
 After a party wipe a **recovery mode** kicks in (no novelty-memory reset, so
 dying is never a farm): wild-battle rewards are cut to 5 %, generic catches pay 0,
-and graph-distance guidance back to the pre-wipe story front pulls at ±0.50 until
-that front (or a deeper Center respawn, or a badge) is re-reached — then a
-one-time +300. The −100 wipe penalty and the Center-respawn teleport are unchanged.
+and graph-distance guidance back to the pre-wipe story front pulls harder (scaled
+by `POST_WIPE_TARGET_PROGRESS_REWARD / TARGET_PROGRESS_REWARD`) via the same
+non-farmable high-watermark. **The recovery bonus only arms if the blackout
+actually demoted the agent** (`_post_wipe_start_stage < pre_wipe_best_stage`) —
+dying and respawning at the same stage costs the −100 and nothing else
+(`post_wipe_no_loss:+0`). When the agent does climb back to its pre-wipe front
+(or a deeper Center / a badge) it gets `POST_WIPE_FRONT_RECOVERED_PER_STAGE` (40)
+× stages lost, capped at `POST_WIPE_FRONT_RECOVERED_MAX` (80) — **strictly below
+the −100 penalty**, so a wipe + full recovery is always net negative. (Before
+2026-09-06 this was a flat +300 that fired on the first post-blackout step for
+any agent whose best stage equalled its respawn stage — a net +200 for dying,
+which is why the fleet just fought and wiped.)
+
+### 2026-09-06 — Start-state rule, battle rewards, FIGHTER role, 32k FULL horizon
+
+**Start-state rule (non-negotiable):** the **watcher and every FULL agent always
+start from the user-recorded master savegame** (`StartGame.state`, inside Oak's
+lab, post starter + parcel) — never a curriculum checkpoint. **Only FRONTIER may
+start from newly discovered savepoints** (`stage_frontier_<n>`). BRIDGE/RETENTION
+resume the immutable `stage_<n>` ENTRY markers; FIGHTER *reuses* the FRONTIER
+Route 1 anchor, it never creates its own. Enforced by `env.is_watcher` (set in
+`watcher_runtime.make_evaluation_env`) short-circuiting `_choose_episode_start`
+to `"beginning"`, and by FIGHTER sitting at the **end** of `allocate_modes` so
+rank 0 stays FULL (the watcher and the champion probe both key on rank 0).
+
+**Battle rewards** — the V18 change had zeroed `BATTLE_WIN_REWARD` /
+`ENEMY_FAINT_REWARD`, so a chip-and-flee slugfest scored the same as a clean
+win; the fleet fought ~33 % win rate, **3.5 wipes/episode**, never reaching
+Viridian. Fixes:
+- `BATTLE_WIN_REWARD 0 → 10` (event `battle_win:+10`, once per won battle).
+  **Exempt from the post-wipe ×0.05** (`_battle_reward_scale(..., post_wipe_exempt
+  =True)`) — the recovering fleet is almost always post-wipe, so that scaling was
+  zeroing the learning signal exactly when it is needed. Damage
+  (`ENEMY_DAMAGE_REWARD_PER_HP 0.08`) still teaches the attack mechanics; the
+  wild-grind decay (×0.3 after 6 wins) still applies.
+- `LEVEL_GAIN_REWARD 15 → 10`, also post-wipe-exempt.
+- **Low-HP flee:** at/below `LOW_HP_FLEE_RATIO = 0.10` party HP the flee penalty
+  is `LOW_HP_FLED_BATTLE_PENALTY = -2` instead of `-25` — a hurt team walking
+  away beats wiping at −100.
+
+**FIGHTER role** (`curriculum_v20.MODE_FIGHTER`, `FIGHTER_SLOTS = 4` at fleets
+≥ 20; 60 envs → FULL 21 / BRIDGE 20 / FRONTIER 10 / RETENTION 5 / **FIGHTER 4**).
+Dedicated ranks that resume the FRONTIER Route 1 anchor and just fight, feeding
+the shared PPO net concentrated, undecayed battle experience:
+- **400-step out-of-battle leash** (`FIGHTER_LEASH_STEPS = 400`): in-battle steps
+  do not consume this leash (`_fighter_out_of_battle_steps` resets while `in_battle`);
+  the shared 2,000-action single-battle timeout still applies,
+  400 steps outside a battle → `fighter_leash:truncate` → reset onto the anchor
+  with a full party, back in the encounter zone.
+- Exempt from the wild-grind decay (`_battle_reward_scale`) and the per-episode
+  battle-step cap (`MAX_EPISODE_BATTLE_STEPS`) — fighting *is* its episode.
+  Only combat rewards at the normal values; no navigation/story/catching bonuses.
+  Fighter does not submit transition mastery attempts.
+- If the shared-net win rate doesn't climb → FighterBrain (separate net,
+  `docs/BIG_CHANGES_TODO.md`).
+
+**32k FULL horizon** — every FULL run (and the watcher) now gets
+`LONG_FULL_PROBE_STEPS` (32768), not just the probe subset. Oak's lab → Route 1
+→ Viridian → … needs far more than the old 12k cap.
+
+**Backtrack shaping** — `TARGET_BACKTRACK_PENALTY` was briefly toggled to 0 (it
+was pinning FULL/BRIDGE against town walls) but that removed all pressure toward
+the exit and un-mastered transition 1. Compromise: a gentle `-0.005` with a
+town-sized `TARGET_BACKTRACK_MARGIN = 12` — normal navigation inside a town never
+triggers it, only real drift (12+ tiles worse than the episode best). Progress
+stays positive-only (`route_progress_best` high-watermark). `_map_change_count`
+was added to the `TargetShaper` objective key so leaving and returning to a map
+re-anchors the best-distance at the current position (an agent that reached
+Route 1 and walked back to town no longer eats a backtrack storm).
+
+### 2026-09-06 — FRONTIER redesign: topological graph progress, not tile count
+
+`frontier_score` is no longer "tiles explored on this stage". A scout that grazed
+167 tiles in south Route 1 used to beat one that pushed 40 tiles toward the
+unknown northern end — backwards. New module `src/frontier_v20.py`:
+
+- **`frontier_value`** at the agent's own tile = pure BFS **graph depth** from the
+  stage origin on the known walkable graph (`_combined_edges`; largest connected
+  component, so RAM-glitch islands don't distort it) `+ 0.25 × still-open cardinal
+  directions − 0.15 × local re-walk density`. Direction-independent — no `−y`, no
+  north bonus, no compass target. `None` (no reward) when the tile is not
+  connected to the origin.
+- **`FrontierHighWater`** shaper (mirrors `TargetShaper`): FRONTIER mode only,
+  anchored at `max(fleet-best stored for this stage, first connected reading)`,
+  pays `FRONTIER_PROGRESS_REWARD` (0.15) × gain **only on a strict new best past
+  the fleet anchor**. Re-walking known ground, or `depth 21→22→21→22`, pays
+  nothing. The `stage_frontier_<n>` anchor advances to the deepest graph position
+  any scout reaches; `frontier_metric_version: 2` migrates old tile-count values
+  (treated as 0, one re-anchor).
+- **Role split (spec §7):** only FRONTIER agents explore. FULL / BRIDGE /
+  RETENTION exploit known paths, driven by story + `PROVEN_EXIT_REWARD` (+25,
+  crossing an already-proven forward transition, once/episode); they keep only a
+  tiny **capped** `FULL_NEW_TILE_REWARD` (0.02, whole town ≈ +0.8 max) as a
+  "keep moving toward the exit" trickle so they don't pile against a city wall
+  with only the backtrack penalty. FRONTIER gets `SCOUT_NEW_TILE_REWARD` (0.02,
+  `new_tile_scout`) plus the fleet-first global tile bonus.
+- **Proven progress edges (spec §8/§9):** a `stage N → N+1` crossing becomes a
+  proven navigation target only after its canonical variant is seen **twice**
+  (`KnownTransitions.record_and_state`; a single RAM misread can no longer poison
+  navigation — this had pinned the fleet to the Route 1 south border for ~2M
+  steps). The scout that confirms one gets `PROVEN_PROGRESS_EDGE_REWARD` (+40)
+  once.
+- **Warp-loop penalty (spec §10):** `WARP_LOOP_PENALTY` (−0.10) on `A→B→A` /
+  `A→B→A→B` map-pair oscillation (`_recent_map_transitions` deque); first
+  discovery of a warp keeps its normal reward.
+- The old dense per-step `target_closer / target_farther` (±0.20) signal is
+  **deleted** — all distance shaping is now the `TargetShaper` high-watermark.
+- `frontier_score` was never in the champion score / eval — unchanged.
+  `explored_tiles`, `max_frontier_graph_depth`, `best_frontier_value`,
+  `warp_loops`, `proven_*` are logged as separate stats
+  (`trainer_status.json → frontier`, per-agent dashboard fields).
+
+Tests: `tests/test_frontier_v20.py` (13). Full suite 131 green.
 
 ## 2026-09-06 — V20 CURRICULUM MODES
 
@@ -149,10 +276,13 @@ loops.
 
 `FULL` (real `StartGame`), `BRIDGE` (bottleneck stage entry checkpoint),
 `FRONTIER` (deepest discovered frontier), `RETENTION` (rotates mastered
-transitions) — allocated 12 / 12 / 6 / 3 scaled to `NUM_ENVS`
-(`curriculum_v20.allocate_modes`). `POST_WIPE_RECOVERY` still overrides
-dynamically on a wipe. `V20_CURRICULUM = True` is the master switch; set it
-`False` to fall back to the V17–V19 scout-band behaviour.
+transitions) — allocated 12 / 12 / 6 / 3 scaled to `NUM_ENVS`, plus a fixed
+`FIGHTER` block of 4 at the end at fleets ≥ 20 (`curriculum_v20.allocate_modes`;
+60 envs → FULL 21 / BRIDGE 20 / FRONTIER 10 / RETENTION 5 / FIGHTER 4).
+`POST_WIPE_RECOVERY` still overrides dynamically on a wipe. `V20_CURRICULUM =
+True` is the master switch; set it `False` to fall back to the V17–V19 scout-band
+behaviour. See the dated "Start-state rule …" section near the top for the
+FIGHTER role and the watcher/FULL master-savegame rule.
 
 ### discovered vs mastered stage
 

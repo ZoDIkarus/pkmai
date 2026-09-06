@@ -25,6 +25,12 @@ import tempfile
 UNKNOWN = "UNKNOWN_NEXT_TRANSITION"
 KNOWN = "KNOWN_NEXT_TRANSITION"
 
+# A single observation can be a RAM misread or a glitch warp (e.g. a Pallet
+# coordinate bleeding into the Route 1 frame right at the shared border). Just
+# like ``_pallet_route1_target`` discards vote-1 outliers, a crossing only
+# becomes KNOWN once its canonical variant has been seen at least this often.
+MIN_CANONICAL_OBSERVATIONS = 2
+
 
 def _coord(v):
     return [int(v[0]), int(v[1])]
@@ -75,10 +81,31 @@ class KnownTransitions:
             rec["dest_coord"] = _coord(dest_coord)
         return True
 
+    def record_and_state(self, src_stage, dst_stage, source_map, source_exit,
+                         dest_map, dest_coord):
+        """Like ``record`` but returns ``(stored, became_known)``.
+
+        ``became_known`` is ``True`` only on the exact observation that flips
+        this crossing from UNKNOWN to KNOWN (its canonical variant reaching
+        ``MIN_CANONICAL_OBSERVATIONS``) - used once to pay a scout for
+        confirming a real progress edge.
+        """
+        before = self.navigation_state(int(src_stage))
+        stored = self.record(src_stage, dst_stage, source_map, source_exit,
+                             dest_map, dest_coord)
+        after = self.navigation_state(int(src_stage))
+        return stored, (before == UNKNOWN and after == KNOWN)
+
     # -- queries -----------------------------------------------------
     def navigation_state(self, src_stage):
         rec = self._by_src.get(int(src_stage))
-        if rec and int(rec.get("observations", 0)) >= 1:
+        if not rec:
+            return UNKNOWN
+        variants = rec.get("variants") or {}
+        canonical = max(variants.values()) if variants else int(
+            rec.get("observations", 0)
+        )
+        if int(canonical) >= MIN_CANONICAL_OBSERVATIONS:
             return KNOWN
         return UNKNOWN
 

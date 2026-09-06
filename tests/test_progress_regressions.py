@@ -62,7 +62,7 @@ class ProgressRegressionTests(unittest.TestCase):
             state=[b'first']
             e.env=SimpleNamespace(em=SimpleNamespace(get_state=lambda:state[0]))
             e._starter_species=lambda:e.TARGET_STARTER_SPECIES
-            with patch('pokemon_env.SHARED_CURRICULUM_DIR',d), patch(
+            with patch('pokemon_env.read_player_party', return_value=[{'checksum_ok':True, 'cur_hp':21, 'max_hp':21, 'moves':[{'pp':35}]}]), patch('pokemon_env.SHARED_CURRICULUM_DIR',d), patch(
                 'pokemon_env.read_player_location', return_value={
                     'trusted':True,'map_bank':3,'map_id':19,'x_pos':4,'y_pos':30}
             ) as location:
@@ -192,9 +192,12 @@ class ProgressRegressionTests(unittest.TestCase):
     def test_v19_brock_rush_milestones_and_flags(self):
         self.assertEqual(PokemonFireRedEnv.BUILD_TAG, "V20_CURRICULUM_MODES")
         self.assertEqual(PokemonFireRedEnv.STAGE_ADVANCE_REWARD, 250.0)
-        # V20 section 6: non-farmable best-distance shaping at a small rate.
+        # V20 section 6: positive-only non-farmable best-distance shaping.
+        # 2026-09-06: the dense per-step backtrack drip is gone (was pinning
+        # FULL/BRIDGE against town walls) - progress reward stays.
         self.assertEqual(PokemonFireRedEnv.TARGET_PROGRESS_REWARD, 0.05)
-        self.assertEqual(PokemonFireRedEnv.TARGET_BACKTRACK_PENALTY, -0.01)
+        self.assertEqual(PokemonFireRedEnv.TARGET_BACKTRACK_PENALTY, -0.005)
+        self.assertGreaterEqual(PokemonFireRedEnv.TARGET_BACKTRACK_MARGIN, 10)
         self.assertEqual(PokemonFireRedEnv.FRONTIER_SCOUT_SLOTS, 3)
         # neue Meilenstein-Konstanten
         self.assertEqual(PokemonFireRedEnv.PEWTER_WITH_PIKACHU_REWARD, 300.0)
@@ -252,12 +255,16 @@ class ProgressRegressionTests(unittest.TestCase):
         # ohne bekannten Uebergang: gar kein Ziel (kein Frontier-Fallback)
         e._combined_transitions = lambda: []
         self.assertEqual(e._pallet_route1_target(), [])
-        # immediate-reverse-Guard existiert im step()-Ziel-Block
+        # V20 frontier redesign: die alte dichte +/-0.20 target_closer/
+        # target_farther-Schrittbelohnung ist entfernt. Distanz-Shaping laeuft
+        # jetzt AUSSCHLIESSLICH ueber den High-Watermark (route_progress_best /
+        # route_backtrack), Oszillation zahlt nichts.
         import inspect
         src = inspect.getsource(PokemonFireRedEnv.step)
-        self.assertIn("_immediate_reverse", src)
-        self.assertIn("target_closer_suppressed", src)
-        self.assertIn("target_farther", src)   # Strafe NICHT entfernt
+        self.assertNotIn("target_closer", src)
+        self.assertNotIn("target_farther", src)
+        self.assertIn("route_progress_best", src)
+        self.assertIn("route_backtrack", src)
 
     def test_bank4_interiors_never_get_the_500_city_building_reward(self):
         import inspect
@@ -286,13 +293,22 @@ class ProgressRegressionTests(unittest.TestCase):
     def test_post_wipe_recovery_mode(self):
         self.assertEqual(PokemonFireRedEnv.POST_WIPE_WILD_BATTLE_SCALE, 0.05)
         self.assertEqual(PokemonFireRedEnv.POST_WIPE_TARGET_PROGRESS_REWARD, 0.50)
-        self.assertEqual(PokemonFireRedEnv.POST_WIPE_FRONT_RECOVERED_REWARD, 300.0)
+        # 2026-09-06: the recovery bonus is now per-lost-stage and capped
+        # strictly below the -100 wipe penalty so dying is never net positive.
+        self.assertLess(PokemonFireRedEnv.POST_WIPE_FRONT_RECOVERED_MAX, 100.0)
+        self.assertLessEqual(PokemonFireRedEnv.POST_WIPE_FRONT_RECOVERED_PER_STAGE,
+                             PokemonFireRedEnv.POST_WIPE_FRONT_RECOVERED_MAX)
         # Der Wipe setzt den Recovery-Modus + merkt sich die Front, ohne
-        # Novelty-Memory anzufassen.
+        # Novelty-Memory anzufassen; die Respawn-Stufe wird neu erkannt.
         import inspect
         src = inspect.getsource(PokemonFireRedEnv._record_party_wipe)
         self.assertIn("self.post_wipe_recovery = True", src)
         self.assertIn("self.pre_wipe_best_stage", src)
+        self.assertIn("self._post_wipe_start_stage = None", src)
+        # Recovery bonus only after a real demotion + re-climb.
+        step_src = inspect.getsource(PokemonFireRedEnv.step)
+        self.assertIn("post_wipe_no_loss", step_src)
+        self.assertIn("_post_wipe_start_stage", step_src)
         for forbidden in ("seen_coords = set()", "seen_coords.clear",
                           "visited_maps = set()", "visited_maps.clear",
                           "seen_coords -=", "visited_maps -="):
@@ -308,14 +324,33 @@ class ProgressRegressionTests(unittest.TestCase):
         self.assertEqual(e._battle_reward_scale(*wild),
                          PokemonFireRedEnv.TRAINER_BATTLE_REWARD_MULT)
 
-    def test_battle_rewards_only_continuous_signals(self):
-        # V18: im Kampf zaehlen nur Schaden/Heilung/Level/Fangen - kein
-        # pauschaler KO- oder Sieg-Bonus mehr.
+    def test_battle_rewards_damage_plus_modest_win_bonus(self):
+        # 2026-09-06: damage/heal/level are the continuous teachers; a modest
+        # BATTLE_WIN_REWARD is back so FINISHING a fight beats chip-and-flee.
+        # No per-KO faint bonus (win covers it for wild; damage covers trainer).
         self.assertEqual(PokemonFireRedEnv.ENEMY_FAINT_REWARD, 0.0)
-        self.assertEqual(PokemonFireRedEnv.BATTLE_WIN_REWARD, 0.0)
+        self.assertEqual(PokemonFireRedEnv.BATTLE_WIN_REWARD, 10.0)
+        self.assertLess(PokemonFireRedEnv.BATTLE_WIN_REWARD, 50.0)  # not the pre-V18 jackpot
         self.assertGreater(PokemonFireRedEnv.ENEMY_DAMAGE_REWARD_PER_HP, 0.0)
         self.assertGreater(PokemonFireRedEnv.LEVEL_GAIN_REWARD, 0.0)
         self.assertGreater(PokemonFireRedEnv.SPECIES_CAUGHT_FIRST_REWARD, 0.0)
+
+    def test_hurt_team_flees_almost_free(self):
+        self.assertLess(PokemonFireRedEnv.LOW_HP_FLED_BATTLE_PENALTY, 0.0)
+        self.assertGreater(PokemonFireRedEnv.LOW_HP_FLED_BATTLE_PENALTY,
+                           PokemonFireRedEnv.FLED_BATTLE_PENALTY)
+        self.assertLessEqual(PokemonFireRedEnv.LOW_HP_FLEE_RATIO, 0.15)
+        import inspect
+        src = inspect.getsource(PokemonFireRedEnv.step)
+        self.assertIn("LOW_HP_FLED_BATTLE_PENALTY", src)
+        self.assertIn("LOW_HP_FLEE_RATIO", src)
+
+    def test_battle_win_and_levelup_exempt_from_post_wipe_scale(self):
+        # The recovering fleet is almost always post-wipe; win/level-up must
+        # still teach there.
+        import inspect
+        src = inspect.getsource(PokemonFireRedEnv.step)
+        self.assertGreaterEqual(src.count("post_wipe_exempt=True"), 2)
 
     def test_advancing_pokecenter_heal_is_a_serious_progress_anchor(self):
         # V19: der tiefere Center verschiebt den Wipe-Respawn dauerhaft nach

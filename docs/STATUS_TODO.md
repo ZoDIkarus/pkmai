@@ -1,13 +1,189 @@
 # Pokemon FireRed AI – PROJECT STATUS / TODO
 
-> **V20 CURRICULUM MODES (current):** fleet split into `FULL` / `BRIDGE` /
-> `FRONTIER` / `RETENTION` on one PPO policy; `discovered_stage` vs
-> `mastered_stage` with rolling per-transition stats; dynamic `current_bottleneck`
-> BRIDGE focus; non-farmable best-distance target shaping (0.05); entry vs
-> frontier checkpoints (no more "north Y wins"); `ShortCycleGuard`; long-Full
-> probe horizon fixed. Deployed with a 100 % clean reset (fresh net, world_stage
-> 0, no checkpoints; only the `StartGame` master savegame kept). `V20_CURRICULUM`
-> master switch. See `README.md` and the section below.
+## Consolidated review — 2026-09-06
+
+Current behavior and exact reward values: [CURRENT_LOGIC.md](CURRENT_LOGIC.md).
+The dated records below are history; their earlier reward values and restart instructions are superseded.
+
+- [x] Actual role dispatch, stage/frontier loading, stage-1 entry and spawn reward baselines corrected.
+- [x] Healthy frontier publication/loading; original unhealthy Route-1 anchor backed up and repaired to 62/62 HP.
+- [x] Fighter: combat-only numeric reward accounting, unchanged combat values, no six-faint decay.
+- [x] Frontier/Fighter reset after wipe; Frontier gets a 120-travel-step backtrack limit.
+- [x] Fractional frontier scores preserved; position score matches the actual saved state.
+- [x] Target margin 12 is actually passed; revisiting a map cannot repay the same approach.
+- [x] Resume learner by default; no invented mastery successes from a discovery record.
+- [x] Status/Watcher search, role/health filters and correct Fighter labels.
+- [x] 149 regression tests; isolated real-emulator starts/steps for all five roles; valid saved policy tensors.
+- [ ] User starts trainer when ready; retain watcher process/window. No training reset required.
+- [ ] Measure real Route-1→Viridian success, new safe anchors, battle wins and forest arrival after training resumes. Overnight completion is not established by these tests.
+
+## Historical work log
+
+
+> **V20 CURRICULUM MODES + FRONTIER redesign + FIGHTER role (current):** fleet
+> split into `FULL` / `BRIDGE` / `FRONTIER` / `RETENTION` / `FIGHTER` on one PPO
+> policy; `discovered_stage` vs `mastered_stage`; dynamic `current_bottleneck`
+> BRIDGE focus; positive-only high-watermark target shaping; entry vs frontier
+> checkpoints (no "north Y wins"); `ShortCycleGuard`; `V20_CURRICULUM` switch.
+> **Frontier progress = BFS graph depth from the stage origin, not tile count**
+> (`src/frontier_v20.py`); role split (`FULL_NEW_TILE_REWARD = 0`, but a real
+> `FULL_FRONTIER_TILE_REWARD` on unproven stages); `WARP_LOOP_PENALTY`;
+> `PROVEN_EXIT` / `PROVEN_PROGRESS_EDGE` rewards; `KnownTransitions` needs ≥2
+> observations. **Watcher + FULL always start from the master savegame; only
+> FRONTIER from new savepoints.** Battle: `BATTLE_WIN_REWARD 10` (post-wipe
+> exempt), low-HP flee −2, no more suicide-farm (+300→per-lost-stage capped
+> below −100). Every FULL run + watcher = 32768-step horizon. See `README.md`
+> and the dated sections below.
+
+## 2026-09-06 — Battle rewards + FIGHTER role + 32k FULL horizon
+
+The fleet fights ~33 % win rate, **3.5 wipes/episode**, never reaches Viridian.
+Root cause: the V18 change zeroed `BATTLE_WIN_REWARD`/`ENEMY_FAINT_REWARD` so a
+chip-and-flee slugfest scored the same as a clean win; the recovering fleet is
+almost always post-wipe (battle rewards ×0.05) so it never learns to fight.
+
+**Reward changes:**
+- `BATTLE_WIN_REWARD 0 → 10` (event `battle_win:+10`), **exempt from the
+  post-wipe ×0.05** (`_battle_reward_scale(..., post_wipe_exempt=True)`). Damage
+  (`0.08/HP`) still teaches attack mechanics; the win bonus makes finishing the
+  fight beat a slugfest. Wild-grind decay (×0.3 after 6) still applies.
+- `LEVEL_GAIN_REWARD 15 → 10`, also post-wipe-exempt.
+- Low-HP flee: at/below `LOW_HP_FLEE_RATIO = 0.10` party HP, the flee penalty is
+  `LOW_HP_FLED_BATTLE_PENALTY = -2` instead of `-25` — a hurt team walking away
+  beats wiping at -100.
+- `TARGET_BACKTRACK_PENALTY -0.005` (was toggled to 0, which un-mastered
+  transition 1 by removing all exit pressure) with `TARGET_BACKTRACK_MARGIN 3
+  → 12` — town-sized slop, only real drift (12+ worse than best) gets the tiny
+  nudge, no wall-pin.
+- Every FULL run + the watcher now get `LONG_FULL_PROBE_STEPS` (32768), not just
+  the probe subset (`_episode_step_limit`, user request).
+
+**Start-state rule (user, 2026-09-06):** the **watcher and every FULL agent
+ALWAYS start from the master savegame** (`StartGame.state`, Oak's lab, post
+starter + parcel) — never a curriculum checkpoint. **Only FRONTIER may start
+from newly discovered savepoints** (`stage_frontier_<n>`). BRIDGE/RETENTION keep
+resuming the immutable `stage_<n>` ENTRY markers; FIGHTER **reuses** the FRONTIER
+Route 1 anchor, it does not make its own. Enforced by `env.is_watcher` (set in
+`watcher_runtime.make_evaluation_env`) short-circuiting `_choose_episode_start`
+to `"beginning"`, and FIGHTER moved to the END of `allocate_modes` so rank 0
+stays FULL (the watcher and the champion probe both key on rank 0).
+
+**New FIGHTER role (`curriculum_v20.MODE_FIGHTER`):**
+- `FIGHTER_SLOTS = 4` carved off `allocate_modes` at fleets ≥ 20, placed **last**
+  (60 envs → FULL 21 / BRIDGE 20 / FRONTIER 10 / RETENTION 5 / **FIGHTER 4**).
+- Resumes `stage_frontier_2` (the FRONTIER anchor, which sits in the Route 1
+  encounter zone) → `stage_2` entry → master. Does NOT create its own savepoint.
+- **400-step out-of-battle leash** (`FIGHTER_LEASH_STEPS = 400`): in-battle steps
+  are unlimited; `_fighter_out_of_battle_steps` resets to 0 while `in_battle`,
+  increments otherwise; at 400 → `fighter_leash:truncate`. Wander off → reset →
+  fresh party on the grass checkpoint → back in the encounter zone.
+- FIGHTER is exempt from the wild-grind decay (`_battle_reward_scale`) and from
+  the per-episode battle-step cap (`MAX_EPISODE_BATTLE_STEPS`) - fighting IS its
+  episode. Otherwise normal rewards. Not part of discover/master stats.
+- Same shared PPO net - the point is feeding it concentrated, undecayed battle
+  experience so the whole fleet fights better. If win rate doesn't climb from
+  ~33 % after a few hours → FighterBrain (separate net, `docs/BIG_CHANGES_TODO`).
+
+Historical validation: 135 tests. Current stream must not be restarted; see consolidated review above.
+
+## 2026-09-06 — FRONTIER redesign (`src/frontier_v20.py`, restart done)
+
+Problem: `frontier_score ≈ len(tiles explored on stage)` — a scout grazing south
+Route 1 (167 tiles) beat one pushing toward the unknown end (40 tiles). The
+`stage_frontier_<n>` anchor (FRONTIER agents resume from it) therefore stuck in
+already-known ground; the fleet burned millions of steps re-mapping known area
+while the real Route1→Viridian exit was never found.
+
+**Done:**
+- New `src/frontier_v20.py`: `FrontierGraph` (BFS graph depth from stage origin,
+  largest connected component, no compass heuristic) + `FrontierHighWater`
+  (strict new-best shaper, mirrors `TargetShaper`).
+- `frontier_score` (and the FRONTIER reward) = episode-best `frontier_value` **at
+  the agent's own tile** = `1.0·graph_depth + 0.25·open_dirs − 0.15·revisit`.
+  Anchored at `max(fleet-best stored, first connected reading)`; pays
+  `FRONTIER_PROGRESS_REWARD 0.15 × gain` only past that anchor. `A→B→A→B`,
+  re-walking, shared-graph load → 0.
+- `stage_frontier_<n>.meta` gains `frontier_metric_version: 2`; old tile-count
+  values auto-treated as 0 (one re-anchor). Verified: `stage_frontier_2` now
+  `frontier_score: 29, frontier_metric_version: 2`.
+- Role split (§7): only `training_mode == "FRONTIER"` explores.
+  `FULL_NEW_TILE_REWARD = 0` (`new_tile_full:+0`); `SCOUT_NEW_TILE_REWARD 0.02`
+  FRONTIER-only (`new_tile_scout`).
+- `KnownTransitions`: a crossing is KNOWN only after its canonical variant has ≥2
+  observations (`MIN_CANONICAL_OBSERVATIONS`; new `record_and_state()` reports
+  the UNKNOWN→KNOWN flip once). Removed a single glitch `Route1(13,36)↔Viridian`
+  transition from `known_transitions.json` + one agent memory file — it had
+  pinned the fleet to the Pallet border (~2M steps, 0/70 on the 2→3 transition).
+- `PROVEN_PROGRESS_EDGE_REWARD 40` (scout, on the confirming 2nd observation),
+  `PROVEN_EXIT_REWARD 25` (FULL/BRIDGE crossing an already-proven forward hop,
+  1×/episode).
+- `WARP_LOOP_PENALTY −0.10` on `A→B→A` / `A→B→A→B` map-pair cycles
+  (`_recent_map_transitions` deque). `LOCAL_LOOP_PENALTY −0.05` centralised
+  (uses the existing `ShortCycleGuard`).
+- Deleted the old dense `target_closer:+0.20 / target_farther:-0.20` per-step
+  shaping (post-wipe path) — all distance shaping now the `TargetShaper`
+  high-watermark, post-wipe just scaled by
+  `POST_WIPE_TARGET_PROGRESS_REWARD / TARGET_PROGRESS_REWARD`.
+- Reverted an earlier same-session over-correction: `LocalLoopGuard` progress key
+  `len(seen_coords)//32` → back to exact `len(seen_coords)` (was throttling the
+  live map reveal).
+- New stats in `trainer_status.json → frontier` + per-agent dashboard:
+  `frontier_tiles`, `max_frontier_graph_depth`, `best_frontier_value`,
+  `new_frontier_highwaters`, `warp_loops`, `local_loops`, `proven_progress_edges`,
+  `proven_exit_reached`. `explored_tiles` stays a pure stat; `frontier_score` was
+  never in the champion score.
+- Tests: `tests/test_frontier_v20.py` (13). Full suite **131 green**.
+- Trainer restarted via osascript with `PKMAI_RESUME_SAVED=1` (resumed ~5.36M
+  steps); **watcher (PID 3966) + web_stream (3958) left running — not restarted**.
+
+**Watching:**
+- 🟡 FRONTIER anchor sits at graph-depth 29 (fleet best on Route 1). Agents
+  currently re-walk depth 17–22 → no `frontier_highwater` yet. It fires once one
+  pushes past 29. Correct by design, but confirm the fleet actually pushes north
+  over the next hour instead of grazing.
+- 🟡 Champion `_score` `full_*_permille` are dead constants (post-parcel
+  `StartGame.state`), so `_protected_regression`'s intro/starter guards can't
+  fire. Cleanup drafted, deferred by user ("wir warten").
+- ✅ **Post-wipe "+300 for dying" exploit fixed (user 2026-09-06).** The recovery
+  bonus fired the instant `_current_world_stage(respawn) >= pre_wipe_best_stage`.
+  An agent that never left Pallet (best stage 1), died in the grass, and
+  blacked out back to Pallet (stage 1) hit `1 >= 1` on the next step → **instant
+  +300**. Net per wipe: −100 + 300 = **+200 for dying**. With ~2.5 wipes/episode
+  that is +500/episode of pure suicide-farming — the reason the fleet "just
+  fights and dies". **Fix:** `_post_wipe_start_stage` recorded on the first
+  valid post-teleport step; if it is `>= pre_wipe_best_stage` the wipe cost no
+  ground → recovery stands down silently (`post_wipe_no_loss:+0`), only the −100
+  stands. Otherwise the bonus is `POST_WIPE_FRONT_RECOVERED_PER_STAGE (40) ×
+  stages_lost`, capped `POST_WIPE_FRONT_RECOVERED_MAX = 80` — strictly below the
+  wipe penalty, so a wipe+full-recovery cycle is always net negative (−60…−20).
+  Old flat `POST_WIPE_FRONT_RECOVERED_REWARD = 300` removed. Applies to the
+  watcher too once it is next restarted (running watcher still has the old bug).
+- 🟡 City wall-clustering (user 2026-09-06, iterated 3×). Symptom: 46–54/60 agents
+  piled against a Pallet wall (east x21, then SW y19), reward window all
+  `route_backtrack:-0.010` + near-zero tile reward. Three compounding causes,
+  all now fixed:
+  1. **`FULL_NEW_TILE_REWARD = 0`** removed the exploration gradient that used
+     to spread FULL/BRIDGE out. → restored a tiny capped trickle (0.02).
+  2. **FULL agents had no reason to be on Route 1.** With `new_tile` FRONTIER-only
+     and the 2→3 transition unproven, a FULL agent on Route 1 had zero positive
+     signal → drifted back to Pallet. → new `FULL_FRONTIER_TILE_REWARD = 0.3`
+     (capped): FULL/BRIDGE get a real tile push on any stage whose forward
+     transition is still `NAV_UNKNOWN` (they help find the way), and only the
+     0.02 trickle once it is proven (then they navigate to the proven exit).
+     Event `new_tile_full:frontier` vs `new_tile_full`.
+  3. **`TARGET_BACKTRACK_PENALTY -0.01 → 0.0`.** A −0.01 every step an agent was
+     farther from the one-tile exit target than its episode best is exactly the
+     "permanent per-step ± signal" spec §6 forbids; it pinned whole modes at
+     town walls. Progress is now positive-only (`route_progress_best`
+     high-watermark); dawdling pressure = step cost + ShortCycleGuard +
+     `WARP_LOOP_PENALTY`. Event still logged (`route_backtrack:+0.000`).
+  Plus: `_map_change_count` added to the `TargetShaper` objective key so LEAVING
+  and RETURNING to a map re-anchors the best-distance at the current position
+  (a FULL agent that reached Route 1 and walked back into town no longer eats a
+  backtrack storm from a frozen first-visit anchor).
+  Trainer + **watcher** restarted (user asked; watcher now runs all the session's
+  fixes incl. the post-wipe one). Watch whether the fleet moves onto Route 1 and
+  pushes north instead of milling in Pallet.
 
 > **Big deferred changes** (FighterBrain, forest-exit house) live in
 > `docs/BIG_CHANGES_TODO.md`.

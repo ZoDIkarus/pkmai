@@ -88,6 +88,15 @@ class Test3_Route1UnknownExit(unittest.TestCase):
         self.assertEqual(known.navigation_state(2), UNKNOWN)
         self.assertIsNone(known.source_exit_for_stage(2))
 
+    def test_single_observation_is_not_yet_known(self):
+        # One crossing can be a RAM misread / glitch warp (the real y=36 Route 1
+        # "Viridian exit" that pinned the fleet to the Pallet border). It must
+        # not become a navigation target until confirmed a second time.
+        known = KnownTransitions()
+        known.record(2, 3, source_map=(3, 19), source_exit=(13, 36),
+                     dest_map=(3, 1), dest_coord=(36, 19))
+        self.assertEqual(known.navigation_state(2), UNKNOWN)
+
 
 # --------------------------------------------------------------------------
 class Test4_Route1ViridianKnown(unittest.TestCase):
@@ -96,8 +105,10 @@ class Test4_Route1ViridianKnown(unittest.TestCase):
 
     def test_known_transition_becomes_target(self):
         known = KnownTransitions()
-        known.record(2, 3, source_map=(3, 19), source_exit=(9, 0),
-                     dest_map=(3, 1), dest_coord=(20, 40))
+        # Same crossing observed twice -> canonical, becomes the target.
+        for _ in range(2):
+            known.record(2, 3, source_map=(3, 19), source_exit=(9, 0),
+                         dest_map=(3, 1), dest_coord=(20, 40))
         self.assertEqual(known.navigation_state(2), KNOWN)
         self.assertEqual(known.source_exit_for_stage(2), (9, 0))
 
@@ -223,14 +234,15 @@ class Test9_LongFullProbeHorizon(unittest.TestCase):
         self.assertEqual(env._episode_step_limit(),
                          PokemonFireRedEnv.LONG_FULL_PROBE_STEPS)
 
-    def test_short_full_rank_capped_at_max(self):
+    def test_every_full_rank_gets_the_long_horizon(self):
+        # 2026-09-06 (user): every FULL run now gets LONG_FULL_PROBE_STEPS, not
+        # just the probe subset - the journey needs far more than 12k steps.
         layout = curriculum_v20.allocate_modes(33)
         full_ranks = [i for i, m in enumerate(layout) if m == MODE_FULL]
-        short_rank = full_ranks[0]
-        env = self._limit(rank=short_rank)
-        self.assertFalse(env._is_long_full_probe())
-        self.assertEqual(env._episode_step_limit(),
-                         PokemonFireRedEnv.MAX_EPISODE_STEPS)
+        for r in (full_ranks[0], full_ranks[-1]):
+            env = self._limit(rank=r)
+            self.assertEqual(env._episode_step_limit(),
+                             PokemonFireRedEnv.LONG_FULL_PROBE_STEPS)
 
     def test_scout_uses_scout_limit(self):
         env = self._limit(training_objective="scout")
@@ -289,12 +301,19 @@ class Test10_ScoutDeepButFullShallow(unittest.TestCase):
 # --------------------------------------------------------------------------
 class TestModeAllocation(unittest.TestCase):
     def test_reference_ratio_33(self):
+        # 2026-09-06: FIGHTER (4) is carved off the top at n >= 20; the
+        # remaining 29 follow the 12/12/6/3 ratio.
         s = curriculum_v20.allocation_summary(33)
         self.assertEqual(sum(s.values()), 33)
-        self.assertEqual(s[MODE_FULL], 12)
-        self.assertEqual(s[MODE_BRIDGE], 12)
-        self.assertEqual(s[MODE_FRONTIER], 6)
-        self.assertEqual(s[MODE_RETENTION], 3)
+        self.assertEqual(s[curriculum_v20.MODE_FIGHTER], 4)
+        self.assertGreaterEqual(s[MODE_FULL], 10)
+        self.assertGreaterEqual(s[MODE_BRIDGE], 9)
+        self.assertEqual(s[MODE_FRONTIER], 5)
+        self.assertEqual(s[MODE_RETENTION], 2)
+
+    def test_small_fleet_has_no_fighters(self):
+        s = curriculum_v20.allocation_summary(12)
+        self.assertEqual(s[curriculum_v20.MODE_FIGHTER], 0)
 
     def test_scales_to_other_sizes(self):
         for n in (1, 4, 8, 12, 20, 48, 60, 96):

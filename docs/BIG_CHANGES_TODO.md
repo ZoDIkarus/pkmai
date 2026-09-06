@@ -1,5 +1,8 @@
 # PKMAI — BIG CHANGES TODO
 
+Current implemented behavior: [CURRENT_LOGIC.md](CURRENT_LOGIC.md). Fighter now uses combat-only rewards on the shared network; a separate FighterBrain remains a future proposal.
+
+
 Größere Umbauten, die eine eigene fokussierte Session + sauberen Neustart
 brauchen (nicht mal eben zwischendurch). Kleinteiliges Reward-/Doku-Zeug
 steht weiterhin in `docs/STATUS_TODO.md`.
@@ -16,8 +19,14 @@ steht weiterhin in `docs/STATUS_TODO.md`.
 
 ## 1. FighterBrain — eigenes Kampf-Hirn neben dem ChampionBrain
 
-**Stand:** 2026-09-06 besprochen, noch nicht gebaut. Zuerst wird beobachtet,
-wie die V18-Reward-Änderungen wirken.
+**Stand:** 2026-09-06 — als **erster, leichter Schritt** wurde stattdessen eine
+`FIGHTER`-Rolle auf dem GETEILTEN PPO-Netz gebaut (kein zweites Netz):
+`curriculum_v20.MODE_FIGHTER`, 4 Ränge, resumen den FRONTIER-Route-1-Anker,
+400-Step-Leash außerhalb Kampf, vom Wild-Decay + Post-Wipe-×0.05 ausgenommen.
+Dazu `BATTLE_WIN_REWARD 0→10`, `LEVEL_GAIN_REWARD 15→10`, Billig-Flucht bei
+HP ≤ 10 %. Siehe `README.md` + `docs/STATUS_TODO.md`. **Erst beobachten**, ob die
+flottenweite Kampf-Sieg-Quote (aktuell ~33 %) damit steigt. Wenn nicht → der
+volle FighterBrain unten (separates Netz, eigener Champion-Loop).
 
 **Ziel:** Eine zweite, dauerhaft eigenständige PPO-Policy, die nur für Kämpfe
 optimiert wird — unabhängig vom Fortschritts-Hirn und **nicht** von einem

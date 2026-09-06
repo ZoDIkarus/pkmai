@@ -65,7 +65,7 @@ def make_evaluation_env(root, navigation=((), (), ()), n_envs=60):
             bank, map_id, x1, y1, x2, y2 = e
             tiles.add((bank, map_id, x1, y1))
             tiles.add((bank, map_id, x2, y2))
-    return module.PokemonFireRedEnv(
+    env = module.PokemonFireRedEnv(
         rank=0, n_envs=n_envs,
         shared_edges=dict.fromkeys(edges, 1), shared_maps=dict.fromkeys(maps, 1),
         shared_transitions=dict.fromkeys(transitions, 1),
@@ -74,6 +74,10 @@ def make_evaluation_env(root, navigation=((), (), ()), n_envs=60):
             default=1)}, shared_species={},
         shared_tiles=dict.fromkeys(tiles, 1),
     )
+    # The watcher always plays a full run from the master savegame, never a
+    # curriculum checkpoint (rank 0 must not inherit FIGHTER / any resume mode).
+    env.is_watcher = True
+    return env
 
 
 def telemetry(env, info, reward, episode, model_name, version):

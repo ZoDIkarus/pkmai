@@ -46,9 +46,18 @@ MODE_FULL = "FULL"
 MODE_BRIDGE = "BRIDGE"
 MODE_FRONTIER = "FRONTIER"
 MODE_RETENTION = "RETENTION"
+MODE_FIGHTER = "FIGHTER"
 MODE_POST_WIPE_RECOVERY = "POST_WIPE_RECOVERY"
 
+# FIGHTER is NOT part of the discover/master pipeline - it is a fixed block of
+# ranks that resume a grass checkpoint on the first wild route and just fight
+# (400-step out-of-battle leash). Its whole point is feeding the shared PPO net
+# concentrated, undecayed battle experience so the whole fleet fights better.
 ALL_MODES = (MODE_FULL, MODE_BRIDGE, MODE_FRONTIER, MODE_RETENTION)
+
+# Fixed FIGHTER slots taken off the top once the fleet is large enough.
+FIGHTER_SLOTS = 4
+FIGHTER_MIN_FLEET = 20
 
 # Reference allocation from the brief for ~33 envs.  Applied as ratios so it
 # scales to any fleet size.
@@ -369,7 +378,12 @@ def allocate_modes(n_envs):
     if n == 1:
         return [MODE_FULL]
 
-    counts = {m: int(n * _ALLOC_RATIO[m]) for m in ALL_MODES}
+    # FIGHTER: a fixed block off the top (large fleets only), the rest split by
+    # the FULL/BRIDGE/FRONTIER/RETENTION ratio as before.
+    fighters = FIGHTER_SLOTS if n >= FIGHTER_MIN_FLEET else 0
+    rest = n - fighters
+
+    counts = {m: int(rest * _ALLOC_RATIO[m]) for m in ALL_MODES}
 
     # Minimum viable coverage.
     counts[MODE_BRIDGE] = max(counts[MODE_BRIDGE], 1 if n >= 4 else 0)
@@ -379,18 +393,21 @@ def allocate_modes(n_envs):
 
     # Trim if we over-allocated small fleets (take from RETENTION, then FRONTIER,
     # then BRIDGE - never drop FULL below 1).
-    overflow = sum(counts.values()) - n
+    overflow = sum(counts.values()) - rest
     for m in (MODE_RETENTION, MODE_FRONTIER, MODE_BRIDGE, MODE_FULL):
         while overflow > 0 and counts[m] > (1 if m == MODE_FULL else 0):
             counts[m] -= 1
             overflow -= 1
 
     # Remainder -> FULL.
-    counts[MODE_FULL] += max(0, n - sum(counts.values()))
+    counts[MODE_FULL] += max(0, rest - sum(counts.values()))
 
+    # FIGHTER goes at the END so rank 0 stays FULL (the watcher and the
+    # champion-measured probe both key on rank 0).
     layout = []
     for m in (MODE_FULL, MODE_BRIDGE, MODE_FRONTIER, MODE_RETENTION):
         layout.extend([m] * counts[m])
+    layout.extend([MODE_FIGHTER] * fighters)
     layout = layout[:n]
     while len(layout) < n:
         layout.append(MODE_FULL)
@@ -404,4 +421,4 @@ def mode_for_rank(rank, n_envs):
 
 def allocation_summary(n_envs):
     layout = allocate_modes(n_envs)
-    return {m: layout.count(m) for m in ALL_MODES}
+    return {m: layout.count(m) for m in ALL_MODES + (MODE_FIGHTER,)}

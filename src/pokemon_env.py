@@ -4914,25 +4914,35 @@ class PokemonFireRedEnv(gym.Env):
                         # claim_event (reward_events.json), damit es auch fuer
                         # Gebaeude feuert, die shared_maps schon kennt, und nach
                         # Neustarts erledigt bleibt.
-                        _is_city_building = int(bank) in self.CITY_BUILDING_BANKS
-                        _bld_reward = (
-                            self.BUILDING_FIRST_GLOBAL_REWARD if _is_city_building
-                            else self.EPISODE_NEW_MAP_REWARD
+                        # NUR Bank 5 (Vertania) und Bank 6 (Marmoria) duerfen
+                        # den +500-Erstfund bekommen. Bank 4 = Alabastia/Pallet-
+                        # Innenraeume NIEMALS - weder +500, noch ein
+                        # building_4_x-claim_event, nur der normale kleine
+                        # Fleet-Erstfund (EPISODE_NEW_MAP_REWARD ueber shared_maps,
+                        # nicht wiederholbar). Der explizite `!= 4` ist eine
+                        # Sicherung, falls jemand spaeter versehentlich 4 in
+                        # CITY_BUILDING_BANKS aufnimmt.
+                        _is_city_building = (
+                            int(bank) in self.CITY_BUILDING_BANKS
+                            and int(bank) != 4
                         )
-                        _bld_key = (
-                            f"building_{int(bank)}_{int(map_id)}"
-                            if _is_city_building else None
-                        )
-                        _bld_claimed = (
-                            claim_event(EXPLORATION_MEMORY_DIR, _bld_key,
-                                        self.shared_species, self.shared_lock)
-                            if _bld_key is not None
-                            else _claimed_globally
-                        )
+                        if _is_city_building:
+                            _bld_reward = self.BUILDING_FIRST_GLOBAL_REWARD
+                            _bld_key = f"building_{int(bank)}_{int(map_id)}"
+                            _bld_claimed = claim_event(
+                                EXPLORATION_MEMORY_DIR, _bld_key,
+                                self.shared_species, self.shared_lock,
+                            )
+                            _bld_event = "new_building_global"
+                        else:
+                            _bld_reward = self.EPISODE_NEW_MAP_REWARD
+                            _bld_key = None
+                            _bld_claimed = _claimed_globally
+                            _bld_event = "new_building_seen"
                         if _bld_reward and _bld_claimed:
                             reward += _bld_reward
                             reward_events.append(
-                                f"new_building_global:{int(bank)}_{int(map_id)}:"
+                                f"{_bld_event}:{int(bank)}_{int(map_id)}:"
                                 f"+{_bld_reward:.2f}"
                             )
                 elif not _wipe_cooldown_active and (

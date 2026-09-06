@@ -216,6 +216,27 @@ class ProgressRegressionTests(unittest.TestCase):
         e._combined_transitions = lambda: [(3, 2, 1, 1, 3, 1, 2, 2)]  # Pewter->Viridian (rueck)
         self.assertEqual(e._v19_forward_targets(3, 2), [])
 
+    def test_bank4_interiors_never_get_the_500_city_building_reward(self):
+        import inspect
+        src = inspect.getsource(PokemonFireRedEnv.step)
+        # Der Stadt-Gebaeude-Bonus haengt an CITY_BUILDING_BANKS UND explizit
+        # `!= 4`, und ein building_<b>_<m>-claim_event entsteht nur fuer
+        # Stadt-Gebaeude.
+        i = src.index("_is_city_building")
+        window = src[i:i + 500]
+        self.assertIn("int(bank) in self.CITY_BUILDING_BANKS", window)
+        self.assertIn("int(bank) != 4", window)
+        self.assertNotIn(4, PokemonFireRedEnv.CITY_BUILDING_BANKS)
+        self.assertEqual(PokemonFireRedEnv.CITY_BUILDING_BANKS, {5, 6})
+        self.assertGreater(PokemonFireRedEnv.BUILDING_FIRST_GLOBAL_REWARD,
+                           PokemonFireRedEnv.EPISODE_NEW_MAP_REWARD)
+        # Das +500-Event (`new_building_global`) und der `building_`-Key haengen
+        # beide am selben `_is_city_building`-Zweig, der 500-Wert im if-Body.
+        self.assertLess(src.index("_is_city_building"),
+                        src.index('"new_building_global"'))
+        self.assertLess(src.index('"new_building_global"'),
+                        src.index('"new_building_seen"'))
+
     def test_post_wipe_recovery_mode(self):
         self.assertEqual(PokemonFireRedEnv.POST_WIPE_WILD_BATTLE_SCALE, 0.05)
         self.assertEqual(PokemonFireRedEnv.POST_WIPE_TARGET_PROGRESS_REWARD, 0.50)

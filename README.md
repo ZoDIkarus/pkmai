@@ -31,11 +31,14 @@ Model loading and reward computation can still introduce pauses between actions.
 active. The temporary recovery model and existing progress were moved into
 `brain_backups/fresh_reset_20260906_141332/`. Trainer, watcher, web and status
 were restarted with empty curriculum/exploration state and a newly initialized
-PPO policy. CPU training is the current stability baseline; the origin of the
-previous non-finite checkpoint values has not been conclusively established.
+PPO policy. Training uses `TRAIN_DEVICE = "auto"` again (MPS on this Mac), with no FPS
+limit or display callback in training. Only the watcher is paced at 59.7 FPS.
+The origin of the previous non-finite checkpoint values is still unconfirmed.
 The trainer checks initial policy weights and atomically publishes the fresh
 resume immediately, allowing the watcher to act before periodic checkpoints.
-The 9+5 inputs and per-frame display remain enabled.
+The 9+5 inputs and per-frame watcher display remain enabled. For a maintenance
+restart, `PKMAI_RESUME_SAVED=1` preserves the saved fresh-run step counter even
+before a champion exists. Do not restart the watcher during an active stream.
 
 **Verified:** 106 tests passed; the running watcher executed actions and reported
 59.7 displayed FPS, with about 24 JPEG updates/s measured locally. These are

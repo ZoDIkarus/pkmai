@@ -59,7 +59,7 @@ PPO_ENT_COEF = 0.02
 
 # "auto" = MPS auf Apple Silicon wenn verfuegbar, sonst CPU.
 # Alternativ: "cpu" oder "mps"
-TRAIN_DEVICE = "cpu"  # Fresh-run stability baseline after non-finite checkpoints.
+TRAIN_DEVICE = "auto"
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 RUNTIME_DIR = os.path.join(PROJECT_ROOT, "runtime")
@@ -1395,7 +1395,8 @@ def main():
         # Ihr eingebauter Step-Zaehler (~11 Mio) ist irrefuehrend - es ist ein
         # frischer V11-Lauf. Ohne echten Champion (keine champion_score.json)
         # den Zaehler auf 0 setzen, damit das Dashboard „V11-Steps" zeigt.
-        if not os.path.exists(CHAMPION_FILE):
+        if (not os.path.exists(CHAMPION_FILE)
+                and os.environ.get("PKMAI_RESUME_SAVED") != "1"):
             model.num_timesteps = 0
             try:
                 model._num_timesteps_at_start = 0

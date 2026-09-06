@@ -1,5 +1,16 @@
 # PKMAI — Live Work Log
 
+## 2026-09-06 — Restore training throughput; preserve live watcher
+
+User clarified that only the watcher needs smooth pacing. Reverted TRAIN_DEVICE
+from CPU to auto (MPS on this Mac). Stopped only trainer PID 3952 via SIGINT;
+saved/validated 105,300 fresh-run steps and copied resume into
+`brain_backups/fresh_before_mps_20260906_142243/`. Restarted only train.py with
+PKMAI_RESUME_SAVED=1. This explicit maintenance flag now also skips the legacy
+no-champion step-counter reset. No old/pre-reset policy restored. Watcher PID
+3966 and web PID 3958 remain running, untouched; user is streaming and explicitly
+requires no watcher restart. Training has no FPS pacing callback. 106 tests pass.
+
 ## 2026-09-06 — User correction: preserve full reset, no old brain
 
 The user explicitly corrected the temporary backup restoration: training must

@@ -93,18 +93,7 @@ def write_watcher_status(
 
 
 def annotate_frame(screen: np.ndarray, policy_version: int, action: int) -> np.ndarray:
-    frame = cv2.cvtColor(screen, cv2.COLOR_RGB2BGR)
-    cv2.putText(
-        frame,
-        f"Best brain v{policy_version} | {ACTION_NAMES[action]}",
-        (8, 22),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.55,
-        (20, 255, 120),
-        2,
-        cv2.LINE_AA,
-    )
-    return frame
+    return cv2.cvtColor(screen, cv2.COLOR_RGB2BGR)
 
 
 def main() -> None:

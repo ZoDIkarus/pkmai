@@ -3,13 +3,22 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import cv2
 import numpy as np
 import torch
 
-from dynamic_watcher import choose_watcher_action, select_published_model, write_watcher_status
+from dynamic_watcher import annotate_frame, choose_watcher_action, select_published_model, write_watcher_status
 
 
 class DynamicWatcherTests(unittest.TestCase):
+    def test_frame_keeps_the_emulator_screen_without_a_text_overlay(self):
+        screen = np.zeros((40, 96, 3), dtype=np.uint8)
+        screen[10, 10] = (20, 40, 60)
+
+        frame = annotate_frame(screen, policy_version=42, action=6)
+
+        self.assertTrue(np.array_equal(frame, cv2.cvtColor(screen, cv2.COLOR_RGB2BGR)))
+
     def test_writes_a_public_live_status_for_the_dashboard(self):
         with tempfile.TemporaryDirectory() as directory:
             status_file = Path(directory) / "watcher.json"

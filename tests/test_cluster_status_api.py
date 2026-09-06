@@ -263,7 +263,11 @@ class ClusterStatusApiTests(unittest.TestCase):
 
         self.assertIn("state.cluster.goals", page)
         self.assertIn("state.cluster.learning_objectives", page)
-        self.assertIn("active_trainers", page)
+        self.assertIn("objectives.reduce", page)
+        self.assertIn('id="goal-catalog"', page)
+        self.assertIn('id="active-training-objectives"', page)
+        self.assertIn("Zielkatalog", page)
+        self.assertIn("Aktive Trainingsaufträge", page)
 
     def test_trainer_page_has_selectable_details_and_reward_trace(self):
         page = web_stream.index()

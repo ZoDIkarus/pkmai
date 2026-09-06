@@ -8,6 +8,7 @@ import json
 import gzip
 import random
 from firered_ram import read_player_location, read_enemy_party, read_player_party
+from curriculum import local_frontier_roles
 
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -78,6 +79,8 @@ class PokemonFireRedEnv(gym.Env):
     FULL_EXIT_STAGE_CAP = 10000
 
     LONG_FULL_PROBE_STEPS = 32768
+    SCOUT_EPISODE_STEPS = 24000
+    SCOUT_STALL_TIMEOUT = 18000
     # ============================================================
     # TRAINING V2 / REWARD TUNING
     # ============================================================
@@ -571,10 +574,15 @@ class PokemonFireRedEnv(gym.Env):
         # trapped behind different objective one-hot inputs.
         if self.training_objective in (
             "intro", "stairs", "exit", "starter", "battle",
-            "level", "progress", "badge", "full"
+            "level", "progress", "scout", "badge", "full"
         ):
             return "full"
         return self.training_objective
+
+    def _progress_stall_limit(self):
+        if self.training_objective == "scout":
+            return self.SCOUT_STALL_TIMEOUT
+        return self.PROGRESS_STALL_TIMEOUT
 
     def _objective_one_hot(self):
         names = (
@@ -1534,6 +1542,11 @@ class PokemonFireRedEnv(gym.Env):
 
         # Starter ist chronologisch wertvoller als sehr fruehe maps_3 States.
         if "starter" in saved:
+            if progress_states:
+                return max(
+                    progress_states,
+                    key=lambda m: self._milestone_number(m, "progress_"),
+                )
             high_maps = [
                 m for m in candidates
                 if m.startswith("maps_")
@@ -1565,7 +1578,7 @@ class PokemonFireRedEnv(gym.Env):
         Wird nur bei echten Fortschrittsereignissen gespeichert.
         Keine hartcodierten FireRed-Koordinaten oder Story-Loesung.
         """
-        if self.training_objective not in ("progress", "full"):
+        if self.training_objective not in ("progress", "scout", "full"):
             return None
 
         if (
@@ -1600,42 +1613,18 @@ class PokemonFireRedEnv(gym.Env):
             return False
 
     def _agent_role(self):
-        # V10.25 THREE-PHASE CURRICULUM:
-        # 1) Kein Starter-State: Starter-Durchbruch suchen.
-        # 2) Starter-State vorhanden, aber kein Full-Starter-Champion:
-        #    Treppe/Ausgang/Starter zu einer Kette konsolidieren.
-        # 3) Full-Starter-Champion vorhanden: Richtung Wald expandieren.
-        slot = scaled_agent_slot(self.rank, self.agent_count)
         saved = set(getattr(self, "saved_milestones", ()) or ())
-        starter_ready = "starter" in saved
-
-        if not starter_ready:
-            if slot <= 3: return "intro", f"Intro Maintainer {slot + 1:02d}"          # 4
-            if slot <= 15: return "stairs", f"Stair Retention {slot - 3:02d}"        # 12
-            if slot <= 35: return "exit", f"Exit Retention {slot - 15:02d}"          # 20
-            if slot <= 87: return "starter", f"Starter Breakthrough {slot - 35:02d}" # 52
-            if slot <= 95: return "progress", f"Early Frontier {slot - 87:02d}"      # 8
-            return "full", f"Full Journey {slot - 95:02d}"                           # 24
-
-        if not bool(getattr(self, "full_chain_ready", False)):
-            if slot <= 3: return "intro", f"Intro Maintainer {slot + 1:02d}"       # 4
-            if slot <= 23: return "stairs", f"Chain Stair {slot - 3:02d}"          # 20
-            if slot <= 43: return "exit", f"Chain Exit {slot - 23:02d}"            # 20
-            if slot <= 61: return "starter", f"Chain Starter {slot - 43:02d}"      # 18
-            if slot <= 65: return "battle", f"Battle Seed {slot - 61:02d}"         # 4
-            if slot <= 67: return "level", f"Level Seed {slot - 65:02d}"           # 2
-            if slot <= 83: return "progress", f"Frontier Seed {slot - 67:02d}"     # 16
-            return "full", f"Chain Assembly {slot - 83:02d}"                       # 36
-
-        if slot <= 3: return "intro", f"Intro Maintainer {slot + 1:02d}"           # 4
-        if slot <= 13: return "stairs", f"Stair Vault {slot - 3:02d}"              # 10
-        if slot <= 25: return "exit", f"Exit Vault {slot - 13:02d}"                # 12
-        if slot <= 37: return "starter", f"Starter Vault {slot - 25:02d}"          # 12
-        if slot <= 45: return "battle", f"Battle Specialist {slot - 37:02d}"       # 8
-        if slot <= 49: return "level", f"Level Specialist {slot - 45:02d}"         # 4
-        if slot <= 83: return "progress", f"Forest Frontier {slot - 49:02d}"       # 34
-        if slot <= 87: return "badge", f"Badge 1 Push {slot - 83:02d}"             # 4
-        return "full", f"Full Journey {slot - 87:02d}"                             # 32
+        roles = local_frontier_roles(self.agent_count, saved)
+        role = roles[min(max(0, int(self.rank)), len(roles) - 1)]
+        labels = {
+            "intro": "Intro Regression",
+            "stairs": "Stair Regression",
+            "exit": "Exit Regression",
+            "starter": "Starter Regression",
+            "progress": "Frontier Progress",
+            "scout": "Frontier Scout",
+        }
+        return role, labels[role]
 
     def _choose_episode_start(self):
         self.saved_milestones = self._discover_saved_milestones()
@@ -1665,6 +1654,8 @@ class PokemonFireRedEnv(gym.Env):
             if "stairs_down" in saved: return "stairs_down"
             if "intro_complete" in saved: return "intro_complete"
             return "beginning"
+        if role == "scout":
+            return self._best_progress_milestone()
 
         # In der Chain-Repair-Phase laufen 28, danach 24 Full-Agenten komplett
         # vom Anfang. Acht weitere ueben ueberlappende Story-Bruecken.
@@ -3402,12 +3393,13 @@ class PokemonFireRedEnv(gym.Env):
         # Progress-Agenten werden neu gestartet, wenn ueber lange Zeit
         # weder neue Map/Warp/Level/Starter/Badge noch anderer echter
         # Fortschritt erreicht wurde. Full-Chain darf weiterlaufen.
+        progress_stall_limit = self._progress_stall_limit()
         if (
-            self.training_objective == "progress"
-            and self.total_steps >= self.PROGRESS_STALL_TIMEOUT
+            self.training_objective in ("progress", "scout")
+            and self.total_steps >= progress_stall_limit
             and (
                 self.total_steps - self.last_progress_advance_step
-                >= self.PROGRESS_STALL_TIMEOUT
+                >= progress_stall_limit
             )
         ):
             truncated = True
@@ -3416,7 +3408,9 @@ class PokemonFireRedEnv(gym.Env):
             info["progress_stall_reset"] = False
 
         episode_limit = (
-            self.MAX_EPISODE_STEPS
+            self.SCOUT_EPISODE_STEPS
+            if self.training_objective == "scout"
+            else self.MAX_EPISODE_STEPS
             if self.training_objective in ("progress", "badge", "full")
             else 32768
         )

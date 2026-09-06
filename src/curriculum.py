@@ -19,6 +19,27 @@ MIN_SUCCESS_RATE = 0.60
 RECENT_WINDOW = 20
 
 
+def local_frontier_roles(agent_count, milestones):
+    """Allocate a small local fleet by frontier while retaining every skill."""
+    n = max(1, int(agent_count))
+    milestones = set(milestones or ())
+    if "intro_complete" not in milestones:
+        plan = [("intro", 8), ("stairs", 2)]
+    elif "stairs_down" not in milestones:
+        plan = [("intro", 1), ("stairs", 8), ("exit", 1)]
+    elif "left_house" not in milestones:
+        plan = [("intro", 1), ("stairs", 1), ("exit", 8)]
+    elif "starter" not in milestones:
+        plan = [("intro", 1), ("stairs", 1), ("exit", 1), ("starter", 7)]
+    else:
+        plan = [
+            ("intro", 1), ("stairs", 1), ("exit", 1), ("starter", 1),
+            ("progress", 4), ("scout", 2),
+        ]
+    roles = [role for role, count in plan for _ in range(count)]
+    return tuple((roles + [roles[-1]] * n)[:n])
+
+
 def stage_speed_bonus(elapsed_steps, target_steps, max_bonus):
     elapsed_steps = max(0, int(elapsed_steps)); target_steps = max(1, int(target_steps))
     return round(max(0.0, float(max_bonus)) * max(0.0, 1.0 - elapsed_steps / target_steps), 4)

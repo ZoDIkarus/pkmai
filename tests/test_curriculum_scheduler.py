@@ -1,6 +1,7 @@
 import unittest
 
 from curriculum import (
+    local_frontier_roles,
     curriculum_roles,
     stage_speed_bonus,
     stage_is_confirmed,
@@ -13,6 +14,16 @@ from curriculum import (
 
 
 class CurriculumRolesTests(unittest.TestCase):
+    def test_local_frontier_uses_two_scouts_after_the_starter_chain(self):
+        roles = local_frontier_roles(
+            10,
+            {"intro_complete", "stairs_down", "left_house", "starter", "progress_3"},
+        )
+        self.assertEqual(len(roles), 10)
+        self.assertEqual(roles.count("scout"), 2)
+        self.assertEqual(roles.count("progress"), 4)
+        self.assertEqual(roles[:4], ("intro", "stairs", "exit", "starter"))
+
     def test_uses_intro_frontier_until_intro_state_exists(self):
         roles = curriculum_roles(10, set(), {})
         self.assertEqual(roles.count("intro"), 8)

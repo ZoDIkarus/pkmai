@@ -61,6 +61,7 @@ def watcher_telemetry(
     location = getattr(env, "cached_loc", {}) or {}
     return {
         "reward": round(float(reward), 3),
+        "episode_reward": round(float(getattr(env, "current_reward", reward) or 0.0), 3),
         "episode_steps": max(0, int(getattr(env, "total_steps", 0) or 0)),
         "in_battle": bool(getattr(env, "last_in_battle", False)),
         "position": {

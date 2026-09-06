@@ -21,6 +21,12 @@ BEST_MODEL_FILE = CLUSTER_DIR / "dynamic_policy_best.pt"
 LATEST_MODEL_FILE = CLUSTER_DIR / "dynamic_policy.pt"
 WATCHER_STATUS_FILE = PROJECT_ROOT / "runtime" / "watcher.json"
 ACTION_NAMES = ("A", "B", "START", "UP", "DOWN", "LEFT", "RIGHT")
+WATCHER_STAGE_GOALS = (
+    ("intro_complete", "Intro abschließen", "intro_complete_rewarded"),
+    ("stairs_down", "Treppe erreichen", "stairs_down_rewarded"),
+    ("left_house", "Haus verlassen", "left_house_confirmed"),
+    ("starter", "Starter erhalten", "has_starter"),
+)
 
 
 def select_published_model(best_path: Path = BEST_MODEL_FILE, latest_path: Path = LATEST_MODEL_FILE) -> Path:
@@ -55,6 +61,14 @@ def choose_watcher_action(
     return int(torch.multinomial(probabilities, 1, generator=generator).item())
 
 
+def watcher_active_goal(env: PokemonFireRedEnv) -> dict[str, str]:
+    """Return the first uncompleted full-journey goal for public telemetry."""
+    for key, label, completion_attr in WATCHER_STAGE_GOALS:
+        if not bool(getattr(env, completion_attr, False)):
+            return {"key": key, "label": label}
+    return {"key": "progress", "label": "Weitere Karten erschließen"}
+
+
 def watcher_telemetry(
     env: PokemonFireRedEnv, reward: float, reward_events: list[str] | None = None
 ) -> dict:
@@ -72,6 +86,7 @@ def watcher_telemetry(
             "y": max(0, int(location.get("y_pos", 0) or 0)),
         },
         "milestones": sorted(str(value) for value in getattr(env, "saved_milestones", ()) or ()),
+        "active_goal": watcher_active_goal(env),
         "reward_events": [
             str(event)[:120]
             for event in (reward_events or [])

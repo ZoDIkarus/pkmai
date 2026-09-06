@@ -50,6 +50,10 @@ class DynamicWatcherTests(unittest.TestCase):
                 "total_steps": 32,
                 "last_in_battle": True,
                 "saved_milestones": {"starter"},
+                "intro_complete_rewarded": True,
+                "stairs_down_rewarded": False,
+                "left_house_confirmed": False,
+                "has_starter": False,
             },
         )()
 
@@ -61,6 +65,10 @@ class DynamicWatcherTests(unittest.TestCase):
 
         self.assertEqual(telemetry["reward"], -0.501)
         self.assertEqual(telemetry["reward_events"], ["battle_hp_stagnant:-0.50"])
+        self.assertEqual(
+            telemetry["active_goal"],
+            {"key": "stairs_down", "label": "Treppe erreichen"},
+        )
 
     def test_retains_a_recent_training_event_beyond_the_trigger_step(self):
         events = append_recent_reward_events(

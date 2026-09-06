@@ -11,13 +11,15 @@ snapshots, independently of champion promotion. The protected fallback is stored
 as `pokemon_model_champion.zip`. Snapshot publication is atomic.
 
 Reward model as of V18 (see the dated section below for detail): tiles pay
-**per run** on a steep hand-set ladder (Pallet ~0, Route 1 3 … Pewter 6),
-plus +1 fleet-once. New route/building 25/run, city 250/run, first global stage
-unlock 1000-once, per-run stage bonus 0, no directional bonus. Pokécenter, Poké
-Mart and the first badge each add a one-time fleet-wide bonus (1000 / 1000 /
-5000) on top of their per-run value. Trainer battles pay double and skip the
-per-episode wild-battle decay. Persistent claim history (`reward_events.json`)
-prevents any one-time bonus repaying after a restart.
+**per run** on a steep hand-set ladder (Pallet ~0, Route 1 3 … Pewter 6), first
+20 per map per episode then 20 %, plus +1 fleet-once. New route 25/run, city
+building 500-once, city 250/run, first global stage unlock 1000-once, per-run
+stage bonus 0, no directional bonus. Pokécenter, Poké Mart and the first badge
+each add a one-time fleet-wide bonus (1000 / 1000 / 5000) on top of their per-run
+value. **In a battle only continuous signals pay** — dealt/taken damage, healing,
+level-up, catching; no flat KO or win bonus. Trainer battles pay double on damage
+and skip the wild decay (30 % after 6 wild wins). Persistent claim history
+(`reward_events.json`) keeps every one-time bonus one-time across restarts.
 
 ## 2026-09-06 — V18: per-run tile ladder, one-time fleet bonuses, battle rebalance, dashboard
 

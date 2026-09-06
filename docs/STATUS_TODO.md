@@ -23,6 +23,15 @@ trainer restart):**
   once, then nothing; no building-tour farm.
 - Pokécenter/Mart enter rewards (+100/run) verified in code — sound, will fire
   once the fleet reaches Vertania; not a bug that they're quiet now.
+- **Map/global reset done** (brain kept): `runtime/exploration_memory/agent_*.json`
+  + `reward_events.json` deleted, `global_progress.json` → `max_world_stage 0`,
+  same for the watcher's isolated `runtime/watcher_evaluation/exploration_memory/`.
+  Backup in `brain_backups/`. Kept: all model/skill zips, `skill_vault_scores.json`,
+  `champion_score.json`, `model_version.json`, `curriculum_shared/*.state.gz`,
+  `stage_*.meta.json`, `training_stats/`. So every fleet-once bonus (stage record
+  +1000, coarse warp +100, city building +500, center +1000, mart +1000, badge
+  +5000, per-tile +1) re-fires as the fleet re-explores with the new reward shape.
+  Full restart of all four processes. Observe over ~1–2 h.
 
 **Reward model (`src/pokemon_env.py`):**
 - Tile first-find now pays **per run** (`seen_coords`, every episode fresh) — NOT
@@ -47,11 +56,20 @@ trainer restart):**
   once ever (`mart_<b>_<m>`). So the brain knows the shop exists (buy Poké Balls).
 - **Badge:** `BADGE_EARNED_REWARD 2000`/run kept + `BADGE_FIRST_GLOBAL_REWARD 5000`
   fleet-once per badge number (`badge_<n>_ever`).
-- **Battle rebalance** (watcher was 45% of steps in battle): `ENEMY_DAMAGE_REWARD_PER_HP`
-  0.15→0.08; per-episode wild decay `WILD_BATTLE_DECAY_AFTER 6` / `WILD_BATTLE_DECAY_FACTOR 0.3`
-  on `WILD_TRAINING_MAPS` (`_battle_reward_scale`); trainer battles
-  `TRAINER_BATTLE_REWARD_MULT 2.0` on damage/faint/win, exempt from wild decay
+- **Battle rewards — only continuous signals** (watcher was 45% of steps fighting,
+  EXP/win/KO bonuses over-valued it): in a battle only *dealt damage*
+  (`ENEMY_DAMAGE_REWARD_PER_HP 0.08`), *taken damage* (−0.1/HP), *healing*
+  (+0.1/HP), *level-up* (`LEVEL_GAIN_REWARD 10`) and *catching* (`SPECIES_CAUGHT_*`)
+  pay. `ENEMY_FAINT_REWARD` and `BATTLE_WIN_REWARD` → **0** (bookkeeping incl. the
+  `episode_wild_faints` decay counter still runs). Wild decay
+  `WILD_BATTLE_DECAY_AFTER 6` / `WILD_BATTLE_DECAY_FACTOR 0.3` on `WILD_TRAINING_MAPS`
+  now also scales **level-up** (`_battle_reward_scale`). Trainer battles
+  `TRAINER_BATTLE_REWARD_MULT 2.0` on damage, exempt from decay
   (`_is_trainer_battle`, `raw_flags & 0x8`). Flee penalty left at −25.
+- **Post-cap tile factor** `TILE_REWARD_AFTER_CAP_FACTOR = 0.2` (was 0): after the
+  20-tile/map budget, new tiles still pay 20% — a faint "explore toward the exit"
+  breadcrumb so a stuck policy on a capped map never sits in a dead zone with only
+  battles. Too thin to farm (all of Pallet ≈ 6).
 - **Catch:** `SPECIES_CAUGHT_FIRST_REWARD` 50→120 + `min(level,20)*4`.
 - **Scouts:** `FRONTIER_SCOUT_SLOTS` 5→2 per checkpoint — more of the fleet runs
   full journeys; scouts were getting through but full runners were not.

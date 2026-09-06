@@ -29,12 +29,25 @@ V17.4 was the starting point. All 67 unit tests pass.
   once ever (`mart_<b>_<m>`). So the brain knows the shop exists (buy Poké Balls).
 - **Badge:** `BADGE_EARNED_REWARD 2000`/run kept + `BADGE_FIRST_GLOBAL_REWARD 5000`
   fleet-once per badge number (`badge_<n>_ever`).
-- **Battle rebalance** (watcher was 45% of steps in battle): `ENEMY_DAMAGE_REWARD_PER_HP`
-  0.15→0.08; per-episode wild decay `WILD_BATTLE_DECAY_AFTER 6` / `WILD_BATTLE_DECAY_FACTOR 0.3`
-  on `WILD_TRAINING_MAPS` (`episode_wild_faints`, `_battle_reward_scale`); trainer battles
-  `TRAINER_BATTLE_REWARD_MULT 2.0` on damage/faint/win and exempt from wild decay
+- **Battle rewards — only continuous signals** (watcher was 45% of steps fighting):
+  in a battle only dealt damage (`ENEMY_DAMAGE_REWARD_PER_HP` 0.15→0.08), taken
+  damage (−0.1/HP), healing (+0.1/HP), level-up (`LEVEL_GAIN_REWARD 10`) and
+  catching pay. `ENEMY_FAINT_REWARD` + `BATTLE_WIN_REWARD` → 0 (bookkeeping incl.
+  the `episode_wild_faints` decay counter still runs; `:+0` events suppressed).
+  Wild decay `WILD_BATTLE_DECAY_AFTER 6` / `WILD_BATTLE_DECAY_FACTOR 0.3` on
+  `WILD_TRAINING_MAPS` (`_battle_reward_scale`) now also scales level-up. Trainer
+  battles `TRAINER_BATTLE_REWARD_MULT 2.0` on damage, exempt from decay
   (`_is_trainer_battle`, `raw_flags & 0x8`). Flee penalty left at −25.
+- **Post-cap tile factor** `TILE_REWARD_AFTER_CAP_FACTOR 0→0.2` — faint breadcrumb
+  past the 20-tile/map budget so a stuck policy on a capped map isn't in a
+  battles-only dead zone. All of Pallet ≈ 6, not farmable.
 - **Catch:** `SPECIES_CAUGHT_FIRST_REWARD` 50→120 + `min(level,20)*4` (`SPECIES_CAUGHT_LEVEL_BONUS`).
+- **Map/global reset done, brain kept:** `exploration_memory/agent_*.json` +
+  `reward_events.json` deleted, `global_progress.json` → `max_world_stage 0`
+  (fleet + watcher isolated dir), backup in `brain_backups/`. All model/skill
+  zips, `champion_score.json`, `model_version.json`, savestates and stage
+  checkpoints kept. Every fleet-once bonus re-fires as the fleet re-explores
+  with the new reward shape. Full restart; observe ~1–2 h.
 - **Scouts:** `FRONTIER_SCOUT_SLOTS` 5→2 per checkpoint — more of the fleet runs
   full journeys; scouts were getting through but full runners were not.
 - **Warp reward:** the global bonus now claims a coarse `(map_a↔map_b)` pair,

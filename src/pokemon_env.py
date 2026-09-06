@@ -304,22 +304,23 @@ class PokemonFireRedEnv(gym.Env):
     # ein positiver Dauerstrom, sobald die einmaligen Vorwaerts-Boni (Kachel/
     # Map/Stadt) in Reichweite abgegrast waren - Live 45% aller Steps im Kampf.
     ENEMY_DAMAGE_REWARD_PER_HP = 0.08
-    # V17.3: nochmal deutlich gekuerzt (10/15/25 -> 2/2/10). Live beobachtet:
-    # die Agenten kaempften strukturell mehr als sie erkundeten und kamen
-    # dadurch nicht voran - Kampf-Reward war trotz der V17-Drittelung immer
-    # noch attraktiver als das Risiko, weiterzuziehen.
-    ENEMY_FAINT_REWARD = 2.0
+    # V18: 2.0 -> 0.0. Im Kampf zaehlen nur noch KONTINUIERLICHE Signale:
+    # zugefuegter Schaden (ENEMY_DAMAGE_REWARD_PER_HP), erlittener Schaden
+    # (-0.1/HP), Heilung (+0.1/HP), Level-Up (LEVEL_GAIN_REWARD) und Fangen
+    # (SPECIES_CAUGHT_*). KEINE pauschalen Discrete-Boni mehr fuers KO
+    # (enemy_faint) oder den Sieg/EP-Anstieg (BATTLE_WIN_REWARD) - die haben
+    # das Kaempfen ueberbewertet.
+    ENEMY_FAINT_REWARD = 0.0
     # V18: Wildkampf-Abklingen pro Episode. Die ersten WILD_BATTLE_DECAY_AFTER
     # besiegten Wild-Pokemon auf einer WILD_TRAINING_MAP zahlen voll, ab dem
-    # naechsten sinken Schaden-, Faint- und Sieg-Reward auf
-    # WILD_BATTLE_DECAY_FACTOR. Fruehes Leveln
-    # (Orden 1/2 brauchen es) bleibt voll bezahlt, der Dauer-Grind an
-    # derselben Stelle wird strukturell unrentabel gegenueber Weiterziehen.
-    # Trainer-/Story-Kaempfe und Nicht-Wild-Maps sind nicht betroffen.
+    # naechsten sinken Schaden- UND Level-Up-Reward auf WILD_BATTLE_DECAY_FACTOR.
+    # Fruehes Leveln (Orden 1/2 brauchen es) bleibt voll bezahlt, der Dauer-
+    # Grind an derselben Stelle wird strukturell unrentabel. Trainer-/Story-
+    # Kaempfe und Nicht-Wild-Maps sind nicht betroffen.
     WILD_BATTLE_DECAY_AFTER = 6
     WILD_BATTLE_DECAY_FACTOR = 0.3
-    # V18: Trainer-/Arena-Kaempfe zahlen doppelt (Schaden, Faint, Sieg) und
-    # sind vom Wild-Abklingen ausgenommen - sie sind der eigentliche Story-Weg.
+    # V18: Trainer-/Arena-Kaempfe zahlen doppelt (Schaden) und sind vom
+    # Wild-Abklingen ausgenommen - sie sind der eigentliche Story-Weg.
     TRAINER_BATTLE_REWARD_MULT = 2.0
     LEVEL_GAIN_REWARD = 10.0
     # V17.4: erster echter Orden-Reward als benannte Konstante statt
@@ -376,7 +377,10 @@ class PokemonFireRedEnv(gym.Env):
     POKEMART_ENTER_REWARD = 100.0
     POKEMART_FIRST_GLOBAL_REWARD = 1000.0
     EXPERIENCE_GAIN_REWARD_PER_POINT = 0.0
-    BATTLE_WIN_REWARD = 2.0
+    # V18: 2.0 -> 0.0. Kein pauschaler Reward mehr fuers Gewinnen / den
+    # EP-Anstieg im Kampf - im Kampf zaehlen nur noch Schaden, erlittener
+    # Schaden, Heilung, Level-Up und Fangen (siehe ENEMY_FAINT_REWARD).
+    BATTLE_WIN_REWARD = 0.0
     ENEMY_HP_READ_EVERY = 2
     ENEMY_ACTIVITY_TTL = 96
     FLED_BATTLE_PENALTY = -25.0
@@ -3603,10 +3607,15 @@ class PokemonFireRedEnv(gym.Env):
                 and current_total_level > self.last_party_total_level
             ):
                 level_gain = current_total_level - self.last_party_total_level
-                reward += level_gain * self.LEVEL_GAIN_REWARD
-                reward_events.append(
-                    f"team_level_up:+{level_gain * self.LEVEL_GAIN_REWARD:.1f}"
-                )
+                # V18: Level-Up klingt auf einer Wild-Map nach 6 Kaempfen
+                # ebenfalls auf WILD_BATTLE_DECAY_FACTOR ab - stures Grinden an
+                # derselben Stelle soll nicht ueber Levels doch noch lohnen.
+                _lvl_scale = self._battle_reward_scale(bank, map_id)
+                _lvl_reward = level_gain * self.LEVEL_GAIN_REWARD * _lvl_scale
+                reward += _lvl_reward
+                _lvl_tag = (":2x" if _lvl_scale > 1.0
+                            else ":decayed" if _lvl_scale < 1.0 else "")
+                reward_events.append(f"team_level_up{_lvl_tag}:+{_lvl_reward:.1f}")
                 self.reward_event_counts["level_up"] += level_gain
                 self.last_progress_advance_step = self.route_steps
                 if self.training_objective == "level":
@@ -3635,17 +3644,22 @@ class PokemonFireRedEnv(gym.Env):
                     current_total_experience - self.last_party_total_experience
                 )
                 self.battle_rewarded_win = True
+                # V18: BATTLE_WIN_REWARD ist 0 - Buchfuehrung laeuft weiter
+                # (verhindert Doppel-Zaehlen), aber kein Reward/Event fuer den
+                # reinen EP-Anstieg mehr.
                 experience_reward = (
                     self.BATTLE_WIN_REWARD * self._battle_reward_scale(bank, map_id)
                 )
-                reward += experience_reward
-                reward_events.append(
-                    f"experience_gain:{experience_gain}:+{experience_reward:.1f}"
-                )
+                if experience_reward:
+                    reward += experience_reward
+                    reward_events.append(
+                        f"experience_gain:{experience_gain}:+{experience_reward:.1f}"
+                    )
                 self.run_stats["experience_wins"] = int(
                     self.run_stats.get("experience_wins", 0)
                 ) + 1
-                self.last_progress_advance_step = self.route_steps
+                if experience_reward:
+                    self.last_progress_advance_step = self.route_steps
                 if self.training_objective == "battle":
                     reward += self.SPECIALIST_SUCCESS_BONUS
                     reward_events.append(
@@ -3858,6 +3872,10 @@ class PokemonFireRedEnv(gym.Env):
                         )
 
                         if cur_hp == 0 and previous_min > 0 and mon_key not in self.enemy_fainted_rewarded:
+                            # V18: ENEMY_FAINT_REWARD ist 0 - kein Reward/Event
+                            # fuer das KO selbst. Die Buchfuehrung (v.a.
+                            # episode_wild_faints fuer das Abklingen!) laeuft
+                            # unveraendert weiter.
                             faint_reward = self.ENEMY_FAINT_REWARD * _wild_scale
                             reward += faint_reward
                             self.enemy_fainted_rewarded.add(mon_key)
@@ -3879,11 +3897,12 @@ class PokemonFireRedEnv(gym.Env):
                             self.run_stats["enemy_faints"] = int(
                                 self.run_stats.get("enemy_faints", 0)
                             ) + 1
-                            _faint_tag = (":2x" if _wild_scale > 1.0
-                                          else ":decayed" if _wild_scale < 1.0 else "")
-                            reward_events.append(
-                                f"enemy_faint{_faint_tag}:+{faint_reward:.2f}"
-                            )
+                            if faint_reward:
+                                _faint_tag = (":2x" if _wild_scale > 1.0
+                                              else ":decayed" if _wild_scale < 1.0 else "")
+                                reward_events.append(
+                                    f"enemy_faint{_faint_tag}:+{faint_reward:.2f}"
+                                )
                         self._save_run_stats()
 
         # ---------------------------------------------------------

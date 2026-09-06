@@ -177,6 +177,15 @@ class ProgressRegressionTests(unittest.TestCase):
         # A non-wild map (e.g. a city / trainer fight) never decays.
         self.assertEqual(e._wild_battle_scale(3, 1), 1.0)
 
+    def test_battle_rewards_only_continuous_signals(self):
+        # V18: im Kampf zaehlen nur Schaden/Heilung/Level/Fangen - kein
+        # pauschaler KO- oder Sieg-Bonus mehr.
+        self.assertEqual(PokemonFireRedEnv.ENEMY_FAINT_REWARD, 0.0)
+        self.assertEqual(PokemonFireRedEnv.BATTLE_WIN_REWARD, 0.0)
+        self.assertGreater(PokemonFireRedEnv.ENEMY_DAMAGE_REWARD_PER_HP, 0.0)
+        self.assertGreater(PokemonFireRedEnv.LEVEL_GAIN_REWARD, 0.0)
+        self.assertGreater(PokemonFireRedEnv.SPECIES_CAUGHT_FIRST_REWARD, 0.0)
+
     def test_advancing_pokecenter_heal_beats_a_new_species_but_not_a_city(self):
         # V18: reaching a deeper Center (respawn point moves forward) must
         # out-weigh catching yet another mon, yet stay below a real city so

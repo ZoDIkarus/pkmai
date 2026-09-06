@@ -75,6 +75,30 @@ class RamLocationSafetyTests(unittest.TestCase):
         env.ram[firered_ram.BATTLE_TYPE_FLAGS_OFFSET:firered_ram.BATTLE_TYPE_FLAGS_OFFSET + 4] = bytes((8, 0, 0, 0))
         self.assertEqual(firered_ram.read_battle_type_flags(env), 8)
 
+    def test_pointer_discovery_ignores_ewram_copies_and_keeps_a_valid_global_slot(self):
+        env = _RamEnv(firered_ram.EWRAM_SIZE + 0x8000)
+        stale_copy_slot = 0x100
+        live_iwram_slot = firered_ram.EWRAM_SIZE + 0x4F58
+        for slot, base in ((stale_copy_slot, 0x1000), (live_iwram_slot, 0x2000)):
+            for index, pointer in enumerate((base, base + 0x100, base + 0x200)):
+                env.ram[slot + index * 4:slot + index * 4 + 4] = (
+                    firered_ram.EWRAM_BUS_BASE + pointer
+                ).to_bytes(4, "little")
+            env.ram[base:base + 6] = bytes((2, 0, 3, 0, 3, 19))
+
+        self.assertEqual(firered_ram._find_pointer_slot(env.ram), live_iwram_slot)
+
+        # A transient invalid location must not discard an otherwise valid
+        # gSaveBlock pointer slot and force discovery of stale EWRAM copies.
+        env.ram[0x2004:0x2006] = bytes((0, 57))
+        with patch.object(firered_ram, "_cached_ptr_slot", live_iwram_slot):
+            self.assertFalse(firered_ram.read_player_location(env)["valid"])
+            self.assertEqual(firered_ram._cached_ptr_slot, live_iwram_slot)
+            env.ram[0x2004:0x2006] = bytes((3, 19))
+            self.assertTrue(
+                firered_ram.read_player_location(env, allow_scan=False)["valid"]
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

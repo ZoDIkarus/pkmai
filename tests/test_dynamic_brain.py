@@ -12,8 +12,10 @@ class DynamicLearnerTests(unittest.TestCase):
     def test_restores_the_latest_brain_before_republishing_best(self):
         with tempfile.TemporaryDirectory() as directory:
             original_model = dynamic_brain.MODEL_FILE
+            original_policy = dynamic_brain.POLICY_FILE
             root = Path(directory)
             dynamic_brain.MODEL_FILE = root / "dynamic_policy.pt"
+            dynamic_brain.POLICY_FILE = root / "policy.json"
             try:
                 source = DynamicLearner()
                 source.version = 17
@@ -24,6 +26,7 @@ class DynamicLearnerTests(unittest.TestCase):
                 self.assertEqual(restored.version, 17)
             finally:
                 dynamic_brain.MODEL_FILE = original_model
+                dynamic_brain.POLICY_FILE = original_policy
 
     def test_publishes_a_best_brain_artifact_for_the_watcher(self):
         with tempfile.TemporaryDirectory() as directory:

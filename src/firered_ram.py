@@ -83,7 +83,7 @@ def _valid_location(ram, base):
     return x < 512 and y < 512 and bank < 43 and map_id < 128
 
 
-def _valid_pointer_slot(ram, slot):
+def _valid_pointer_slot(ram, slot, require_location=True):
     if slot < 0 or slot + 12 > len(ram):
         return False
 
@@ -102,18 +102,21 @@ def _valid_pointer_slot(ram, slot):
     if b1 is None or b2 is None or b3 is None:
         return False
 
-    return _valid_location(ram, b1)
+    return not require_location or _valid_location(ram, b1)
 
 
 def _find_pointer_slot(ram):
     # Fast known locations first.
-    for slot in (PTR_SLOT_COMBINED, PTR_SLOT_IWRAM_ONLY):
+    for slot in ((PTR_SLOT_COMBINED,) if len(ram) >= EWRAM_SIZE + 0x8000
+                 else (PTR_SLOT_IWRAM_ONLY,)):
         if _valid_pointer_slot(ram, slot):
             return slot
 
-    # One-time aligned scan for the 3-pointer signature.
-    # Much safer than scanning for arbitrary plausible x/y bytes.
-    for slot in range(0, max(0, len(ram) - 12), 4):
+    # The global pointer variables live in IWRAM. EWRAM scanning can select
+    # ordinary data or stale pointer copies after a savestate restore.
+    start = EWRAM_SIZE if len(ram) >= EWRAM_SIZE + 0x8000 else 0
+    end = min(len(ram), start + 0x8000)
+    for slot in range(start, max(start, end - 12), 4):
         if _valid_pointer_slot(ram, slot):
             return slot
 
@@ -138,12 +141,15 @@ def read_player_location(env, allow_scan=True):
 
     # Revalidate cached slot; FireRed may relocate SaveBlock itself,
     # but the global pointer variable stays at the same slot.
-    if _cached_ptr_slot is not None and not _valid_pointer_slot(ram, _cached_ptr_slot):
+    if _cached_ptr_slot is not None and not _valid_pointer_slot(
+        ram, _cached_ptr_slot, require_location=False
+    ):
         _cached_ptr_slot = None
 
     if _cached_ptr_slot is None:
         # Fast known pointer slots first.
-        for slot in (PTR_SLOT_COMBINED, PTR_SLOT_IWRAM_ONLY):
+        for slot in ((PTR_SLOT_COMBINED,) if len(ram) >= EWRAM_SIZE + 0x8000
+                     else (PTR_SLOT_IWRAM_ONLY,)):
             if _valid_pointer_slot(ram, slot):
                 _cached_ptr_slot = slot
                 break

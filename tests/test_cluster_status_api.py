@@ -27,16 +27,19 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.original_policy = web_stream.CLUSTER_POLICY_FILE
         self.original_workers = web_stream.CLUSTER_WORKERS_FILE
         self.original_watcher_status = web_stream.WATCHER_STATUS_FILE
+        self.original_watcher_stream = web_stream.WATCHER_STREAM_FILE
         web_stream.CLUSTER_DIR = root
         web_stream.CLUSTER_POLICY_FILE = root / "policy.json"
         web_stream.CLUSTER_WORKERS_FILE = root / "workers.json"
         web_stream.WATCHER_STATUS_FILE = root / "watcher.json"
+        web_stream.WATCHER_STREAM_FILE = root / "watcher.jpg"
 
     def tearDown(self):
         web_stream.CLUSTER_DIR = self.original_dir
         web_stream.CLUSTER_POLICY_FILE = self.original_policy
         web_stream.CLUSTER_WORKERS_FILE = self.original_workers
         web_stream.WATCHER_STATUS_FILE = self.original_watcher_status
+        web_stream.WATCHER_STREAM_FILE = self.original_watcher_stream
         self.directory.cleanup()
 
     def test_watcher_list_exposes_the_live_best_brain_without_private_paths(self):
@@ -64,9 +67,26 @@ class ClusterStatusApiTests(unittest.TestCase):
         page = web_stream.index()
 
         self.assertIn('id="watcher-list"', page)
-        self.assertIn('id="watcher-preview"', page)
+        for element_id in ("watcher-frame", "watcher-state", "watcher-events"):
+            self.assertIn(f'id="{element_id}"', page)
         self.assertIn("/api/watchers", page)
         self.assertIn("watchers[0]", page)
+
+    def test_legacy_watcher_url_returns_to_the_dashboard(self):
+        response = web_stream.watcher_dashboard_redirect()
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/")
+
+    def test_watcher_frame_reads_a_complete_jpeg_before_responding(self):
+        frame = b"\xff\xd8complete-frame\xff\xd9"
+        web_stream.WATCHER_STREAM_FILE.write_bytes(frame)
+
+        response = web_stream.get_watcher_frame()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.body, frame)
+        self.assertEqual(response.headers["content-length"], str(len(frame)))
 
     def test_cluster_status_omits_secret_paths_and_marks_live_worker(self):
         now = time.time()
@@ -114,11 +134,3 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.assertIn('data-page="trainers"', page)
         self.assertIn('data-page="overworld"', page)
         self.assertIn('data-page="goals"', page)
-
-    def test_standalone_watcher_uses_the_live_observer_layout(self):
-        page = web_stream.watcher_view()
-
-        for element_id in ("watcher-frame", "watcher-state", "watcher-events"):
-            self.assertIn(f'id="{element_id}"', page)
-        self.assertIn("/api/watchers", page)
-        self.assertIn("REWARD EVENTS", page)

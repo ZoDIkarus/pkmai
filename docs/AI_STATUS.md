@@ -1,5 +1,31 @@
 # PKMAI — Live Work Log
 
+## 2026-09-06 — V19.1 Pallet nav-target fix + immediate-reverse guard
+
+**Why the fleet oscillated in bottom-left Pallet:** `_v19_forward_targets(3,0)`
+returned *every* Pallet↔Route1 transition coord from `_combined_transitions()`,
+including RAM-misread / glitch singletons like `(3,0,6,8)↔(3,19,8,33)` — a phantom
+target mid-left of Pallet. `_graph_distance` is nearest-of-many, so an agent that
+drifted west/south was closer to the phantom than to the real north exit and got
+`target_closer` walking toward it, `target_farther` walking away → trapped.
+
+Fix (nav shaping only — no other reward touched):
+- New `_pallet_route1_target()`: for map `(3,0)` the *only* target is the
+  Alabastia-side coord of the real `(3,0)↔(3,19)` transition, voted by how many
+  distinct transition tuples support each coord; coords with `< 2` support
+  (glitch singletons) are dropped. No generic frontiers / dead ends / house
+  doors / map edges / nearest-unknown. Empty → no target at all (exploration
+  stays off in Pallet; Route 1 logic unchanged).
+- Target block special-cases `(bank,map) == STAGE_PALLET and left_house_rewarded`
+  → uses only `_pallet_route1_target()`, skipping `_target_coords_for_stage` /
+  `_progress_targets_for_map` / `_v19_forward_targets`.
+- **Immediate edge-reversal guard** on the positive target reward (global to the
+  block): if this 1-tile move is the exact reverse of the previous one
+  (`_prev_step_move`), a "closer" step pays 0 (`target_closer_suppressed:+0`);
+  the "farther" penalty always stays. Kills A↔B pendeln.
+
+74 unit tests pass. Not live until the next trainer restart.
+
 ## 2026-09-06 — V19 deployed clean (building-reward fix live)
 
 Final full restart with a map/global reset (brain kept: 4 model zips, 18

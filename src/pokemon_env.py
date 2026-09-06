@@ -806,6 +806,7 @@ class PokemonFireRedEnv(gym.Env):
         self.persistent_known_transitions = set()
         self.exploration_memory_dirty = False
         self.last_exploration_coord = None
+        self._prev_step_move = None
         self.last_exploration_map = None
         self.episode_edge_visits = {}
         self.steps_since_new_edge = 0
@@ -1364,6 +1365,39 @@ class PokemonFireRedEnv(gym.Env):
             if (b[0], b[1]) == here and (a[0], a[1]) in fwd_maps:
                 targets.append((b[2], b[3]))
         return list(dict.fromkeys(targets))
+
+    def _pallet_route1_target(self):
+        """V19.1: Alabastia (3,0) ist KEIN Erkundungsgebiet - dort gibt es
+        genau EIN Navigationsziel: raus aus Alabastia -> rein auf Route 1.
+        Ziel ist der Alabastia-seitige Punkt des ECHTEN, mehrfach beobachteten
+        Uebergangs (3,0)<->(3,19). Einzelne Ausreisser (RAM-Fehllesungen /
+        Glitch-Warps mit Alabastia-Koordinate mitten in der Karte) werden per
+        Stimmenzahl verworfen. KEINE generischen Frontiers, Sackgassen,
+        Haeuser, Kartenraender oder "naechste unbekannte Frontier" - nur diese
+        eine Kante. Leer -> gar kein Ziel (Aufrufer shaped dann nicht;
+        Erkundung bleibt in Alabastia aus).
+        """
+        pair = frozenset((self.STAGE_PALLET, self.STAGE_ROUTE1))
+        votes = {}
+        for t in self._combined_transitions():
+            if len(t) != 8:
+                continue
+            a = (int(t[0]), int(t[1]))
+            b = (int(t[4]), int(t[5]))
+            if frozenset((a, b)) != pair:
+                continue
+            ps = ((int(t[2]), int(t[3])) if a == self.STAGE_PALLET
+                  else (int(t[6]), int(t[7])))
+            votes[ps] = votes.get(ps, 0) + 1
+        if not votes:
+            return []
+        # Nur die gut gestuetzten Alabastia-Kanten (>=2 verschiedene
+        # Uebergangs-Tupel); Glitch-Singletons fliegen raus. Falls nichts
+        # >=2 hat, der eine am staerksten gestuetzte Punkt.
+        keep = [c for c, n in votes.items() if n >= 2]
+        if keep:
+            return keep
+        return [max(votes.items(), key=lambda kv: kv[1])[0]]
 
     def _nav_target(self, bank, map_id, x, y):
         cache_key = (
@@ -3083,6 +3117,7 @@ class PokemonFireRedEnv(gym.Env):
         self._post_wipe_reward_cooldown_until = -1
         self.current_reward = 0.0
         self.last_exploration_coord = None
+        self._prev_step_move = None
         self.last_exploration_map = None
         self.episode_edge_visits = {}
         self.steps_since_new_edge = 0
@@ -5271,24 +5306,35 @@ class PokemonFireRedEnv(gym.Env):
 
                         # Wiederholbarer, nicht farmbarer Ziel-Fortschritt:
                         # naeher und weiter sind symmetrisch.
-                        targets = self._target_coords_for_stage(
-                            bank, map_id
-                        )
                         if (
-                            not targets
+                            (int(bank), int(map_id)) == self.STAGE_PALLET
                             and self.left_house_rewarded
-                            and self.training_objective
-                                in ("progress", "full", "scout")
                         ):
-                            targets = self._progress_targets_for_map(
-                                bank, map_id, x, y
+                            # V19.1: Alabastia = KEIN Erkundungsgebiet. Genau
+                            # ein Ziel - der echte Uebergang nach Route 1.
+                            # Kein _target_coords_for_stage / _progress_targets /
+                            # _v19_forward_targets, keine Frontier-Fallbacks.
+                            targets = self._pallet_route1_target()
+                        else:
+                            targets = self._target_coords_for_stage(
+                                bank, map_id
                             )
-                        # V19: fuer die Welt-Rollen auf einer Aussenmap liefern
-                        # die beiden oben bewusst nichts (generische Ziele
-                        # bevorzugten Haeuser/Sackgassen). Stattdessen exakt die
-                        # Transition Richtung naechster Stufe / Center / Arena.
-                        if not targets and self.left_house_rewarded:
-                            targets = self._v19_forward_targets(bank, map_id)
+                            if (
+                                not targets
+                                and self.left_house_rewarded
+                                and self.training_objective
+                                    in ("progress", "full", "scout")
+                            ):
+                                targets = self._progress_targets_for_map(
+                                    bank, map_id, x, y
+                                )
+                            # V19: fuer die Welt-Rollen auf einer Aussenmap
+                            # liefern die beiden oben bewusst nichts (generische
+                            # Ziele bevorzugten Haeuser/Sackgassen). Stattdessen
+                            # exakt die Transition Richtung naechster Stufe /
+                            # Center / Arena.
+                            if not targets and self.left_house_rewarded:
+                                targets = self._v19_forward_targets(bank, map_id)
                         if targets:
                             target_step_reward = (
                                 self.EARLY_STORY_STEP_REWARD
@@ -5312,6 +5358,16 @@ class PokemonFireRedEnv(gym.Env):
                                 bank, map_id, (x, y), targets
                             )
 
+                            # V19.1: sofortiges Kanten-Zurueckspielen bekommt
+                            # KEINEN positiven Ziel-Reward mehr. A->B (naeher,
+                            # +) danach B->A (weiter, -) danach sofort wieder
+                            # A->B: dieses zweite A->B zahlt 0 statt +. Die
+                            # Strafe fuer "weiter weg" bleibt immer. Killt das
+                            # target_closer/target_farther-Pendeln.
+                            _immediate_reverse = (
+                                getattr(self, "_prev_step_move", None)
+                                == ((int(x), int(y)), (int(px), int(py)))
+                            )
                             if (
                                 target_step_reward
                                 and
@@ -5319,11 +5375,16 @@ class PokemonFireRedEnv(gym.Env):
                                 and new_d is not None
                             ):
                                 if new_d < prev_d:
-                                    reward += target_step_reward
-                                    reward_events.append(
-                                        "target_closer:"
-                                        f"+{target_step_reward:.2f}"
-                                    )
+                                    if _immediate_reverse:
+                                        reward_events.append(
+                                            "target_closer_suppressed:+0"
+                                        )
+                                    else:
+                                        reward += target_step_reward
+                                        reward_events.append(
+                                            "target_closer:"
+                                            f"+{target_step_reward:.2f}"
+                                        )
                                 elif new_d > prev_d:
                                     reward -= target_step_reward
                                     reward_events.append(
@@ -5422,6 +5483,20 @@ class PokemonFireRedEnv(gym.Env):
                         if len(self.persistent_known_transitions | self.shared_transition_snapshot) >= 5:
                             self._claim_journey_milestone("journey_warp5","journey_seen_warp5")
 
+            # V19.1: letzten 1-Kachel-Zug (from->to) merken - fuer die
+            # Ziel-Reversal-Sperre oben. Teleport/Warp/Stillstand loeschen ihn,
+            # damit "sofortiges Zurueckspielen" wirklich nur genau das ist.
+            _lec = self.last_exploration_coord
+            if (
+                _lec is not None
+                and (_lec[0], _lec[1]) == (bank, map_id)
+                and abs(x - _lec[2]) + abs(y - _lec[3]) == 1
+            ):
+                self._prev_step_move = (
+                    (int(_lec[2]), int(_lec[3])), (int(x), int(y))
+                )
+            else:
+                self._prev_step_move = None
             self.last_exploration_coord = coord_key
             self.last_exploration_map = map_key
 

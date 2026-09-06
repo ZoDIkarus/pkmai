@@ -1,5 +1,10 @@
 # Pokemon FireRed AI – PROJECT STATUS / TODO
 
+> **V19.1 (nav fix):** Pallet Town has exactly one nav target — the real
+> `(3,0)→(3,19)` transition (no frontiers/dead-ends/house-doors); plus an
+> immediate-edge-reversal guard on positive target shaping. See
+> `docs/AI_STATUS.md`.
+
 > **Big deferred changes** (FighterBrain, forest-exit house) live in
 > `docs/BIG_CHANGES_TODO.md`.
 

@@ -216,6 +216,35 @@ class ProgressRegressionTests(unittest.TestCase):
         e._combined_transitions = lambda: [(3, 2, 1, 1, 3, 1, 2, 2)]  # Pewter->Viridian (rueck)
         self.assertEqual(e._v19_forward_targets(3, 2), [])
 
+    def test_pallet_nav_target_is_only_the_route1_transition(self):
+        e = bare_env()
+        # gemischte Transitionen: echter Alabastia<->Route1-Uebergang (mehrfach
+        # gestuetzt), ein Glitch-Singleton mitten in Alabastia, und Alabastia
+        # <->Haus (Bank 4) - darf NICHT als Ziel zaehlen.
+        e._combined_transitions = lambda: [
+            (3, 0, 13, 0, 3, 19, 13, 39),
+            (3, 0, 13, 1, 3, 19, 13, 39),
+            (3, 0, 12, 0, 3, 19, 12, 39),
+            (3, 19, 13, 38, 3, 0, 13, 0),     # umgekehrt, stuetzt (13,0)
+            (3, 0, 6, 8, 3, 19, 8, 33),       # Glitch-Singleton
+            (3, 0, 16, 13, 4, 3, 6, 7),       # Alabastia <-> Eichs Labor
+        ]
+        t = e._pallet_route1_target()
+        self.assertIn((13, 0), t)             # gut gestuetzt
+        self.assertNotIn((6, 8), t)           # Glitch raus
+        self.assertNotIn((16, 13), t)         # Hausausgang ist kein Ziel
+        for c in t:
+            self.assertLess(c[1], 8)          # nur die echte Nordkante
+        # ohne bekannten Uebergang: gar kein Ziel (kein Frontier-Fallback)
+        e._combined_transitions = lambda: []
+        self.assertEqual(e._pallet_route1_target(), [])
+        # immediate-reverse-Guard existiert im step()-Ziel-Block
+        import inspect
+        src = inspect.getsource(PokemonFireRedEnv.step)
+        self.assertIn("_immediate_reverse", src)
+        self.assertIn("target_closer_suppressed", src)
+        self.assertIn("target_farther", src)   # Strafe NICHT entfernt
+
     def test_bank4_interiors_never_get_the_500_city_building_reward(self):
         import inspect
         src = inspect.getsource(PokemonFireRedEnv.step)

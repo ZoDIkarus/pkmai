@@ -54,8 +54,8 @@ These apply to non-Fighter roles; ordinary combat rewards above remain available
 | Approach a known target | +0.05 per unit of new best distance; returning to an already achieved distance does not repay |
 | Large backtrack | −0.005 beyond a 12-tile margin; the environment explicitly passes this margin |
 | FULL/BRIDGE/RETENTION new tile | +0.02 on proven ground, +0.3 when forward navigation is unknown |
-| FRONTIER new tile | +0.02; +1 for a fleet-first tile |
-| Tile cap | After 20 tiles per outdoor map/episode, tile component ×0.1; separate interior cap; global-first component is separate |
+| FRONTIER new tile | +0.3 while the forward transition is unknown; otherwise +0.02. Fleet-first tile adds +1. |
+| Tile cap | No cap while the forward transition is unknown, for all navigation roles. On proven ground, after 20 outdoor tiles per episode the base component is ×0.1; separate interior cap. |
 | FRONTIER topological progress | +0.15 × improvement over anchored best frontier score, minimum improvement 0.5 |
 | Newly confirmed forward transition | +40 if the crossing makes it known and objective is `scout` |
 | Already known forward crossing | +25 once per episode for FULL/BRIDGE |
@@ -99,3 +99,7 @@ Status and Watcher have search by ID/name/map/start, role filters, health/battle
 Run `bash scripts/start_all.sh`. It starts trainer, watcher, dashboard (:8001) and status monitor in detached sessions, with logs in `runtime/logs/` and PID files in `runtime/`. Existing services are detected for both absolute and relative Python script paths. It never resets learning or starts external tunnels. Set `PKMAI_PYTHON` to use another installed Python environment. The status monitor accepts frontier checkpoint filenames.
 
 On 2026-09-06 the user explicitly authorized restarting all services, including the watcher, after publishing this revision. Earlier stream-preservation notes describe the preceding maintenance, not a prohibition on this authorized restart.
+
+## Exploration balance follow-up
+
+All navigation roles (FULL/BRIDGE/FRONTIER/RETENTION) receive +0.3 for each tile first visited in the episode on a stage whose forward transition is still unknown, without the 20-tile reduction. A fleet-first tile adds +1 for the discovering navigation agent, including FULL. Repeated visits in the episode pay zero; scout backtracking below spawn stage stays unrewarded. Known-stage caps and all combat values are unchanged; Fighter still receives only combat rewards. This raises the incentive to reach unknown territory without increasing repeated-tile rewards. It does not directly change BRIDGE's mastery gate or promise faster convergence.

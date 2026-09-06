@@ -9,6 +9,7 @@ PKMAI is an experimental reinforcement-learning project that trains a PPO agent 
 **Authoritative current reference:** [Roles, rewards, checkpoints and update timing](docs/CURRENT_LOGIC.md).
 This supersedes conflicting numbers and restart advice in the historical release notes below.
 
+- Unknown onward transition: **+0.3 per new episode tile, uncapped**, for all navigation roles; fleet-first discovery adds **+1**, including FULL. Combat values unchanged.
 - 60 learners: **FULL 21 / BRIDGE 20 / FRONTIER 10 / RETENTION 5 / FIGHTER 4**, one shared PPO.
 - Fighter receives **only combat rewards**, at the same values as other roles; only wild-battle decay after six fainted opponents is disabled for Fighter.
 - Healthy Frontier starts require every party member at least 80% HP, no status ailment and usable PP. The local Route-1 anchor was repaired to 62/62 HP with its original position and team preserved.

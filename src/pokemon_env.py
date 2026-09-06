@@ -517,7 +517,7 @@ class PokemonFireRedEnv(gym.Env):
     # V20 FRONTIER REDESIGN (frontier_v20.py). Frontier progress = real
     # topological extension of the known walkable graph, NOT tile count.
     #   * Only FRONTIER-mode agents explore. FULL/BRIDGE/RETENTION exploit
-    #     known ground: FULL_NEW_TILE_REWARD = 0, they are driven by story +
+    #     known ground: small capped tile rewards, plus story +
     #     PROVEN_EXIT_REWARD toward a confirmed forward transition.
     #   * The frontier reward is a strict high-watermark on graph depth from
     #     the stage origin - oscillating between two known areas pays nothing.
@@ -530,11 +530,8 @@ class PokemonFireRedEnv(gym.Env):
     # a city wall with only the backtrack penalty for company. Still ~0.8 max
     # for a whole town vs +25 proven exit / +300 city - they do not "explore".
     FULL_NEW_TILE_REWARD = 0.02
-    # On a stage whose forward transition is still UNKNOWN (no scout has found
-    # the way onward), FULL/BRIDGE get this instead - a real reason to push the
-    # frontier stage northward with the FRONTIER scouts, not drift back to
-    # town. Capped like every tile reward (15/map then x0.1) -> max ~4.5 for a
-    # whole unproven route, small vs the +250 stage-advance it is chasing.
+    # Unknown forward transition: uncapped once-per-episode tiles for every
+    # navigation role. Fleet-first discovery adds GLOBAL_NEW_TILE_BONUS.
     FULL_FRONTIER_TILE_REWARD = 0.3
     WARP_LOOP_PENALTY = -0.10
     LOCAL_LOOP_PENALTY = -0.05
@@ -5845,18 +5842,10 @@ class PokemonFireRedEnv(gym.Env):
                     # of role.
                     _map_tiles = self._episode_tiles_by_map.get(map_key, 0)
                     self._episode_tiles_by_map[map_key] = _map_tiles + 1
-                    # V20 FRONTIER REDESIGN section 7: only FRONTIER scouts are
-                    # paid for new tiles, and only a tiny one-off. FULL / BRIDGE
-                    # / RETENTION must exploit known ground, not re-map it -
-                    # their exploration signal is 0, they are driven by story +
-                    # PROVEN_EXIT_REWARD. Fleet-first GLOBAL_NEW_TILE_BONUS is
-                    # scout-only too.
                     _is_frontier_scout = (
                         getattr(self, "training_mode", "") == "FRONTIER"
                     )
-                    # Always advance the fleet-wide "tile ever seen" registry so
-                    # global-first tracking stays accurate; only a FRONTIER
-                    # scout is actually paid for it.
+                    # Shared first-visit claim is atomic across the fleet.
                     _tile_global_first = self._claim_shared(
                         self.shared_tiles, coord_key
                     )
@@ -5865,15 +5854,6 @@ class PokemonFireRedEnv(gym.Env):
                         else self.INTERIOR_TILE_CAP_PER_MAP
                     )
                     _capped = _map_tiles >= _cap
-                    # V20 FRONTIER REDESIGN section 7/9: FULL/BRIDGE/RETENTION
-                    # EXPLOIT where the way forward is proven and EXPLORE where
-                    # it is not. On a stage whose forward transition is still
-                    # UNKNOWN (e.g. Route 1 before any scout has found the
-                    # Viridian exit) they get the same small tile reward as a
-                    # scout - otherwise they have literally no reason to be on
-                    # that stage and drift back to town. Once the hop is proven
-                    # they get 0 for tiles and are driven by the target /
-                    # PROVEN_EXIT_REWARD instead.
                     _fwd_unknown = (
                         _tile_stage >= 1
                         and self._v20_active()
@@ -5881,6 +5861,8 @@ class PokemonFireRedEnv(gym.Env):
                             _tile_stage
                         ) == NAV_UNKNOWN
                     )
+                    # Reward reaching unexplored territory even after tile 20.
+                    _capped = _capped and not _fwd_unknown
                     if _scout_backtrack:
                         reward_events.append("new_tile_scout_backtrack:+0")
                     elif not _is_frontier_scout:
@@ -5893,6 +5875,8 @@ class PokemonFireRedEnv(gym.Env):
                         )
                         if _capped:
                             _tr *= self.TILE_REWARD_AFTER_CAP_FACTOR
+                        if _fwd_unknown and _tile_global_first:
+                            _tr += self.GLOBAL_NEW_TILE_BONUS
                         if _tr:
                             reward += _tr
                         reward_events.append(
@@ -5901,7 +5885,8 @@ class PokemonFireRedEnv(gym.Env):
                             f"{':capped' if _capped else ''}:+{_tr:.3f}"
                         )
                     else:
-                        _tile_reward = self.SCOUT_NEW_TILE_REWARD
+                        _tile_reward = (self.FULL_FRONTIER_TILE_REWARD if _fwd_unknown
+                                        else self.SCOUT_NEW_TILE_REWARD)
                         if _capped:
                             _tile_reward *= self.TILE_REWARD_AFTER_CAP_FACTOR
                         _tile_global = (

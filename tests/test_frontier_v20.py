@@ -155,17 +155,21 @@ class RoleGatedTileRewardTests(unittest.TestCase):
                     and ast.unparse(n.test) == 'coord_key not in self.seen_coords')
         return compile(ast.Module(body=[node], type_ignores=[]), '<tile>', 'exec')
 
-    def _run(self, mode, known=None):
+    def _run(self, mode, known=None, count=0, shared=None, repeat=False):
         from nav_transitions_v20 import UNKNOWN as NAV_UNKNOWN, KnownTransitions
         e = bare_env(training_objective='scout', training_mode=mode,
                      episode_start_stage=2, seen_coords=set(),
-                     _episode_tiles_by_map={}, _episode_first_tile_by_map={},
-                     shared_tiles={}, shared_lock=None)
+                     _episode_tiles_by_map={(3,19):count}, _episode_first_tile_by_map={},
+                     shared_tiles={} if shared is None else shared, shared_lock=None)
         e._v20_load_known_transitions = lambda *a, **k: (known or KnownTransitions())
         scope = dict(self=e, bank=3, map_id=19, map_key=(3, 19),
                      coord_key=(3, 19, 12, 30), reward=0.0, reward_events=[],
                      _wipe_cooldown_active=False, NAV_UNKNOWN=NAV_UNKNOWN)
         exec(self._tile_code(), scope)
+        if repeat:
+            before=scope['reward']
+            exec(self._tile_code(), scope)
+            self.assertEqual(scope['reward'], before)
         return scope['reward'], scope['reward_events']
 
     def test_full_agent_pushes_an_unproven_stage_but_only_trickles_a_proven_one(self):
@@ -203,3 +207,24 @@ class ConstantsTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class ExplorationBalanceTests(RoleGatedTileRewardTests):
+    def test_unknown_tiles_keep_reward_after_cap_for_every_navigation_role(self):
+        for mode in ('FULL','BRIDGE','FRONTIER','RETENTION'):
+            for count in (0,20,100):
+                r,_=self._run(mode,count=count,shared={(3,19,12,30):1},repeat=True)
+                self.assertAlmostEqual(r,.3)
+
+    def test_fleet_first_bonus_is_shared_and_available_to_full(self):
+        shared={}
+        first,_=self._run('FULL',count=100,shared=shared)
+        later,_=self._run('FRONTIER',count=100,shared=shared)
+        self.assertAlmostEqual(first,1.3)
+        self.assertAlmostEqual(later,.3)
+
+    def test_known_ground_retains_cap(self):
+        known=KnownTransitions()
+        for _ in range(2):known.record(2,3,(3,19),(9,0),(3,1),(20,40))
+        for mode in ('FULL','FRONTIER'):
+            r,_=self._run(mode,known=known,count=100,shared={(3,19,12,30):1})
+            self.assertAlmostEqual(r,.002)

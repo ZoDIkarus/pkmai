@@ -1,9 +1,11 @@
 import unittest
+from unittest.mock import patch
 
 from pokemon_env import (
     PokemonFireRedEnv,
     battle_hp_stagnation_update,
     battle_stagnation_penalty,
+    intro_novelty_bonus,
     short_cycle_repeats,
     stairs_no_new_edge_timeout,
     stuck_loop_penalty,
@@ -13,6 +15,12 @@ from pokemon_env import (
 
 
 class ShortCycleRepeatsTests(unittest.TestCase):
+    def test_intro_visual_rewards_are_strictly_capped_before_map_control(self):
+        self.assertEqual(intro_novelty_bonus(0.0, 9.9, True), 0.0)
+        self.assertEqual(intro_novelty_bonus(0.0, 10.0, False), 0.0)
+        self.assertEqual(intro_novelty_bonus(4.5, 10.0, True), 0.5)
+        self.assertEqual(intro_novelty_bonus(5.0, 28.0, True), 0.0)
+
     def test_intro_requires_a_trusted_map_transition_after_the_first_playable_map(self):
         self.assertFalse(intro_map_transition_completed(None, (4, 1)))
         self.assertFalse(intro_map_transition_completed((4, 1), (4, 1)))
@@ -70,7 +78,8 @@ class V17RewardTuningTests(unittest.TestCase):
     def test_stairs_frontier_stops_an_unproductive_run_within_nine_hundred_steps(self):
         self.assertEqual(PokemonFireRedEnv.STAIRS_TIMEOUT_STEPS, 900)
 
-    def test_local_ten_worker_curriculum_revalidates_unmeasured_early_stages(self):
+    @patch("pokemon_env.load_status", return_value={"stages": {}})
+    def test_local_ten_worker_curriculum_revalidates_unmeasured_early_stages(self, _load_status):
         env = object.__new__(PokemonFireRedEnv)
         env.rank = 8
         env.agent_count = 10
@@ -80,7 +89,8 @@ class V17RewardTuningTests(unittest.TestCase):
         env.full_chain_ready = False
         self.assertEqual(PokemonFireRedEnv._agent_role(env)[0], "stairs")
 
-    def test_unmeasured_early_stages_hold_the_frontier_before_progress_resume(self):
+    @patch("pokemon_env.load_status", return_value={"stages": {}})
+    def test_unmeasured_early_stages_hold_the_frontier_before_progress_resume(self, _load_status):
         env = object.__new__(PokemonFireRedEnv)
         env.rank = 8
         env.agent_count = 10

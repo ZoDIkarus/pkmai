@@ -80,6 +80,16 @@ def intro_map_transition_completed(first_map, current_map):
     return tuple(first_map[:2]) != tuple(current_map[:2])
 
 
+def intro_novelty_bonus(total_rewarded, screen_diff, is_new_state, limit=5.0):
+    """Keep visual-only intro progress subordinate to actual map control."""
+    total = max(0.0, float(total_rewarded))
+    cap = max(0.0, float(limit))
+    if not is_new_state or float(screen_diff) < 10.0 or total >= cap:
+        return 0.0
+    proposed = 1.0 if float(screen_diff) >= 28.0 else 0.5
+    return min(proposed, cap - total)
+
+
 def battle_stagnation_penalty(stagnant_hp_reads, grace_reads=16, penalty=-0.5):
     """Penalize only repeated verified battle HP snapshots with no change."""
     reads = int(stagnant_hp_reads)
@@ -128,6 +138,9 @@ class PokemonFireRedEnv(gym.Env):
     # Kein positiver "Lebensreward" mehr. Jeder Schritt kostet minimal,
     # damit kuerzere Loesungen besser sind als 8k-Looping.
     INTRO_STEP_COST = -0.002
+    # Cursor movement in the naming keyboard is visually distinct, but it is
+    # not map progress. Keep the diagnostic shaping too small to be farmable.
+    INTRO_NOVELTY_REWARD_CAP = 5.0
     # A non-zero time cost keeps stationary or indecisive gameplay from being
     # neutral while remaining far below every meaningful progress reward.
     GAMEPLAY_STEP_COST = -0.001
@@ -2695,18 +2708,16 @@ class PokemonFireRedEnv(gym.Env):
                 quant = (thumb // 32).astype(np.uint8)
                 state_key = quant.tobytes()
 
-                # Nur deutliche, neue Screens belohnen. Cursor-Flackern allein
-                # reicht normalerweise nicht. Gesamtbonus ist auf +25 gedeckelt.
-                if (
-                    diff >= 10.0
-                    and state_key not in self.intro_seen_states
-                    and self.intro_novelty_reward_total < 25.0
-                ):
-                    bonus = 1.0 if diff >= 28.0 else 0.5
-                    bonus = min(
-                        bonus,
-                        25.0 - self.intro_novelty_reward_total
-                    )
+                # Cursor movement on the name keyboard can alter the visual
+                # fingerprint. Treat this only as a tiny diagnostic signal;
+                # trusted map progress remains the actual completion signal.
+                bonus = intro_novelty_bonus(
+                    self.intro_novelty_reward_total,
+                    diff,
+                    state_key not in self.intro_seen_states,
+                    self.INTRO_NOVELTY_REWARD_CAP,
+                )
+                if bonus > 0.0:
                     reward += bonus
                     self.intro_novelty_reward_total += bonus
                     self.intro_seen_states.add(state_key)

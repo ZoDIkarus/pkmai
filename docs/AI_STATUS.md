@@ -1,5 +1,16 @@
 # PKMAI — Live Work Log
 
+## 2026-09-06 — V19 deployed clean (building-reward fix live)
+
+Final full restart with a map/global reset (brain kept: 4 model zips, 18
+savestates, 3 stage checkpoints, `champion_score.json`, `model_version.json` —
+champion v9). Backup `brain_backups/V19_reset_20260906_122252`. All fleet-once
+bonuses re-fire against the V19 reward shape. Live-verified: `new_building_global`
+(bank 5/6, +500) and `new_building_seen` (bank 4 + other interiors, +50) are now
+distinct event names — a grep for `new_building_global:4_` returns nothing.
+`stage_advance`, `target_closer/target_farther`, `post_wipe_*` all firing; no
+`enemy_faint` / `experience_gain`. 73 unit tests pass. Trainer/watcher/web fresh.
+
 ## 2026-09-06 — V19 BROCK RUSH (`BUILD_TAG = "V19_BROCK_RUSH"`)
 
 Ziel: schnellerer echter Story-Fortschritt bis Orden 1, ohne neue Reward-Loops.

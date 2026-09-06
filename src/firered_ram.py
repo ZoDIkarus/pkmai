@@ -64,7 +64,9 @@ def _valid_location(ram, base):
     if x == 0 and y == 0 and bank == 0 and map_id == 0:
         return False
 
-    return x < 512 and y < 512 and bank < 128 and map_id < 128
+    if bank == 0 and map_id >= 5:
+        return False
+    return x < 512 and y < 512 and bank < 43 and map_id < 128
 
 
 def _valid_pointer_slot(ram, slot):
@@ -188,6 +190,7 @@ def read_player_location(env, allow_scan=True):
 # struct Pokemon size = 100 bytes.
 PLAYER_PARTY_OFFSET = 0x24284
 ENEMY_PARTY_OFFSET = 0x2402C
+BATTLE_TYPE_FLAGS_OFFSET = 0x22FEC
 POKEMON_STRUCT_SIZE = 100
 MAX_PARTY_SIZE = 6
 
@@ -384,7 +387,12 @@ def read_player_party(env):
     for slot in range(MAX_PARTY_SIZE):
         base = PLAYER_PARTY_OFFSET + slot * POKEMON_STRUCT_SIZE
         mon = _decode_party_mon(ram, base, slot)
-        if mon is not None:
+        if mon is None or not mon.get("checksum_ok", False):
+            continue
+        cur_hp = int(mon.get("cur_hp", 0))
+        max_hp = int(mon.get("max_hp", 0))
+        level = int(mon.get("level", 0))
+        if 1 <= level <= 100 and 0 < max_hp <= 999 and 0 <= cur_hp <= max_hp:
             party.append(mon)
     return party
 
@@ -410,3 +418,14 @@ def read_enemy_party(env):
         if 0 < max_hp <= 999 and 0 <= cur_hp <= max_hp:
             party.append(mon)
     return party
+
+
+def read_battle_type_flags(env):
+    """Read FireRed's ``gBattleTypeFlags`` as a safe uint32 telemetry value."""
+    try:
+        ram = env.get_ram()
+    except Exception:
+        return 0
+    if ram is None or len(ram) < BATTLE_TYPE_FLAGS_OFFSET + 4:
+        return 0
+    return _u32(ram, BATTLE_TYPE_FLAGS_OFFSET)

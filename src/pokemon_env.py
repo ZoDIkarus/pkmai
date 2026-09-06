@@ -166,6 +166,8 @@ class PokemonFireRedEnv(gym.Env):
     POKECENTER_FIRST_HEAL_GLOBAL_REWARD = 1000.0
     POKEMART_ENTER_REWARD = 100.0
     POKEMART_FIRST_GLOBAL_REWARD = 1000.0
+    PIKACHU_SPECIES_ID = 25
+    PEWTER_WITH_PIKACHU_REWARD = 300.0
     POKECENTER_MAPS = {(5, 4), (5, 5), (6, 5)}
     POKECENTER_HEAL_MAPS = {(5, 4), (6, 5)}
     POKEMART_MAPS = {(5, 3)}
@@ -252,6 +254,8 @@ class PokemonFireRedEnv(gym.Env):
         self.pre_wipe_best_center_stage = 0
         self.pre_wipe_badges = 0
         self.episode_caught_species = set()
+        self.episode_pewter_reached = False
+        self.episode_pewter_with_pikachu_rewarded = False
         self.pokecenter_entered_this_episode = set()
         self.pokemart_entered_this_episode = set()
         self.best_pokecenter_heal_stage = 0
@@ -678,6 +682,23 @@ class PokemonFireRedEnv(gym.Env):
         if int(bank) in cls.CITY_BUILDING_BANKS and int(bank) != 4:
             return f"building_{int(bank)}_{int(map_id)}"
         return None
+
+    def _pewter_arrival_reward(self, current_stage, party, reward_events):
+        """Reward the optional Pikachu milestone once when Pewter is first reached."""
+        if int(current_stage) != 6 or getattr(self, "episode_pewter_reached", False):
+            return 0.0
+        self.episode_pewter_reached = True
+        has_pikachu = any(
+            int(mon.get("species_id", 0)) == self.PIKACHU_SPECIES_ID
+            for mon in (party or ())
+        )
+        if not has_pikachu or getattr(self, "episode_pewter_with_pikachu_rewarded", False):
+            return 0.0
+        self.episode_pewter_with_pikachu_rewarded = True
+        reward_events.append(
+            f"pewter_with_pikachu:+{self.PEWTER_WITH_PIKACHU_REWARD:.0f}"
+        )
+        return self.PEWTER_WITH_PIKACHU_REWARD
 
     @staticmethod
     def _warp_pair_key(from_bank, from_map, to_bank, to_map):
@@ -1971,6 +1992,8 @@ class PokemonFireRedEnv(gym.Env):
         self.pre_wipe_best_center_stage = 0
         self.pre_wipe_badges = 0
         self.episode_caught_species = set()
+        self.episode_pewter_reached = False
+        self.episode_pewter_with_pikachu_rewarded = False
         self.pokecenter_entered_this_episode = set()
         self.pokemart_entered_this_episode = set()
         self.best_pokecenter_heal_stage = 0
@@ -2381,6 +2404,9 @@ class PokemonFireRedEnv(gym.Env):
         self.episode_best_stage = max(self.episode_best_stage, current_stage)
         if gameplay_ready and in_battle == 0:
             reward += self._complete_post_wipe_recovery(current_stage, reward_events)
+            reward += self._pewter_arrival_reward(
+                current_stage, self.player_party_cache, reward_events
+            )
         if gameplay_ready and not self._wipe_cooldown_active():
             if map_key in self.POKECENTER_MAPS and map_key not in self.pokecenter_entered_this_episode:
                 self.pokecenter_entered_this_episode.add(map_key)

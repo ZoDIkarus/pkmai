@@ -150,6 +150,20 @@ class V17RewardTuningTests(unittest.TestCase):
         self.assertEqual(PokemonFireRedEnv._tile_stage(1, 0), 5)
         self.assertEqual(PokemonFireRedEnv._tile_stage(3, 2), 6)
 
+    def test_pewter_arrival_with_pikachu_is_once_per_episode(self):
+        env = object.__new__(PokemonFireRedEnv)
+        env.episode_pewter_reached = False
+        env.episode_pewter_with_pikachu_rewarded = False
+        events = []
+        party = [{"species_id": 25}]
+        self.assertEqual(
+            PokemonFireRedEnv._pewter_arrival_reward(env, 6, party, events), 300.0
+        )
+        self.assertEqual(events, ["pewter_with_pikachu:+300"])
+        self.assertEqual(
+            PokemonFireRedEnv._pewter_arrival_reward(env, 6, party, events), 0.0
+        )
+
     def test_stuck_penalty_grows_continuously_without_a_discontinuity(self):
         self.assertEqual(stuck_loop_penalty(59), 0.0)
         self.assertEqual(stuck_loop_penalty(60), -0.001)

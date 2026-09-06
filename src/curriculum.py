@@ -34,7 +34,7 @@ def local_frontier_roles(agent_count, milestones):
     else:
         plan = [
             ("intro", 1), ("stairs", 1), ("exit", 1), ("starter", 1),
-            ("progress", 4), ("scout", 2),
+            ("battle", 2), ("progress", 4),
         ]
     roles = [role for role, count in plan for _ in range(count)]
     return tuple((roles + [roles[-1]] * n)[:n])

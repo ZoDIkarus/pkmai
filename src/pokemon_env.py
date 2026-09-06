@@ -1811,6 +1811,7 @@ class PokemonFireRedEnv(gym.Env):
             "stairs": "Stair Regression",
             "exit": "Exit Regression",
             "starter": "Starter Regression",
+            "battle": "Battle Specialist",
             "progress": "Frontier Progress",
             "scout": "Frontier Scout",
         }

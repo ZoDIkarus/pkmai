@@ -14,13 +14,13 @@ from curriculum import (
 
 
 class CurriculumRolesTests(unittest.TestCase):
-    def test_local_frontier_uses_two_scouts_after_the_starter_chain(self):
+    def test_local_frontier_uses_two_battle_specialists_after_the_starter_chain(self):
         roles = local_frontier_roles(
             10,
             {"intro_complete", "stairs_down", "left_house", "starter", "progress_3"},
         )
         self.assertEqual(len(roles), 10)
-        self.assertEqual(roles.count("scout"), 2)
+        self.assertEqual(roles.count("battle"), 2)
         self.assertEqual(roles.count("progress"), 4)
         self.assertEqual(roles[:4], ("intro", "stairs", "exit", "starter"))
 

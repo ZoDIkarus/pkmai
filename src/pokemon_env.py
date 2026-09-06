@@ -644,7 +644,10 @@ class PokemonFireRedEnv(gym.Env):
         return {
             (3, 0): 1,   # Pallet
             (3, 19): 2,  # Route 1
-            (3, 20): 3,  # Viridian approach
+            (3, 1): 3,   # Viridian
+            (3, 20): 4,  # Route 2
+            (1, 0): 5,   # Viridian Forest
+            (3, 2): 6,   # Pewter
         }.get((int(bank), int(map_id)), 4)
 
     def _can_reward_exploration(self, stage):

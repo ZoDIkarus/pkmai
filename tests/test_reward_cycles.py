@@ -142,6 +142,14 @@ class V17RewardTuningTests(unittest.TestCase):
             PokemonFireRedEnv._complete_post_wipe_recovery(env, 4, events), 0.0
         )
 
+    def test_geographic_stages_cover_the_route_to_pewter(self):
+        self.assertEqual(PokemonFireRedEnv._tile_stage(3, 0), 1)
+        self.assertEqual(PokemonFireRedEnv._tile_stage(3, 19), 2)
+        self.assertEqual(PokemonFireRedEnv._tile_stage(3, 1), 3)
+        self.assertEqual(PokemonFireRedEnv._tile_stage(3, 20), 4)
+        self.assertEqual(PokemonFireRedEnv._tile_stage(1, 0), 5)
+        self.assertEqual(PokemonFireRedEnv._tile_stage(3, 2), 6)
+
     def test_stuck_penalty_grows_continuously_without_a_discontinuity(self):
         self.assertEqual(stuck_loop_penalty(59), 0.0)
         self.assertEqual(stuck_loop_penalty(60), -0.001)

@@ -69,6 +69,14 @@ def battle_stagnation_penalty(stagnant_hp_reads, grace_reads=16, penalty=-0.5):
     return float(penalty) if reads >= grace and reads % grace == 0 else 0.0
 
 
+def battle_hp_stagnation_update(previous_signature, stagnant_reads, current_signature):
+    """Advance a battle-only HP-stagnation counter from validated enemy RAM."""
+    if previous_signature is None or current_signature != previous_signature:
+        return current_signature, 0, 0.0
+    reads = int(stagnant_reads) + 1
+    return current_signature, reads, battle_stagnation_penalty(reads)
+
+
 class PokemonFireRedEnv(gym.Env):
     BUILD_TAG = "V10.25_SKILL_VAULT_FULL_CHAIN"
     metadata = {"render_modes": []}
@@ -2477,7 +2485,7 @@ class PokemonFireRedEnv(gym.Env):
             reward_events.append("battle_start_blocked:-0.10")
 
         # V7.5.1: reward only NEW opponent HP damage.
-        if p_lvl >= 5 and self.total_steps % self.ENEMY_HP_READ_EVERY == 0:
+        if self.total_steps % self.ENEMY_HP_READ_EVERY == 0:
             try:
                 enemy_party = read_enemy_party(self.env)
             except Exception:
@@ -2551,25 +2559,21 @@ class PokemonFireRedEnv(gym.Env):
 
                 if in_battle == 1 and enemy_hp_signature:
                     current_signature = tuple(sorted(enemy_hp_signature))
-                    if self.battle_hp_signature is None:
-                        self.battle_hp_signature = current_signature
-                        self.battle_stagnant_hp_reads = 0
-                    elif current_signature != self.battle_hp_signature:
-                        self.battle_hp_signature = current_signature
-                        self.battle_stagnant_hp_reads = 0
-                    else:
-                        self.battle_stagnant_hp_reads += 1
-                        stagnation_penalty = battle_stagnation_penalty(
-                            self.battle_stagnant_hp_reads,
-                            self.BATTLE_STAGNATION_HP_READS,
-                            self.BATTLE_STAGNATION_PENALTY,
+                    (
+                        self.battle_hp_signature,
+                        self.battle_stagnant_hp_reads,
+                        stagnation_penalty,
+                    ) = battle_hp_stagnation_update(
+                        self.battle_hp_signature,
+                        self.battle_stagnant_hp_reads,
+                        current_signature,
+                    )
+                    if stagnation_penalty:
+                        reward += stagnation_penalty
+                        reward_events.append(
+                            "battle_hp_stagnant:"
+                            f"{stagnation_penalty:.2f}"
                         )
-                        if stagnation_penalty:
-                            reward += stagnation_penalty
-                            reward_events.append(
-                                "battle_hp_stagnant:"
-                                f"{stagnation_penalty:.2f}"
-                            )
 
         # ---------------------------------------------------------
         # START ANTI-SPAM

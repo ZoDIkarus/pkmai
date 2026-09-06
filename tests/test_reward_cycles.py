@@ -2,6 +2,7 @@ import unittest
 
 from pokemon_env import (
     PokemonFireRedEnv,
+    battle_hp_stagnation_update,
     battle_stagnation_penalty,
     short_cycle_repeats,
     stuck_loop_penalty,
@@ -35,6 +36,18 @@ class ShortCycleRepeatsTests(unittest.TestCase):
         self.assertEqual(battle_stagnation_penalty(16), -0.5)
         self.assertEqual(battle_stagnation_penalty(17), 0.0)
         self.assertEqual(battle_stagnation_penalty(32), -0.5)
+
+    def test_valid_enemy_hp_snapshots_stagnate_without_a_player_level_gate(self):
+        snapshot = ((0, 19, 123, 10),)
+        signature, reads, penalty = battle_hp_stagnation_update(
+            snapshot,
+            15,
+            snapshot,
+        )
+
+        self.assertEqual(signature, snapshot)
+        self.assertEqual(reads, 16)
+        self.assertEqual(penalty, -0.5)
 
 
 class V17RewardTuningTests(unittest.TestCase):

@@ -1,32 +1,25 @@
-# PKMAI Architecture
+# Local dynamic-cluster architecture
 
-## Training
+PKMAI runs entirely on the local Docker Desktop host. The topology has no remote Ray worker or Stable-Baselines service.
 
-The project trains one shared PPO `MultiInputPolicy` using 30 parallel
-Stable-Retro environments.
+```text
+local-trainer-0..9 -> cluster-master -> cluster-brain -> dynamic_policy(_best).pt
+                                              |                    |
+                                              +--------------------+
+                                                                   v
+                                                        dynamic-watcher
+                                                                   |
+                                                     runtime/watcher.jpg + watcher.json
+                                                                   |
+                                                                  web:8001
+```
 
-The observation combines:
-- grayscale game image
-- objective
-- RAM position/map information
-- battle/story state
-- learned navigation target direction and distance
-- player level and badge count
+## Components
 
-## Curriculum
+- `src/cluster_worker.py` generates rollout batches. Every local container receives an explicit `PKMAI_WORKER_ID`, `PKMAI_WORKER_RANK`, and fleet size.
+- `src/cluster_master.py` performs registration, compatibility checks, batch intake, and serves the current policy to trainers.
+- `src/dynamic_brain.py` learns from uploaded rollout batches and retains/publishes the highest-reward policy for viewing.
+- `src/dynamic_watcher.py` uses its own non-training emulator. It starts every episode at the true initial game state, samples the published best-policy distribution, and publishes a JPEG plus sanitized watcher status.
+- `src/web_stream.py` exposes the watcher-first dashboard, `/api/watchers`, `/api/cluster-status`, `/watcher.jpg`, and `/watcher`.
 
-Runtime curriculum data is stored outside Git in `runtime/`.
-
-Specialists learn short early-game skills while Progress agents resume from
-the most advanced self-discovered checkpoints. Full-chain agents continue to
-validate end-to-end behavior from the beginning.
-
-## Mapping
-
-Training agents contribute coordinate/edge/warp metadata only.
-The Watcher performs the visual live-map tiling.
-
-## Secrets
-
-Secrets are local-only. `.env` is ignored by Git.
-ngrok may alternatively use its standard user-level config outside the repo.
+The visible watcher is deliberately separate from the trainer fleet and does not upload rollouts or mutate policy state.

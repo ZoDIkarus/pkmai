@@ -2,10 +2,8 @@ import unittest
 
 from cluster_config import (
     ClusterCompatibilityError,
-    ClusterRuntimeSettings,
     ClusterSettings,
     build_environment_signature,
-    load_cluster_runtime_settings,
     validate_worker_registration,
 )
 
@@ -57,13 +55,3 @@ class ClusterConfigTests(unittest.TestCase):
 
         self.assertTrue(decision.accepted)
         self.assertEqual(decision.policy_version, 4)
-
-    def test_runtime_settings_accept_a_ten_emulator_worker_pool(self):
-        settings = load_cluster_runtime_settings(
-            {
-                "PKMAI_CLUSTER_ENV_RUNNERS": "10",
-                "PKMAI_CLUSTER_AGENTS_PER_RUNNER": "1",
-            }
-        )
-
-        self.assertEqual(settings, ClusterRuntimeSettings(env_runners=10, agents_per_runner=1))

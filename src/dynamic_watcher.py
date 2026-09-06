@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+import json
 from pathlib import Path
 
 import cv2
@@ -12,12 +13,13 @@ import torch
 
 from dynamic_policy import PKMAIPolicy
 from pokemon_env import PokemonFireRedEnv
-from watch import write_watcher_stream_frame
+from watcher_stream import write_watcher_stream_frame
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CLUSTER_DIR = PROJECT_ROOT / "runtime" / "cluster"
 BEST_MODEL_FILE = CLUSTER_DIR / "dynamic_policy_best.pt"
 LATEST_MODEL_FILE = CLUSTER_DIR / "dynamic_policy.pt"
+WATCHER_STATUS_FILE = PROJECT_ROOT / "runtime" / "watcher.json"
 ACTION_NAMES = ("A", "B", "START", "UP", "DOWN", "LEFT", "RIGHT")
 
 
@@ -51,6 +53,23 @@ def choose_watcher_action(
         logits, _ = policy(image, nav)
         probabilities = torch.softmax(logits, dim=1)
     return int(torch.multinomial(probabilities, 1, generator=generator).item())
+
+
+def write_watcher_status(status_file: Path, policy_version: int, action: int) -> None:
+    status_file.parent.mkdir(parents=True, exist_ok=True)
+    temporary = status_file.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps(
+            {
+                "id": "dynamic-watcher",
+                "policy_version": policy_version,
+                "action": ACTION_NAMES[action],
+            },
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+    os.replace(temporary, status_file)
 
 
 def annotate_frame(screen: np.ndarray, policy_version: int, action: int) -> np.ndarray:
@@ -97,7 +116,11 @@ def main() -> None:
                     continue
             action = choose_watcher_action(policy, observation)
             observation, _, terminated, truncated, _ = env.step(action)
-            write_watcher_stream_frame(annotate_frame(env.env.get_screen(), policy_version, action))
+            write_watcher_stream_frame(
+                annotate_frame(env.env.get_screen(), policy_version, action),
+                PROJECT_ROOT / "runtime" / "watcher.jpg",
+            )
+            write_watcher_status(WATCHER_STATUS_FILE, policy_version, action)
             if terminated or truncated:
                 observation, _ = env.reset()
                 print("watcher reset to the true initial game state", flush=True)

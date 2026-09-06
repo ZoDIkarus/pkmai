@@ -1,157 +1,49 @@
-# PKMAI container deployment
+# Local Docker deployment
 
-The current rollout architecture is Ray-free: the brain learns batches uploaded
-by independent workers. The authenticated cluster master is the only required
-network endpoint for workers. Bind user-facing services only to loopback or a
-private VPN interface; never publish them as `0.0.0.0`.
+This project is deployed only on the local Windows/Docker Desktop host.
 
-## Containers and host ports
+## Services
 
-| Container | Role | Host port(s) |
-|---|---|---|
-| `pkmai-web` | Dashboard | `8001 -> 8001` |
-| `pkmai-cluster-master` | Authenticated worker registry and rollout inbox | `8765` |
-| `pkmai-cluster-brain` | Dynamic PPO batch learner | no published port |
-| `pkmai-cluster-worker` | Independent rollout uploader | outbound access to master only |
-| `pkmai-dynamic-watcher` | Visible replay of the best published dynamic brain | dashboard stream at `/watcher` |
-| `pkmai-trainer` | Legacy local SB3 trainer | no published port |
+`compose.yaml` defines:
 
-## VPS / Linux brain host
+- `cluster-master` — local rollout coordination;
+- `cluster-brain` — dynamic policy learning and best-policy publication;
+- `web` — watcher-first dashboard on the same configurable host and container port (`8001` by default);
+- `dynamic-watcher` (watcher profile) — non-training emulator stream.
 
-Use `compose.yaml`. Set the host variables when using a remote VPN deployment.
+Start the core services:
 
 ```bash
-git checkout sascha
-git pull --ff-only origin sascha
-export PKMAI_CLUSTER_HOST=10.10.15.1
-export PKMAI_WEB_HOST=10.10.15.1
-docker compose --profile trainer build trainer
-docker compose --profile web up -d web
-docker compose --profile cluster up -d cluster-master cluster-brain
-```
-
-Dashboard: `http://10.10.15.1:8001/`
-
-Start the visible watcher after the brain is online:
-
-```bash
+docker compose up -d cluster-master cluster-brain web
 docker compose --profile watcher up -d dynamic-watcher
 ```
 
-It loads `dynamic_policy_best.pt`, reloads when the learner publishes a better
-reward-scored brain, starts every episode from the true initial game state, and
-writes its JPEG stream to `/watcher` on the dashboard. It samples the published
-policy distribution like the rollout workers rather than repeatedly choosing a
-single greedy action, so the visible emulator receives real policy inputs.
-
-The dynamic brain restores its latest published model before republishing after
-a container restart, so starting the watcher or updating the brain image does
-not discard the learned policy.
-
-Firewall: allow the master port only from trusted VPN subnets. Do not expose it through a public interface.
-
-## Local Windows Docker Desktop host: ten trainers
-
-For an all-local rollout pool, use the default loopback host (`127.0.0.1`) and
-the local private ROM/integration files. Do not use `docker compose --scale`
-with `network_mode: host`: Docker Desktop exposes the same host name to every
-scaled container, collapsing their worker identities. The launcher assigns
-stable IDs and ranks explicitly.
+Start exactly ten explicit trainer containers:
 
 ```bash
-docker compose --profile trainer build trainer
 ./scripts/start_local_trainers.sh
 ```
 
-The expected CPU reservation is 11.25 CPUs: ten one-CPU rollout workers, one
-brain CPU, and the master. Docker Desktop must be configured with at least 12
-CPUs and enough memory for ten 1 GiB worker limits plus the 2 GiB brain limit.
+Do not use Compose scaling for the trainer service with Docker Desktop host networking. The explicit launcher supplies distinct IDs/ranks and avoids shared-hostname registration collisions.
 
-Verify that all workers have independent identities and actively upload
-rollouts:
+## Dashboard
 
-```bash
-docker ps --filter name=pkmai-local-trainer-
-docker logs --tail 50 pkmai-local-trainer-0
-curl -fsS http://127.0.0.1:8765/health
-```
+Set `PKMAI_WEB_HOST` to the intended LAN/VPN interface and `PKMAI_WEB_PORT` to `8001`. The web application listens and publishes on that same port.
 
-`workers_online` must reach `10`; brain logs must show increasing
-`policy_version` and `timesteps`. The master serves the dynamic learner's
-published policy artifact at the authenticated `/api/policy` endpoint, allowing
-workers to collect the first rollout before the learner has processed a batch.
-Stop the local pool with:
+- Dashboard: `http://<host>:8001/`
+- Watcher page: `http://<host>:8001/watcher`
+- JPEG stream: `http://<host>:8001/watcher.jpg`
+- Watcher API: `http://<host>:8001/api/watchers`
 
-```bash
-docker rm -f $(docker ps -aq --filter name=pkmai-local-trainer-)
-docker compose --profile cluster down
-```
+The start page renders the watcher list and automatically selects the first watcher as the live preview. The watcher writes status metadata without private model paths.
 
-## VPS / Linux remote worker
+## Required verification
 
-Use `compose.remote-worker.yaml` and an untracked `.worker.env`:
+After any worker, brain or watcher deployment:
 
-```text
-PKMAI_WORKER_HOST_IP=<worker VPN host IP>
-PKMAI_CLUSTER_MASTER_URL=http://10.10.15.1:8765
-PKMAI_WORKER_ID=<unique worker name>
-PKMAI_WORKER_AGENTS=1
-```
+1. confirm all ten uniquely named trainer containers are online and registered;
+2. confirm the learner serves an increasing policy version;
+3. compare several sequential watcher JPEG hashes and inspect selected watcher actions;
+4. verify dashboard and JPEG availability through the configured external interface.
 
-Clone the exact `sascha` branch first:
-
-```bash
-git clone --branch sascha https://github.com/ZoDIkarus/pkmai.git /opt/pkmai
-cd /opt/pkmai
-```
-
-Then copy the local integration and cluster key:
-
-```bash
-# Run from the new worker after its SSH access to ai-server is configured.
-mkdir -p local/custom_integrations/PokemonFireRed-Gba
-
-scp ai-server:/opt/pkmai/runtime/cluster/cluster_key.txt \
-  local/cluster_key.txt
-scp ai-server:/opt/pkmai/local/custom_integrations/PokemonFireRed-Gba/rom.gba \
-  local/custom_integrations/PokemonFireRed-Gba/rom.gba
-scp ai-server:/opt/pkmai/local/custom_integrations/PokemonFireRed-Gba/rom.sha \
-  local/custom_integrations/PokemonFireRed-Gba/rom.sha
-chmod 600 local/cluster_key.txt
-```
-
-Create the local `.worker.env` from the template above, then build and start one worker:
-
-```bash
-docker compose --env-file .worker.env -f compose.remote-worker.yaml build worker
-docker compose --env-file .worker.env -f compose.remote-worker.yaml up -d worker
-docker logs -f pkmai-cluster-worker
-```
-
-The worker has `restart: unless-stopped`; it repeatedly loads the current policy,
-collects rollouts, and uploads batches to the master. Its only required remote
-reachability is the master port `8765` over the VPN. Do not publish it to a
-public interface.
-
-## Windows worker
-
-Use Docker Desktop with the WSL2 backend and run the Linux-worker commands in an Ubuntu WSL terminal. Configure the Windows/WSL VPN so the worker host can reach the brain host ports above. Keep `.worker.env`, ROM and key local; do not commit them.
-
-## macOS worker
-
-Use Docker Desktop for Mac. Ensure the host VPN routes reach the brain host. Create the same `.worker.env`, provide local ROM/key files, then run the Linux-worker compose commands from Terminal. If the Docker Desktop VM cannot reach the VPN interface, use a Linux/WSL worker instead.
-
-## Operations
-
-```bash
-# Status
-docker ps --filter name=pkmai-
-# Brain logs
-docker logs -f pkmai-cluster-brain
-# Worker logs
-docker logs -f pkmai-cluster-worker
-# Stop only the cluster
-docker compose --profile cluster down
-```
-
-The brain is the sole writer for `runtime/cluster/`; workers never copy or write brain checkpoints.
+A running container or an HTTP 200 alone is not sufficient evidence that the watcher is controlling the emulator.

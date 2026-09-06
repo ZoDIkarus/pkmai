@@ -30,4 +30,4 @@ RUN python -m pip install --upgrade pip \
 COPY src ./src
 COPY scripts ./scripts
 
-ENTRYPOINT ["python", "-u", "src/train.py"]
+ENTRYPOINT ["python", "-u", "src/dynamic_brain.py"]

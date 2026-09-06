@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -5,10 +6,25 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from dynamic_watcher import choose_watcher_action, select_published_model
+from dynamic_watcher import choose_watcher_action, select_published_model, write_watcher_status
 
 
 class DynamicWatcherTests(unittest.TestCase):
+    def test_writes_a_public_live_status_for_the_dashboard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            status_file = Path(directory) / "watcher.json"
+
+            write_watcher_status(status_file, policy_version=42, action=6)
+
+            self.assertEqual(
+                json.loads(status_file.read_text(encoding="utf-8")),
+                {
+                    "id": "dynamic-watcher",
+                    "policy_version": 42,
+                    "action": "RIGHT",
+                },
+            )
+
     def test_samples_the_policy_distribution_instead_of_always_taking_argmax(self):
         class BalancedPolicy:
             def __call__(self, image, nav):

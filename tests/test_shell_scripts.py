@@ -15,9 +15,15 @@ class ShellScriptLineEndingTests(unittest.TestCase):
         brain_script = (PROJECT_ROOT / "scripts" / "start_cluster_brain.sh").read_text(
             encoding="utf-8"
         )
+        compose_text = (PROJECT_ROOT / "compose.yaml").read_text(encoding="utf-8")
+        brain_section = compose_text.split("  cluster-brain:\n", 1)[1].split(
+            "  dynamic-watcher:\n", 1
+        )[0]
 
         self.assertIn("src/dynamic_brain.py", brain_script)
         self.assertNotIn("ray start", brain_script)
+        self.assertNotIn("RAY_NODE_IP", brain_section)
+        self.assertNotIn("PKMAI_CLUSTER_ENV_RUNNERS", brain_section)
 
     def test_cluster_worker_starts_without_a_ray_runtime(self):
         worker_script = (PROJECT_ROOT / "scripts" / "start_cluster_worker.sh").read_text(
@@ -34,13 +40,8 @@ class ShellScriptLineEndingTests(unittest.TestCase):
         self.assertIn('PKMAI_CLUSTER_HOST: "${PKMAI_CLUSTER_HOST:-127.0.0.1}"', master_section)
         self.assertNotIn("cluster-worker:", compose_text)
 
-    def test_remote_worker_compose_does_not_require_removed_ray_settings(self):
-        compose_text = (PROJECT_ROOT / "compose.remote-worker.yaml").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertNotIn("PKMAI_RAY_ADDRESS", compose_text)
-        self.assertNotIn("RAY_NODE_IP", compose_text)
+    def test_retired_remote_worker_compose_is_not_shipped(self):
+        self.assertFalse((PROJECT_ROOT / "compose.remote-worker.yaml").exists())
 
     def test_local_launcher_assigns_explicit_worker_ids_and_ranks(self):
         launcher = (PROJECT_ROOT / "scripts" / "start_local_trainers.sh").read_text(encoding="utf-8")

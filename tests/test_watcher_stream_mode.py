@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from watch import write_watcher_stream_frame
+from watcher_stream import write_watcher_stream_frame
 
 
 class WatcherStreamModeTests(unittest.TestCase):

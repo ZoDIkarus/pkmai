@@ -26,15 +26,47 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.original_dir = web_stream.CLUSTER_DIR
         self.original_policy = web_stream.CLUSTER_POLICY_FILE
         self.original_workers = web_stream.CLUSTER_WORKERS_FILE
+        self.original_watcher_status = web_stream.WATCHER_STATUS_FILE
         web_stream.CLUSTER_DIR = root
         web_stream.CLUSTER_POLICY_FILE = root / "policy.json"
         web_stream.CLUSTER_WORKERS_FILE = root / "workers.json"
+        web_stream.WATCHER_STATUS_FILE = root / "watcher.json"
 
     def tearDown(self):
         web_stream.CLUSTER_DIR = self.original_dir
         web_stream.CLUSTER_POLICY_FILE = self.original_policy
         web_stream.CLUSTER_WORKERS_FILE = self.original_workers
+        web_stream.WATCHER_STATUS_FILE = self.original_watcher_status
         self.directory.cleanup()
+
+    def test_watcher_list_exposes_the_live_best_brain_without_private_paths(self):
+        web_stream.WATCHER_STATUS_FILE.write_text(
+            json.dumps(
+                {
+                    "id": "dynamic-watcher",
+                    "policy_version": 42,
+                    "action": "RIGHT",
+                    "model_path": "/private/runtime/cluster/dynamic_policy_best.pt",
+                }
+            )
+        )
+
+        payload = web_stream.get_watchers()
+
+        self.assertEqual(payload["watchers"][0]["id"], "dynamic-watcher")
+        self.assertEqual(payload["watchers"][0]["policy_version"], 42)
+        self.assertEqual(payload["watchers"][0]["action"], "RIGHT")
+        self.assertTrue(payload["watchers"][0]["online"])
+        self.assertEqual(payload["watchers"][0]["stream_url"], "/watcher.jpg")
+        self.assertNotIn("model_path", payload["watchers"][0])
+
+    def test_dashboard_starts_with_a_watcher_list_and_first_live_preview(self):
+        page = web_stream.index()
+
+        self.assertIn('id="watcher-list"', page)
+        self.assertIn('id="watcher-preview"', page)
+        self.assertIn("/api/watchers", page)
+        self.assertIn("watchers[0]", page)
 
     def test_cluster_status_omits_secret_paths_and_marks_live_worker(self):
         now = time.time()

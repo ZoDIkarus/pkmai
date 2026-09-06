@@ -9,7 +9,10 @@ V17.4 was the starting point. All 67 unit tests pass.
 - Tile first-find now pays **per run** (`seen_coords`, every episode fresh) — NOT
   fleet-once. A watcher / any agent on long-known ground was seeing zero tile
   reward. Hand-set ladder keyed on the tile's own map stage:
-  `TILE_REWARD_BY_STAGE = {1:2, 2:3, 3:4, 4:5, 5:5, 6:6}` (Pallet 2 … Pewter 6).
+  `TILE_REWARD_BY_STAGE = {1:0.2, 2:3, 3:4, 4:5, 5:5, 6:6}` — Alabastia (Spawn) fast
+  wertlos, ab Route 1 steil, sonst schlaegt die Kachel-Menge in Pallet die
+  hoehere Rate weiter vorne. Deckel 20 neue Kacheln pro Karte/Episode, danach 0
+  (`new_tile:...:capped`). Pallet-Haeuser (Bank 4) ebenfalls 0.2.
   Interiors `INTERIOR_TILE_REWARD_BY_BANK = {4:1, 5:2, 6:3}` (Pallet/Vertania/
   Marmoria houses, ~half their city). Plus `GLOBAL_NEW_TILE_BONUS = 1.0`
   fleet-once on top (`shared_tiles`). Event `new_tile:s<n>[+g]:+N`.

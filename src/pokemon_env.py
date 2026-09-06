@@ -192,20 +192,22 @@ class PokemonFireRedEnv(gym.Env):
     # V18: Erstfund einer Kachel zahlt PRO LAUF (seen_coords, jede Episode
     # frisch) - NICHT fleet-weit einmalig, sonst sieht ein Agent auf laengst
     # bekanntem Boden (z.B. der Watcher) nie einen Kachel-Reward.
-    # Handgesetzte Leiter pro Story-Aussenmap (an _current_world_stage der
-    # Kachel gebunden, NICHT an den Gesamtfortschritt des Agenten):
+    # Handgesetzte, STEILE Leiter pro Story-Aussenmap (an _current_world_stage
+    # der Kachel gebunden, NICHT am Gesamtfortschritt): Alabastia zahlt fast
+    # nichts (Spawn-Gebiet), ab Route 1 springt es hoch. So schlaegt die
+    # "Menge Kacheln hier" (Pallet) nie die "hoehere Rate da vorne" (Route 1+).
     TILE_REWARD_BY_STAGE = {
-        1: 2.0,   # Alabastia / Pallet Town
+        1: 0.2,   # Alabastia / Pallet Town - Spawn-Gebiet, Erkunden bringt fast
+                  #   nichts; erst der Vorstoss nach vorne zahlt richtig.
         2: 3.0,   # Route 1
         3: 4.0,   # Vertania / Viridian City
         4: 5.0,   # Route 2
         5: 5.0,   # Vertania-Wald / Viridian Forest
         6: 6.0,   # Marmoria / Pewter City
     }
-    # Innenraeume nach Stadt-Bank: Alabastia-Haeuser (4) = 1, Vertania (5) = 2,
-    # Marmoria (6) = 3. Etwa die Haelfte der zugehoerigen Stadt, damit Haeuser
-    # nicht ignoriert werden, aber nie so ziehen wie die Route draussen.
-    INTERIOR_TILE_REWARD_BY_BANK = {4: 1.0, 5: 2.0, 6: 3.0}
+    # Innenraeume nach Stadt-Bank: Alabastia-Haeuser (4) = 0.2 (wie Alabastia
+    # aussen), Vertania (5) = 2, Marmoria (6) = 3.
+    INTERIOR_TILE_REWARD_BY_BANK = {4: 0.2, 5: 2.0, 6: 3.0}
     INTERIOR_TILE_REWARD_DEFAULT = 1.0
     # Fleet-weit EINMALIGER Zusatz obendrauf, sobald irgendein Agent eine
     # Kachel zum allerersten Mal ueberhaupt betritt (shared_tiles). Trimmt das
@@ -221,7 +223,7 @@ class PokemonFireRedEnv(gym.Env):
     # jede Episode neu) ein farmbarer Loop, der die Flotte in Alabastia haelt.
     # Der fleet-weit einmalige +1-Zusatz bleibt ungedeckelt (echter Frontier-
     # Fund, nicht farmbar).
-    TILE_REWARD_CAP_PER_MAP = 15
+    TILE_REWARD_CAP_PER_MAP = 20
     TILE_REWARD_AFTER_CAP_FACTOR = 0.0
     # V17.4: kein fleet-weiter Einmal-Jackpot mehr fuer die allererste Map-
     # Entdeckung (ehem. NEW_MAP_REWARD=500, ging strukturell nur an einen

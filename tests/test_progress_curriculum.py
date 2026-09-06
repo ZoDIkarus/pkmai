@@ -42,19 +42,25 @@ class WorldStageTests(unittest.TestCase):
         # V18: Kachel-Erstfund zahlt PRO LAUF (seen_coords, jede Episode neu),
         # handgesetzte Leiter pro Story-Aussenmap, Innenraeume nach Stadt-Bank,
         # plus ein fleet-weit einmaliger +GLOBAL_NEW_TILE_BONUS obendrauf.
-        self.assertEqual(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[1], 2.0)   # Pallet
+        # V18: Alabastia (Spawn) fast wertlos pro Kachel, danach steile Leiter -
+        # "Menge hier" darf "Rate da vorne" nicht schlagen.
+        self.assertLessEqual(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[1], 0.5)  # Pallet
         self.assertEqual(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[2], 3.0)   # Route 1
         self.assertEqual(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[3], 4.0)   # Viridian
         self.assertEqual(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[6], 6.0)   # Pewter
+        self.assertGreater(PokemonFireRedEnv.TILE_REWARD_BY_STAGE[2],
+                           PokemonFireRedEnv.TILE_REWARD_BY_STAGE[1] * 4)
         self.assertEqual(PokemonFireRedEnv.GLOBAL_NEW_TILE_BONUS, 1.0)
         # V18: pro Karte/Episode zahlen nur die ersten N neuen Kacheln die
-        # Leiter - sonst wird das Abgrasen von Pallet (~80 Kacheln) ein
-        # farmbarer Loop, der die Flotte in Alabastia haelt.
+        # Leiter - sonst wird das Abgrasen einer grossen Karte ein farmbarer
+        # Loop, der die Flotte festhaelt.
         self.assertGreaterEqual(PokemonFireRedEnv.TILE_REWARD_CAP_PER_MAP, 8)
         self.assertLess(PokemonFireRedEnv.TILE_REWARD_AFTER_CAP_FACTOR, 0.5)
-        # Innenraeume: Pallet-Haeuser 1 < Vertania 2 < Marmoria 3, jeweils
-        # unter der zugehoerigen Stadt (2/4/6).
-        for bank, city_stage in ((4, 1), (5, 3), (6, 6)):
+        # Pallet-Haeuser so billig wie Pallet aussen; die tieferen Staedte
+        # weiter unter ihrer Aussen-Kachel.
+        self.assertEqual(PokemonFireRedEnv.INTERIOR_TILE_REWARD_BY_BANK[4],
+                         PokemonFireRedEnv.TILE_REWARD_BY_STAGE[1])
+        for bank, city_stage in ((5, 3), (6, 6)):
             self.assertLess(PokemonFireRedEnv.INTERIOR_TILE_REWARD_BY_BANK[bank],
                             PokemonFireRedEnv.TILE_REWARD_BY_STAGE[city_stage])
         e = bare_env()

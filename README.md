@@ -11,7 +11,7 @@ snapshots, independently of champion promotion. The protected fallback is stored
 as `pokemon_model_champion.zip`. Snapshot publication is atomic.
 
 Reward model as of V18 (see the dated section below for detail): tiles pay
-**per run** on a hand-set ladder by map (Pallet 2 … Pewter 6, houses ~half),
+**per run** on a steep hand-set ladder (Pallet ~0, Route 1 3 … Pewter 6),
 plus +1 fleet-once. New route/building 25/run, city 250/run, first global stage
 unlock 1000-once, per-run stage bonus 0, no directional bonus. Pokécenter, Poké
 Mart and the first badge each add a one-time fleet-wide bonus (1000 / 1000 /
@@ -27,10 +27,11 @@ Full trainer + watcher + web restart (brain kept: learner ~21.5M, champion v9).
 **Tiles pay per run now.** The fleet-once tile bonus meant the watcher (and any
 agent on long-known ground) saw no tile reward at all. First-find of a tile is
 now rewarded every episode (`seen_coords`), on a hand-set ladder tied to the
-tile's own map: `TILE_REWARD_BY_STAGE = {1:2, 2:3, 3:4, 4:5, 5:5, 6:6}` — Pallet
-2, Route 1 3, Vertania 4, Route 2 5, Forest 5, Pewter 6. Interior tiles by city
-bank: Pallet houses 1, Vertania 2, Marmoria 3 (≈ half their city, so houses are
-not ignored but never pull like the route). On top, `GLOBAL_NEW_TILE_BONUS = 1`
+tile's own map: `TILE_REWARD_BY_STAGE = {1:0.2, 2:3, 3:4, 4:5, 5:5, 6:6}` — Alabastia
+is the spawn so exploring it barely pays; Route 1 onward is where it kicks in, so
+the pile of tiles in Pallet never beats the higher rate ahead. Interior tiles by
+city bank: Pallet houses 0.2, Vertania 2, Marmoria 3. Only the first 20 new tiles
+per map per episode pay (`new_tile:…:capped` after). On top, `GLOBAL_NEW_TILE_BONUS = 1`
 fleet-once for the very first agent ever to step on a tile — first foot into
 Pewter = 6 + 1.
 

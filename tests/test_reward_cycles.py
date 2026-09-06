@@ -72,10 +72,17 @@ class V17RewardTuningTests(unittest.TestCase):
         env = object.__new__(PokemonFireRedEnv)
         env.wipe_active = False
         env.total_steps = 50
+        env.episode_best_stage = 4
+        env.best_pokecenter_heal_stage = 3
+        env.last_badges = 1
         events = []
         self.assertEqual(PokemonFireRedEnv._record_party_wipe(env, events), -100.0)
         self.assertEqual(env._post_wipe_reward_cooldown_until, 90)
         self.assertEqual(events, ["party_wipe:-100"])
+        self.assertTrue(env.post_wipe_recovery)
+        self.assertEqual(env.pre_wipe_best_stage, 4)
+        self.assertEqual(env.pre_wipe_best_center_stage, 3)
+        self.assertEqual(env.pre_wipe_badges, 1)
         self.assertEqual(
             PokemonFireRedEnv._warp_pair_key(3, 0, 5, 4),
             PokemonFireRedEnv._warp_pair_key(5, 4, 3, 0),
@@ -115,6 +122,24 @@ class V17RewardTuningTests(unittest.TestCase):
         env._episode_tiles_by_map = {(4, 3): set(range(15))}
         self.assertAlmostEqual(
             PokemonFireRedEnv._tile_reward(env, 4, 3, 15, 0), 0.04
+        )
+
+    def test_reaching_the_pre_wipe_front_pays_once_and_ends_recovery(self):
+        env = object.__new__(PokemonFireRedEnv)
+        env.post_wipe_recovery = True
+        env.pre_wipe_best_stage = 4
+        env.best_pokecenter_heal_stage = 3
+        env.pre_wipe_best_center_stage = 3
+        env.last_badges = 1
+        env.pre_wipe_badges = 1
+        events = []
+        self.assertEqual(
+            PokemonFireRedEnv._complete_post_wipe_recovery(env, 4, events), 300.0
+        )
+        self.assertFalse(env.post_wipe_recovery)
+        self.assertEqual(events, ["post_wipe_front_recovered:+300"])
+        self.assertEqual(
+            PokemonFireRedEnv._complete_post_wipe_recovery(env, 4, events), 0.0
         )
 
     def test_stuck_penalty_grows_continuously_without_a_discontinuity(self):

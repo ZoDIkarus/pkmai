@@ -156,6 +156,8 @@ class PokemonFireRedEnv(gym.Env):
     TILE_REWARD_AFTER_CAP_FACTOR = 0.2
     GLOBAL_NEW_TILE_BONUS = 1.0
     POST_WIPE_REWARD_COOLDOWN_STEPS = 40
+    POST_WIPE_WILD_BATTLE_SCALE = 0.05
+    POST_WIPE_FRONT_RECOVERED_REWARD = 300.0
     SPECIES_CAUGHT_FIRST_REWARD = 120.0
     SPECIES_CAUGHT_LEVEL_BONUS = 4.0
     SPECIES_CAUGHT_LEVEL_BONUS_CAP = 20
@@ -244,6 +246,11 @@ class PokemonFireRedEnv(gym.Env):
         self._known_party_species = set()
         self._pending_catches = []
         self._post_wipe_reward_cooldown_until = 0
+        self.post_wipe_recovery = False
+        self.episode_best_stage = 0
+        self.pre_wipe_best_stage = 0
+        self.pre_wipe_best_center_stage = 0
+        self.pre_wipe_badges = 0
         self.episode_caught_species = set()
         self.pokecenter_entered_this_episode = set()
         self.pokemart_entered_this_episode = set()
@@ -681,8 +688,31 @@ class PokemonFireRedEnv(gym.Env):
             return 0.0
         self.wipe_active = True
         self._post_wipe_reward_cooldown_until = self.total_steps + self.POST_WIPE_REWARD_COOLDOWN_STEPS
+        self.post_wipe_recovery = True
+        self.pre_wipe_best_stage = int(getattr(self, "episode_best_stage", 0))
+        self.pre_wipe_best_center_stage = int(
+            getattr(self, "best_pokecenter_heal_stage", 0)
+        )
+        self.pre_wipe_badges = int(getattr(self, "last_badges", 0))
         reward_events.append("party_wipe:-100")
         return -100.0
+
+    def _complete_post_wipe_recovery(self, current_stage, reward_events):
+        """Pay once when the agent regains its pre-wipe frontier or improves it."""
+        if not getattr(self, "post_wipe_recovery", False):
+            return 0.0
+        reached_front = int(current_stage) >= int(self.pre_wipe_best_stage)
+        improved_center = int(self.best_pokecenter_heal_stage) > int(
+            self.pre_wipe_best_center_stage
+        )
+        gained_badge = int(self.last_badges) > int(self.pre_wipe_badges)
+        if not (reached_front or improved_center or gained_badge):
+            return 0.0
+        self.post_wipe_recovery = False
+        reward_events.append(
+            f"post_wipe_front_recovered:+{self.POST_WIPE_FRONT_RECOVERED_REWARD:.0f}"
+        )
+        return self.POST_WIPE_FRONT_RECOVERED_REWARD
 
     def _objective_one_hot(self):
         names = (
@@ -1932,6 +1962,11 @@ class PokemonFireRedEnv(gym.Env):
         self._known_party_species = set()
         self._pending_catches = []
         self._post_wipe_reward_cooldown_until = 0
+        self.post_wipe_recovery = False
+        self.episode_best_stage = 0
+        self.pre_wipe_best_stage = 0
+        self.pre_wipe_best_center_stage = 0
+        self.pre_wipe_badges = 0
         self.episode_caught_species = set()
         self.pokecenter_entered_this_episode = set()
         self.pokemart_entered_this_episode = set()
@@ -2339,6 +2374,10 @@ class PokemonFireRedEnv(gym.Env):
                 reward_events.append(f"new_species:{species}:+{catch_reward:.0f}")
 
         map_key = (bank, map_id)
+        current_stage = self._tile_stage(bank, map_id)
+        self.episode_best_stage = max(self.episode_best_stage, current_stage)
+        if gameplay_ready and in_battle == 0:
+            reward += self._complete_post_wipe_recovery(current_stage, reward_events)
         if gameplay_ready and not self._wipe_cooldown_active():
             if map_key in self.POKECENTER_MAPS and map_key not in self.pokecenter_entered_this_episode:
                 self.pokecenter_entered_this_episode.add(map_key)

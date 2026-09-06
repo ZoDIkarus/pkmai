@@ -227,7 +227,12 @@ class PokemonFireRedEnv(gym.Env):
     # Innenraeume kleiner gedeckelt (15): ein neues Haus soll man einmal
     # aufdecken koennen, danach zaehlt nichts mehr - kein Gebaeude-Tour-Farm.
     INTERIOR_TILE_CAP_PER_MAP = 15
-    TILE_REWARD_AFTER_CAP_FACTOR = 0.0
+    # V18: nach dem Deckel zahlen neue Kacheln noch 20 % - kein Farm (duenn
+    # verteilt, eine Fahrt zur naechsten Stadt bleibt 100x mehr wert), aber ein
+    # durchgehendes "lauf ins Unerkundete = leicht positiv"-Signal, sodass eine
+    # festgefahrene Policy auf einer gedeckelten Karte nie in einer Totzone
+    # ohne Gradient zum Ausgang haengt (sonst: nur noch Kaempfen am Ort).
+    TILE_REWARD_AFTER_CAP_FACTOR = 0.2
     # V17.4: kein fleet-weiter Einmal-Jackpot mehr fuer die allererste Map-
     # Entdeckung (ehem. NEW_MAP_REWARD=500, ging strukturell nur an einen
     # einzigen Agenten je Map) - jetzt EIN Wert pro Run, fuer JEDEN Agenten

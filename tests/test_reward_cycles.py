@@ -63,8 +63,23 @@ class V17RewardTuningTests(unittest.TestCase):
 
     def test_gameplay_time_and_combat_rewards_favor_progress(self):
         self.assertEqual(PokemonFireRedEnv.GAMEPLAY_STEP_COST, -0.001)
-        self.assertEqual(PokemonFireRedEnv.ENEMY_FAINT_REWARD, 2.0)
+        self.assertEqual(PokemonFireRedEnv.ENEMY_DAMAGE_REWARD_PER_HP, 0.08)
+        self.assertEqual(PokemonFireRedEnv.ENEMY_FAINT_REWARD, 0.0)
+        self.assertEqual(PokemonFireRedEnv.NEW_TRANSITION_REWARD, 100.0)
         self.assertEqual(PokemonFireRedEnv.LEVEL_GAIN_REWARD, 10.0)
+
+    def test_wipe_cooldown_and_warp_keys_are_safe_and_bidirectional(self):
+        env = object.__new__(PokemonFireRedEnv)
+        env.wipe_active = False
+        env.total_steps = 50
+        events = []
+        self.assertEqual(PokemonFireRedEnv._record_party_wipe(env, events), -100.0)
+        self.assertEqual(env._post_wipe_reward_cooldown_until, 90)
+        self.assertEqual(events, ["party_wipe:-100"])
+        self.assertEqual(
+            PokemonFireRedEnv._warp_pair_key(3, 0, 5, 4),
+            PokemonFireRedEnv._warp_pair_key(5, 4, 3, 0),
+        )
 
     def test_stuck_penalty_grows_continuously_without_a_discontinuity(self):
         self.assertEqual(stuck_loop_penalty(59), 0.0)

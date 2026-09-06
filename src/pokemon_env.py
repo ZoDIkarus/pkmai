@@ -7,7 +7,14 @@ import os
 import json
 import gzip
 import random
-from firered_ram import read_player_location, read_enemy_party, read_player_party
+from battle_state import BattleState
+from firered_ram import (
+    read_battle_type_flags,
+    read_enemy_party,
+    read_player_location,
+    read_player_party,
+)
+from reward_state import claim_event
 from curriculum import local_frontier_roles
 
 
@@ -111,12 +118,13 @@ class PokemonFireRedEnv(gym.Env):
     EPISODE_NEW_MAP_REWARD = 0.0
     NEW_GLOBAL_DEPTH_REWARD = 300.0
     STARTER_REWARD = 500.0
-    ENEMY_DAMAGE_REWARD_PER_HP = 0.75
-    # Combat remains useful, but exploration and story progress must dominate.
-    ENEMY_FAINT_REWARD = 2.0
+    ENEMY_DAMAGE_REWARD_PER_HP = 0.08
+    # Continuous damage is learnable; discrete KOs otherwise incentivize grinding.
+    ENEMY_FAINT_REWARD = 0.0
+    BATTLE_WIN_REWARD = 0.0
     LEVEL_GAIN_REWARD = 10.0
     ENEMY_HP_READ_EVERY = 2
-    NEW_TRANSITION_REWARD = 35.0
+    NEW_TRANSITION_REWARD = 100.0
     REPLAY_MAP_REWARD = 5.0
     REPLAY_EDGE_REWARD = 0.0
     REPLAY_TRANSITION_REWARD = 8.0
@@ -137,6 +145,25 @@ class PokemonFireRedEnv(gym.Env):
     CONFIRMED_WARP_REWARD = 6.0
     V9_STUCK_SAME_POS_STEPS = 96
     V9_STUCK_PENALTY = -2.0
+    TILE_REWARD_BY_STAGE = {1: 0.2, 2: 3.0, 3: 4.0, 4: 5.0, 5: 5.0, 6: 6.0}
+    INTERIOR_TILE_REWARD_BY_BANK = {4: 0.2, 5: 2.0, 6: 3.0}
+    INTERIOR_TILE_REWARD_DEFAULT = 1.0
+    TILE_REWARD_CAP_PER_MAP = 20
+    INTERIOR_TILE_CAP_PER_MAP = 15
+    TILE_REWARD_AFTER_CAP_FACTOR = 0.2
+    GLOBAL_NEW_TILE_BONUS = 1.0
+    POST_WIPE_REWARD_COOLDOWN_STEPS = 40
+    SPECIES_CAUGHT_FIRST_REWARD = 120.0
+    SPECIES_CAUGHT_LEVEL_BONUS = 4.0
+    SPECIES_CAUGHT_LEVEL_BONUS_CAP = 20
+    POKECENTER_ENTER_REWARD = 100.0
+    POKECENTER_HEAL_ADVANCE_REWARD = 250.0
+    POKECENTER_FIRST_HEAL_GLOBAL_REWARD = 1000.0
+    POKEMART_ENTER_REWARD = 100.0
+    POKEMART_FIRST_GLOBAL_REWARD = 1000.0
+    POKECENTER_MAPS = {(5, 4), (5, 5), (6, 5)}
+    POKECENTER_HEAL_MAPS = {(5, 4), (6, 5)}
+    POKEMART_MAPS = {(5, 3)}
     V9_EXPLORER_NEW_TILE_BONUS = 0.50
     V9_EXPLORER_REPEAT_TILE_PENALTY = -0.02
     EXIT_ROUTE_EDGE_REWARD = 1.0
@@ -205,6 +232,14 @@ class PokemonFireRedEnv(gym.Env):
         self.objective_success = False
         self.last_gameplay_ready = False
         self.last_in_battle = 0
+        self.battle_state = BattleState()
+        self.wipe_active = False
+        self._post_wipe_reward_cooldown_until = 0
+        self.episode_caught_species = set()
+        self.pokecenter_entered_this_episode = set()
+        self.pokemart_entered_this_episode = set()
+        self.best_pokecenter_heal_stage = 0
+        self._episode_tiles_by_map = {}
         self.episode_battles_started = 0
         self.episode_battles_completed = 0
         self.enemy_party_cache = []
@@ -583,6 +618,21 @@ class PokemonFireRedEnv(gym.Env):
         if self.training_objective == "scout":
             return self.SCOUT_STALL_TIMEOUT
         return self.PROGRESS_STALL_TIMEOUT
+
+    @staticmethod
+    def _warp_pair_key(from_bank, from_map, to_bank, to_map):
+        return tuple(sorted(((int(from_bank), int(from_map)), (int(to_bank), int(to_map)))))
+
+    def _wipe_cooldown_active(self):
+        return self.wipe_active or self.total_steps < self._post_wipe_reward_cooldown_until
+
+    def _record_party_wipe(self, reward_events):
+        if self.wipe_active:
+            return 0.0
+        self.wipe_active = True
+        self._post_wipe_reward_cooldown_until = self.total_steps + self.POST_WIPE_REWARD_COOLDOWN_STEPS
+        reward_events.append("party_wipe:-100")
+        return -100.0
 
     def _objective_one_hot(self):
         names = (
@@ -1823,6 +1873,14 @@ class PokemonFireRedEnv(gym.Env):
         self.episode_enemy_damage_hp = 0
         self.episode_enemy_damage_reward = 0.0
         self.episode_enemy_faints = 0
+        self.battle_state = BattleState()
+        self.wipe_active = False
+        self._post_wipe_reward_cooldown_until = 0
+        self.episode_caught_species = set()
+        self.pokecenter_entered_this_episode = set()
+        self.pokemart_entered_this_episode = set()
+        self.best_pokecenter_heal_stage = 0
+        self._episode_tiles_by_map = {}
         self.seen_coords = set()
         self.visited_maps = set()
         # V10.23: pro Episode erneut belohnen, wenn eine bekannte Map oder ein
@@ -2105,7 +2163,19 @@ class PokemonFireRedEnv(gym.Env):
         map_id = int(loc["map_id"]) if loc["valid"] else 0
         x = int(loc["x_pos"]) if loc["valid"] else 0
         y = int(loc["y_pos"]) if loc["valid"] else 0
-        in_battle = int(info.get("in_battle", 0))
+        try:
+            battle_party = read_enemy_party(self.env)
+        except Exception:
+            battle_party = self.enemy_party_cache
+        position = (bank, map_id, x, y) if loc.get("trusted", False) else None
+        in_battle = self.battle_state.update(
+            battle_party,
+            position,
+            flags=read_battle_type_flags(self.env),
+            signal=bool(info.get("in_battle", 0)),
+        )
+        info["in_battle"] = in_battle
+        info["battle_detection"] = self.battle_state.reason
         previous_battle_state = int(self.last_in_battle)
         if previous_battle_state == 0 and in_battle == 1:
             self.run_stats["battles_started"] += 1

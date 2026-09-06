@@ -3704,11 +3704,18 @@ class PokemonFireRedEnv(gym.Env):
             else self.action_map[effective_action]
         )
 
+        # Optional watcher presentation hook; training executes the same inputs
+        # without any display or wall-clock pacing.
+        frame_callback = getattr(self, "frame_callback", None)
         for _ in range(self.ACTION_HOLD_FRAMES):
             step_res = self.env.step(raw_act)
+            if frame_callback is not None:
+                frame_callback()
 
         for _ in range(self.ACTION_RELEASE_FRAMES):
             step_res = self.env.step(self.btn_none)
+            if frame_callback is not None:
+                frame_callback()
 
         self.total_steps += 1
         if self.total_steps == 1 or not hasattr(self, "v9_last_pos"):

@@ -1,10 +1,11 @@
 import os
+import asyncio
 import glob
 import json
 import threading
 import tempfile
 from fastapi import FastAPI, Response
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 import uvicorn
 
 app = FastAPI()
@@ -96,6 +97,33 @@ def get_watcher_jpeg():
         )
     except OSError:
         return Response(status_code=404)
+
+
+async def watcher_mjpeg_frames():
+    last_revision = None
+    while True:
+        try:
+            # Open once: fstat and read refer to the same atomic snapshot.
+            with open(WATCHER_FRAME_FILE, "rb") as frame:
+                stat = os.fstat(frame.fileno())
+                revision = (stat.st_ino, stat.st_mtime_ns)
+                jpeg = frame.read() if revision != last_revision else b""
+            if jpeg:
+                last_revision = revision
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                       + str(len(jpeg)).encode() + b"\r\n\r\n" + jpeg + b"\r\n")
+        except OSError:
+            pass
+        await asyncio.sleep(1 / 60)
+
+
+@app.get("/watcher.mjpg")
+def get_watcher_stream():
+    return StreamingResponse(
+        watcher_mjpeg_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/watcher-emulator.jpg")
@@ -2877,11 +2905,20 @@ header{padding:6px!important;gap:4px!important}
             // V18: nur noch der Watcher-Tab zeigt das Live-Bild.
             const img = document.getElementById('watcher-stream');
             if (!img) return;
-            img.src = '/watcher.jpg?ts=' + Date.now();
-            // V17.3: ein einzelner fehlgeschlagener Abruf (Datei mitten im
-            // atomaren Replace) durfte das Bild nicht einfrieren lassen, bis
-            // die Seite manuell neu geladen wird - sofort erneut versuchen.
-            img.onerror = () => setTimeout(refreshWatcherStream, 150);
+            if (currentTab !== 'watcher' || document.hidden) {
+                if (img.dataset.live) {
+                    img.removeAttribute('src');
+                    delete img.dataset.live;
+                }
+                return;
+            }
+            if (img.dataset.live) return;
+            img.dataset.live = '1';
+            img.onerror = () => {
+                delete img.dataset.live;
+                setTimeout(refreshWatcherStream, 1000);
+            };
+            img.src = '/watcher.mjpg';
         }
 
         // --- klickbare Agenten-Liste + Live-Stats (Watcher- UND Status-Tab) ---
@@ -3010,7 +3047,7 @@ header{padding:6px!important;gap:4px!important}
             } catch (_) {}
         }
         setInterval(() => {
-            if (currentTab === 'watcher' || currentTab === 'map') refreshWatcherStream();
+            refreshWatcherStream();
             if (currentTab === 'mapper') refreshMapperStream();
         }, 500);
 

@@ -1,5 +1,38 @@
 # PKMAI — Live Work Log
 
+## 2026-09-06 — Watcher recovered from invalid policy parameters
+
+Current resume and candidate (164,820 steps) both contain 8 non-finite policy
+parameter tensors. Source of training corruption not established in this fix.
+Watcher now validates weights and a prediction before accepting a replacement;
+rejects unchanged invalid snapshots once, retains a working loaded policy,
+and retries when the source file changes. With no valid active policy it can
+use `runtime/checkpoints/watcher_recovery.zip`, copied from the intact
+V20_CLEAN_RESET_20260906_134853 resume backup (22,420,620 steps). This is explicitly
+a previous policy, not the current learner. Training checkpoints are untouched.
+
+Live verified: watcher recovery policy executes actions through step 52+,
+telemetry reports 59.7 displayed FPS, browser JPEG publication measured ~24/s.
+Exact 9 held + 5 released frames unchanged. 106 tests pass including non-finite
+parameter rejection and prediction validation. Watcher is running.
+
+## 2026-09-06 — Watcher intermediate-frame presentation
+
+Watcher now presents every held/released emulator frame through an optional
+`frame_callback`; the exact 9 held + 5 neutral inputs and training observations
+remain unchanged. Deadline pacing targets 59.7 FPS without catch-up bursts.
+Telemetry refreshes separately at 0.5 s; a bounded background publisher writes
+JPEG snapshots at up to 30 FPS. Dashboard uses `/watcher.mjpg` and closes the
+stream when hidden. Model loading and reward computation still occur between
+action blocks and may cause occasional pauses.
+
+Validation: 103 unit tests pass, including actual action-prefix input parity,
+frame pacing and background JPEG/multipart decoding. Live startup blocked by
+existing non-finite values in 8 parameter tensors of `pokemon_model_resume.zip`:
+policy prediction returns NaN logits before the first action. No checkpoints
+modified. The test-started watcher was stopped; webserver started on port 8001.
+No live smoothness/FPS claim can be made until a valid model is available.
+
 ## 2026-09-06 — V19.1 Pallet nav-target fix + immediate-reverse guard
 
 **Why the fleet oscillated in bottom-left Pallet:** `_v19_forward_targets(3,0)`

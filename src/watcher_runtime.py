@@ -17,6 +17,8 @@ import time
 import cv2
 import numpy as np
 from stable_baselines3 import PPO
+from watcher_display import FramePacer, FramePublisher
+from watcher_models import load_valid_policy
 
 
 def atomic_json(path, data):
@@ -253,6 +255,8 @@ def run(api):
     cv2.resizeWindow(window, 980, 570)
     model = None
     signature = None
+    rejected_models = {}
+    active_model_path = None
     last_model_check = last_publish = 0
     last_navigation_refresh = time.monotonic()
     fps_started = time.monotonic()
@@ -263,6 +267,28 @@ def run(api):
     last_reset = '-'
     learner_steps, champion_version = api.get_trainer_progress()
     consecutive_errors = 0
+    canvas = np.full((570, 980, 3), 24, dtype=np.uint8)
+    pacer = FramePacer(api.TARGET_FPS)
+    publisher = FramePublisher(root)
+    last_stream_frame = 0.0
+
+    def display_frame():
+        nonlocal stop, last_stream_frame, fps_frames
+        pacer.wait()
+        screen = env.env.get_screen()
+        canvas[64:544, :720] = cv2.resize(
+            cv2.cvtColor(screen, cv2.COLOR_RGB2BGR), (720, 480),
+            interpolation=cv2.INTER_NEAREST)
+        cv2.imshow(window, canvas)
+        fps_frames += 1
+        if cv2.waitKey(1) & 0xff in (27, ord('q')):
+            stop = True
+        now = time.monotonic()
+        if now - last_stream_frame >= 1.0 / 30:
+            publisher.submit(canvas, screen)
+            last_stream_frame = now
+
+    env.frame_callback = display_frame
     log_path = root / 'watcher_rewards.jsonl'
     print('WATCHER: PokemonFireRedEnv.step | inference only | private reward memory', flush=True)
     print('Same reward rules; global first-discovery bonuses use a separate evaluation registry.', flush=True)
@@ -303,15 +329,27 @@ def run(api):
                         print('NAV REFRESH ERROR:', exc, flush=True)
                     last_navigation_refresh = start
                 if start - last_model_check >= 1:
-                    path = api.get_watcher_model_path()
-                    candidate = api.get_model_signature(path)
-                    if candidate != signature or model is None:
+                    preferred = api.get_watcher_model_path()
+                    candidates = [preferred]
+                    if model is None:
+                        candidates += [api.BEST_MODEL, api.LATEST_MODEL,
+                                       str(root / 'checkpoints/watcher_recovery.zip')]
+                    for candidate_path in dict.fromkeys(candidates):
+                        candidate = api.get_model_signature(candidate_path)
+                        if candidate is None or (candidate_path, candidate) == signature:
+                            continue
+                        if rejected_models.get(candidate_path) == candidate:
+                            continue
                         try:
-                            loaded = PPO.load(path, device='cpu')
-                            model, signature = loaded, candidate
-                            print('MODEL:', Path(path).name, flush=True)
+                            loaded = load_valid_policy(candidate_path, obs)
+                            model = loaded
+                            signature = (candidate_path, candidate)
+                            active_model_path = candidate_path
+                            print('MODEL:', Path(candidate_path).name, flush=True)
+                            break
                         except Exception as exc:
-                            print('MODEL LOAD:', exc, flush=True)
+                            rejected_models[candidate_path] = candidate
+                            print('MODEL REJECTED:', Path(candidate_path).name, exc, flush=True)
                     learner_steps, champion_version = api.get_trainer_progress()
                     last_model_check = start
                 if model is None:
@@ -336,7 +374,6 @@ def run(api):
                         print('RESET AFTER ERROR FAILED:', reset_exc, flush=True)
                     continue
                 consecutive_errors = 0
-                fps_frames += env.ACTION_HOLD_FRAMES + env.ACTION_RELEASE_FRAMES
                 fps_now = time.monotonic()
                 if fps_now - fps_started >= api.FPS_TITLE_INTERVAL:
                     measured_fps = fps_frames / (fps_now - fps_started)
@@ -360,8 +397,8 @@ def run(api):
                     print(line, flush=True)
                 elif env.total_steps % 100 == 0:
                     print(f"E{episode} S{env.total_steps} | reward={reward:+.4f} total={env.current_reward:+.2f}", flush=True)
-                if start - last_publish >= .1 or terminated or truncated:
-                    data = telemetry(env, info, reward, episode, Path(path).stem, api.get_latest_version())
+                if start - last_publish >= api.TELEMETRY_INTERVAL or terminated or truncated:
+                    data = telemetry(env, info, reward, episode, Path(active_model_path).stem, api.get_latest_version())
                     data['last_reset'] = last_reset
                     data['fps'] = round(measured_fps, 1)
                     data['target_fps'] = api.TARGET_FPS
@@ -370,18 +407,10 @@ def run(api):
                     atomic_json(root / 'instances_data/inst_120.json', data)
                     screen = env.env.get_screen()
                     canvas = render_console(screen, data, events)
-                    api.publish_watcher_frame(canvas)
-                    ok, jpeg = cv2.imencode('.jpg', cv2.cvtColor(screen, cv2.COLOR_RGB2BGR),
-                                            [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-                    if ok:
-                        tmp = root / 'watcher_emulator.tmp'
-                        tmp.write_bytes(jpeg.tobytes())
-                        tmp.replace(root / 'watcher_emulator.jpg')
                     tiles = {tuple(e[:2]) + tuple(e[2:4]) for e in env.persistent_known_edges}
                     tiles |= {tuple(e[:2]) + tuple(e[4:6]) for e in env.persistent_known_edges}
                     api.save_watcher_mapping(tiles, env.persistent_known_edges,
                                              env.persistent_known_maps, env.persistent_known_transitions)
-                    cv2.imshow(window, canvas)
                     last_publish = start
                 key = cv2.waitKey(1) & 0xff
                 if key in (27, ord('q')):
@@ -391,11 +420,9 @@ def run(api):
                     print('RESET:', last_reset, flush=True)
                     obs, info = env.reset()
                     episode += 1
-                # Similar emulator speed to the old 300-frame/sec watcher.
-                remaining = (env.ACTION_HOLD_FRAMES + env.ACTION_RELEASE_FRAMES) / api.TARGET_FPS - (time.monotonic() - start)
-                if remaining > 0:
-                    time.sleep(remaining)
     finally:
+        env.frame_callback = None
+        publisher.close()
         logger.removeHandler(handler)
         handler.close()
         env.close()

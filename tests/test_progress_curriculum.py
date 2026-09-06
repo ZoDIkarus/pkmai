@@ -56,6 +56,13 @@ class WorldStageTests(unittest.TestCase):
         # Loop, der die Flotte festhaelt.
         self.assertGreaterEqual(PokemonFireRedEnv.TILE_REWARD_CAP_PER_MAP, 8)
         self.assertLess(PokemonFireRedEnv.TILE_REWARD_AFTER_CAP_FACTOR, 0.5)
+        # V18: Innenraeume kleiner gedeckelt (Gebaeude-Tour-Farm zu), Stadt-
+        # Gebaeude zahlen einen fleet-weit einmaligen Fund-Bonus.
+        self.assertLessEqual(PokemonFireRedEnv.INTERIOR_TILE_CAP_PER_MAP,
+                             PokemonFireRedEnv.TILE_REWARD_CAP_PER_MAP)
+        self.assertGreater(PokemonFireRedEnv.BUILDING_FIRST_GLOBAL_REWARD,
+                           PokemonFireRedEnv.EPISODE_NEW_MAP_REWARD)
+        self.assertEqual(PokemonFireRedEnv.CITY_BUILDING_BANKS, {5, 6})
         # Pallet-Haeuser so billig wie Pallet aussen; die tieferen Staedte
         # weiter unter ihrer Aussen-Kachel.
         self.assertEqual(PokemonFireRedEnv.INTERIOR_TILE_REWARD_BY_BANK[4],

@@ -2593,14 +2593,19 @@ header{padding:6px!important;gap:4px!important}
             '4,2': [1722, 2320],   // Alabastia - Haus des Rivalen (Ost, 4 Kacheln Abstand zur Stadt)
             '4,3': [1722, 2452],   // Alabastia - Professor Eichs Labor (unter dem Rivalenhaus, 1 Kachel Abstand)
 
-            // Vertania-Gebaeude um die (jetzt verschobene) Stadt herum -
-            // gleiche relative Position wie zuvor, nur mitverschoben.
-            '5,0': [1032, 1388],   // Vertania City - Wohnhaus (West)
-            '5,1': [1512, 1388],   // Vertania City - Arena (Ost)
-            '5,2': [1032, 1568],   // Vertania City - Schule (Suedwest)
-            '5,3': [1512, 1568],   // Vertania City - Pokemon-Markt (Suedost)
-            '5,4': [1272, 1608],   // Vertania City - Center, Erdgeschoss (Sued)
-            '5,5': [1272, 1458],   // Vertania City - Center, Obergeschoss
+            // Vertania-Gebaeude in zwei Saeulen NEBEN die Stadt geklebt, wie
+            // bei Alabastia. Vertania (3,1) ist real gross (x0..41) - die alten
+            // Offsets (5,1/5,3/5,4/5,5 bei px 1272..1512) lagen MITTEN in der
+            // gerenderten Stadt. Stadt-px-Spanne ~1272..1776; West-Saeule bei
+            // px 1050 (Gebaeude ~13 Kacheln breit -> endet ~1206, 5 Kacheln
+            // Luft), Ost-Saeule bei px 1830 (~4 Kacheln Luft zur Ost-Kante).
+            // py bleibt im Stadt-Band 1388..1868.
+            '5,0': [1050, 1388],   // Vertania City - Wohnhaus (West, oben)
+            '5,2': [1050, 1524],   // Vertania City - Schule (West, mitte)
+            '5,4': [1050, 1660],   // Vertania City - Center Erdgeschoss (West, unten)
+            '5,5': [1050, 1784],   // Vertania City - Center Obergeschoss (West, unter dem EG)
+            '5,1': [1830, 1388],   // Vertania City - Arena (Ost, oben)
+            '5,3': [1830, 1524],   // Vertania City - Pokemon-Markt (Ost, mitte)
         };
 
         let agentMarkers = {};

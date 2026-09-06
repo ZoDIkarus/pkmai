@@ -224,6 +224,9 @@ class PokemonFireRedEnv(gym.Env):
     # Der fleet-weit einmalige +1-Zusatz bleibt ungedeckelt (echter Frontier-
     # Fund, nicht farmbar).
     TILE_REWARD_CAP_PER_MAP = 20
+    # Innenraeume kleiner gedeckelt (15): ein neues Haus soll man einmal
+    # aufdecken koennen, danach zaehlt nichts mehr - kein Gebaeude-Tour-Farm.
+    INTERIOR_TILE_CAP_PER_MAP = 15
     TILE_REWARD_AFTER_CAP_FACTOR = 0.0
     # V17.4: kein fleet-weiter Einmal-Jackpot mehr fuer die allererste Map-
     # Entdeckung (ehem. NEW_MAP_REWARD=500, ging strukturell nur an einen
@@ -231,6 +234,13 @@ class PokemonFireRedEnv(gym.Env):
     # gleich. Route/Gebaeude 100, echte Stadt 250 (siehe CITY_EPISODE_REWARD
     # unten).
     EPISODE_NEW_MAP_REWARD = 25.0
+    # V18: Innenraeume einer echten Stadt (Bank 5 = Vertania, Bank 6 = Marmoria)
+    # sind es wert, einmal reinzuschauen - Arena (Orden!), Laden, Haeuser.
+    # Fleet-weit EINMALIGER Fund pro Gebaeude-Map (claim_event key
+    # building_<b>_<m>, ueberlebt Neustarts). Die Alabastia-Schuppen (Bank 4)
+    # bleiben beim kleinen +25.
+    CITY_BUILDING_BANKS = {5, 6}
+    BUILDING_FIRST_GLOBAL_REWARD = 500.0
     NEW_GLOBAL_DEPTH_REWARD = 0.0
     # V17.2: Wenn ein Agent den bisher tiefsten world_stage ueberhaupt (ueber
     # ALLE Agenten und Episoden seit dem letzten Reset) als Erster erreicht,
@@ -4692,21 +4702,36 @@ class PokemonFireRedEnv(gym.Env):
                             "new_map_episode:"
                             f"+{_map_reward:.2f}"
                         )
-                    elif _claimed_globally and not _is_route_or_city:
-                        # V17.4-Fix: Innenraeume (Reds Haus, Rivalenhaus,
-                        # Eichs Labor) sind KEIN Fortschritt - anders als bei
-                        # Route/Stadt soll das nicht "pro Agent einmalig"
-                        # zahlen, sonst kassieren nach jedem Reset alle 60
-                        # Agenten gleichzeitig ihren eigenen persoenlichen
-                        # Erstfund fuer dieselben 4 Raeume um Alabastia. Live
-                        # beobachtet: die ganze Flotte lief deswegen absichtlich
-                        # in die Haeuser statt Richtung Route 1. Jetzt nur noch
-                        # EIN EINZIGES Mal fuer die GESAMTE FLOTTE.
-                        reward += self.EPISODE_NEW_MAP_REWARD
-                        reward_events.append(
-                            "new_building_global:"
-                            f"+{self.EPISODE_NEW_MAP_REWARD:.2f}"
+                    elif not _is_route_or_city:
+                        # Innenraeume: fleet-weit EINMALIGER Fund pro Gebaeude-
+                        # Map. Alabastia-Schuppen (Bank 4) +25 (kein Fortschritt,
+                        # nur "gesehen"); Stadt-Gebaeude (Vertania/Marmoria,
+                        # Bank 5/6) +BUILDING_FIRST_GLOBAL_REWARD - Arena, Laden,
+                        # Haeuser sollen einmal angespielt werden. Ueber
+                        # claim_event (reward_events.json), damit es auch fuer
+                        # Gebaeude feuert, die shared_maps schon kennt, und nach
+                        # Neustarts erledigt bleibt.
+                        _is_city_building = int(bank) in self.CITY_BUILDING_BANKS
+                        _bld_reward = (
+                            self.BUILDING_FIRST_GLOBAL_REWARD if _is_city_building
+                            else self.EPISODE_NEW_MAP_REWARD
                         )
+                        _bld_key = (
+                            f"building_{int(bank)}_{int(map_id)}"
+                            if _is_city_building else None
+                        )
+                        _bld_claimed = (
+                            claim_event(EXPLORATION_MEMORY_DIR, _bld_key,
+                                        self.shared_species, self.shared_lock)
+                            if _bld_key is not None
+                            else _claimed_globally
+                        )
+                        if _bld_reward and _bld_claimed:
+                            reward += _bld_reward
+                            reward_events.append(
+                                f"new_building_global:{int(bank)}_{int(map_id)}:"
+                                f"+{_bld_reward:.2f}"
+                            )
                 elif not _wipe_cooldown_active and (
                     bank == self.OVERWORLD_BANK or self._current_world_stage(bank, map_id) > 0
                 ) and self._can_reward_map_arrival(bank, map_id):
@@ -4864,12 +4889,17 @@ class PokemonFireRedEnv(gym.Env):
                             _tile_reward = self.INTERIOR_TILE_REWARD_BY_BANK.get(
                                 int(bank), self.INTERIOR_TILE_REWARD_DEFAULT
                             )
-                        # Pro Karte/Episode: nach TILE_REWARD_CAP_PER_MAP neuen
-                        # Kacheln nur noch der Bruchteil - Abgrasen einer grossen
-                        # Startmap ist dann kein farmbarer Loop mehr.
+                        # Pro Karte/Episode: nach dem Deckel nur noch der
+                        # Bruchteil - Abgrasen einer grossen Karte / Gebaeude-
+                        # Touren sind dann kein farmbarer Loop mehr. Innenraeume
+                        # kleiner gedeckelt als Aussenmaps.
                         _map_tiles = self._episode_tiles_by_map.get(map_key, 0)
                         self._episode_tiles_by_map[map_key] = _map_tiles + 1
-                        _capped = _map_tiles >= self.TILE_REWARD_CAP_PER_MAP
+                        _cap = (
+                            self.TILE_REWARD_CAP_PER_MAP if _tile_stage > 0
+                            else self.INTERIOR_TILE_CAP_PER_MAP
+                        )
+                        _capped = _map_tiles >= _cap
                         if _capped:
                             _tile_reward *= self.TILE_REWARD_AFTER_CAP_FACTOR
                         _tile_global = (

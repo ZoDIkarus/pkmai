@@ -6,7 +6,23 @@
 ## 2026-09-06 — V18: per-run tile ladder, Pokécenter/Mart/badge globals, battle rebalance, dashboard fixes
 
 Full trainer + watcher + web restart, brain kept (learner ~21.5M, champion v9).
-V17.4 was the starting point. All 67 unit tests pass.
+V17.4 was the starting point. All 68 unit tests pass.
+
+**Follow-ups (later on 09-06, user away — web live, reward changes wait for next
+trainer restart):**
+- After the steep tile ladder (Pallet 0.2) went live the fleet moved off Pallet
+  onto Route 1 within ~30 min — the farm loop was the pin, confirmed.
+- Web: Vertania building markers (`5,*` in `MAP_OFFSETS`) were sitting *inside*
+  the rendered city (Viridian is a 42-tile-wide map, offsets assumed it small).
+  Moved to two clean columns west (px 1050) / east (px 1830) of the city, like
+  Alabastia. Web-only restart, live.
+- `BUILDING_FIRST_GLOBAL_REWARD = 500` (fleet-once via `claim_event
+  building_<b>_<m>`) for interiors of a real city (`CITY_BUILDING_BANKS = {5,6}`
+  — Vertania/Marmoria: gym, mart, houses). Alabastia shacks (bank 4) stay at +25.
+- `INTERIOR_TILE_CAP_PER_MAP = 15` (vs 20 outdoor) — a new house can be uncovered
+  once, then nothing; no building-tour farm.
+- Pokécenter/Mart enter rewards (+100/run) verified in code — sound, will fire
+  once the fleet reaches Vertania; not a bug that they're quiet now.
 
 **Reward model (`src/pokemon_env.py`):**
 - Tile first-find now pays **per run** (`seen_coords`, every episode fresh) — NOT

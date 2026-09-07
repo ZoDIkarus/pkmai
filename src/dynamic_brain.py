@@ -20,6 +20,7 @@ INBOX = CLUSTER_DIR / "rollout_inbox"
 POLICY_FILE = CLUSTER_DIR / "policy.json"
 MODEL_FILE = CLUSTER_DIR / "dynamic_policy.pt"
 BEST_MODEL_FILE = CLUSTER_DIR / "dynamic_policy_best.pt"
+BEST_SCORE_FILE = CLUSTER_DIR / "best_policy_score.json"
 CHECKPOINTS_DIR = CLUSTER_DIR / "brain_checkpoints"
 ACTION_EXPLORATION_FLOOR = min(
     0.35, max(0.0, float(os.getenv("PKMAI_ACTION_EXPLORATION_FLOOR", "0.35")))
@@ -34,6 +35,13 @@ def combine_rollouts(batches: list[dict[str, np.ndarray]]) -> dict[str, np.ndarr
         name: np.concatenate([np.asarray(batch[name]) for batch in batches], axis=0)
         for name in batches[0]
     }
+
+
+def load_best_mean_reward(path: Path = BEST_SCORE_FILE) -> float:
+    try:
+        return float(json.loads(path.read_text(encoding="utf-8"))["mean_reward"])
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return float("-inf")
 
 
 class DynamicLearner:
@@ -97,13 +105,17 @@ class DynamicLearner:
             "mean_reward": float(rewards.mean()),
         }
 
-    def publish(self, checkpoint: str | None = None, best: bool = False) -> None:
+    def publish(self, checkpoint: str | None = None, best: bool = False, mean_reward: float | None = None) -> None:
         CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
         artifact = {"version": self.version, "state_dict": self.model.state_dict()}
         for model_file in (MODEL_FILE, BEST_MODEL_FILE) if best else (MODEL_FILE,):
             temporary_model = model_file.with_suffix(".pt.tmp")
             torch.save(artifact, temporary_model)
             os.replace(temporary_model, model_file)
+        if best and mean_reward is not None:
+            temporary_score = BEST_SCORE_FILE.with_suffix(".json.tmp")
+            temporary_score.write_text(json.dumps({"mean_reward": float(mean_reward)}), encoding="utf-8")
+            os.replace(temporary_score, BEST_SCORE_FILE)
         payload = {
             "version": self.version,
             "timesteps": self.timesteps,
@@ -121,9 +133,9 @@ def main() -> None:
     batches_per_update = max(2, int(os.getenv("PKMAI_CLUSTER_BATCHES_PER_UPDATE", "8")))
     learner = DynamicLearner()
     CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
-    best_mean_reward = float("-inf")
+    best_mean_reward = load_best_mean_reward()
     learner.restore_latest()
-    learner.publish(best=True)
+    learner.publish()
     pending_batches = []
     while True:
         consumed = 0
@@ -142,7 +154,7 @@ def main() -> None:
             is_best = float(metrics["mean_reward"]) >= best_mean_reward
             if is_best:
                 best_mean_reward = float(metrics["mean_reward"])
-            learner.publish(checkpoint, best=is_best)
+            learner.publish(checkpoint, best=is_best, mean_reward=metrics["mean_reward"] if is_best else None)
             print(json.dumps({"policy_version": learner.version, "timesteps": learner.timesteps}), flush=True)
         if not consumed:
             time.sleep(0.25)

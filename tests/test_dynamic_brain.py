@@ -5,10 +5,14 @@ from pathlib import Path
 import numpy as np
 
 import dynamic_brain
-from dynamic_brain import DynamicLearner, combine_rollouts
+from dynamic_brain import DynamicLearner, combine_rollouts, load_best_mean_reward
 
 
 class DynamicLearnerTests(unittest.TestCase):
+    def test_missing_best_score_does_not_invent_a_quality_value(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(load_best_mean_reward(Path(directory) / "missing.json"), float("-inf"))
+
     def test_combines_several_rollouts_before_a_policy_update(self):
         batch = {
             "images": np.zeros((2, 1, 64, 64), dtype=np.uint8),

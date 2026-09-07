@@ -92,12 +92,8 @@ def confirmed_stages(milestones, status):
 def curriculum_roles(agent_count, milestones, status=None, watcher_validation=None):
     """Frontier majority plus one maintenance worker for every prior state."""
     n, milestones, status = max(1, int(agent_count)), set(milestones or ()), status or {}
-    # The visual from-start watcher is an independent acceptance gate for the
-    # first playable transition; stale trainer states cannot bypass it.
-    if watcher_validation is not None and not bool(
-        (watcher_validation.get("intro_complete") or {}).get("passed", False)
-    ):
-        return tuple((["intro"] * 8 + ["stairs"] * 2)[:n])
+    # The visible watcher is inference-only. Its acceptance result must not
+    # freeze trainer allocation on the intro frontier.
     # A state is a usable start point, not proof that the current policy is
     # reliable. Revalidate the full early chain after policy/reward changes.
     if "intro_complete" not in milestones or not stage_is_confirmed(status.get("intro_complete")):

@@ -49,12 +49,12 @@ class CurriculumRolesTests(unittest.TestCase):
         status = {"intro_complete": {"recent": [True] * 7 + [False] * 3}}
         self.assertEqual(curriculum_roles(10, states, status).count("stairs"), 8)
 
-    def test_watcher_intro_gate_holds_dynamic_frontier_until_visible_pass(self):
+    def test_watcher_validation_does_not_freeze_trainer_frontier(self):
         states = {"intro_complete", "stairs_down", "left_house"}
         status = {"intro_complete": {"recent": [True] * 7 + [False] * 3}}
         blocked = curriculum_roles(10, states, status, {"intro_complete": {"passed": False}})
         released = curriculum_roles(10, states, status, {"intro_complete": {"passed": True}})
-        self.assertEqual(blocked.count("intro"), 8)
+        self.assertEqual(blocked.count("intro"), released.count("intro"))
         self.assertEqual(released.count("stairs"), 8)
 
     def test_keeps_starter_frontier_until_it_is_confirmed(self):

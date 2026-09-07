@@ -556,7 +556,7 @@ class PokemonFireRedEnv(gym.Env):
     #     the stage origin - oscillating between two known areas pays nothing.
     #   * Direction-independent: no north bonus, no -y, no compass target.
     #   All values stay well below story/stage rewards (CITY_EPISODE_REWARD=300).
-    FRONTIER_PROGRESS_REWARD = 0.15
+    FRONTIER_PROGRESS_REWARD = 0.25   # 2026-09-07: 0.15 -> 0.25 (user)
     FRONTIER_PROGRESS_EPSILON = 0.5
     SCOUT_NEW_TILE_REWARD = 0.02
     # Not 0: a tiny capped trickle keeps FULL/BRIDGE agents from piling against
@@ -2088,8 +2088,12 @@ class PokemonFireRedEnv(gym.Env):
         ) != (int(bank), int(map_id), int(x), int(y)):
             return False
         is_frontier = (kind == "frontier")
-        health = party_health(read_player_party(self.env)) if kind in ("frontier", "fighter") else {}
-        if kind in ("frontier", "fighter") and not health['party_ready']:
+        # 2026-09-07: entry checkpoints now also require a battle-ready party -
+        # they are FRONTIER-created and BRIDGE resumes them, so a weak party
+        # here strands every BRIDGE agent on the route.
+        health = (party_health(read_player_party(self.env))
+                  if kind in ("entry", "frontier", "fighter") else {})
+        if kind in ("entry", "frontier", "fighter") and not health.get('party_ready', False):
             return False
         name = {
             "frontier": f"stage_frontier_{int(stage)}",
@@ -3134,17 +3138,17 @@ class PokemonFireRedEnv(gym.Env):
             return "beginning"
 
         if mode == curriculum_v20.MODE_FRONTIER:
-            fstage = state.frontier_stage()
-            for cand in (fstage, fstage - 1, fstage + 1):
-                nm = (self._v20_stage_checkpoint_name(cand, "frontier")
-                      or self._v20_stage_checkpoint_name(cand, "entry"))
+            # 2026-09-07: FRONTIER resumes the DEEPEST checkpoint that actually
+            # EXISTS. A stage_N checkpoint is only written once transition N-1
+            # is reproduced >=80% (_v20_can_create_stage_checkpoint), so this
+            # keeps every FRONTIER agent on the current wall instead of racing
+            # to an inherited deep savestate. No more frontier_stage()/+2 race.
+            for n in range(curriculum_v20.MAX_KNOWN_STAGE, 0, -1):
+                nm = (self._v20_stage_checkpoint_name(n, "frontier")
+                      or self._v20_stage_checkpoint_name(n, "entry"))
                 if nm:
                     self.training_objective = "scout"
                     return nm
-            if entry_cps:
-                deepest = max(entry_cps)
-                self.training_objective = "scout"
-                return entry_cps[deepest]
             self.training_objective = "full"
             return "beginning"
 
@@ -3347,6 +3351,23 @@ class PokemonFireRedEnv(gym.Env):
         self._v20_known_cache_step = step
         return known
 
+    def _v20_can_create_stage_checkpoint(self, stage):
+        """2026-09-07: a checkpoint for stage N may only be CREATED once the way
+        into stage N is reproduced >=80% (transition N-1). Updating a checkpoint
+        that already exists (frontier anchor creeping forward within its stage)
+        is always allowed. Prevents FRONTIER from anchoring a fresh checkpoint
+        in a new map after one lucky run."""
+        stage = int(stage)
+        if stage <= 1:
+            return True
+        if (self._v20_stage_checkpoint_name(stage, "entry")
+                or self._v20_stage_checkpoint_name(stage, "frontier")):
+            return True
+        st = self._v20_load_state()
+        if stage <= int(getattr(st, "mastered_stage", 1)):
+            return True
+        return bool(st.transition_reproduced(stage - 1))
+
     def _frontier_backtrack_expired(self, stage, trusted, in_battle):
         """Bound time below the discovery start; ordinary routes stay unrestricted."""
         if getattr(self, "training_mode", "") != "FRONTIER":
@@ -3421,6 +3442,13 @@ class PokemonFireRedEnv(gym.Env):
                         state.record_transition_attempt(
                             s, success=True, full_chain=False
                         )
+                elif reached == start_stage and start_stage >= 1:
+                    # 2026-09-07: FRONTIER's FAILED pushes count too, otherwise
+                    # the >=80% reproduction gate (transition_reproduced) is
+                    # judged on successes only and always looks solved.
+                    state.record_transition_attempt(
+                        int(start_stage), success=False, full_chain=False
+                    )
 
         self._v20_update_shared_state(_mut)
 
@@ -5563,8 +5591,6 @@ class PokemonFireRedEnv(gym.Env):
                 self._episode_first_tile_by_map[map_key] = (int(x), int(y))
                 self._frontier_map_origin.pop(map_key, None)
 
-            _route_roller = self.training_objective in self.WORLD_ROLES
-
             # V17.2: Der Teleport zum Pokecenter nach einem Party-Wipe darf
             # nie als "neue Map" bezahlt werden. Buchfuehrung/globaler Claim
             # laufen unveraendert (die Map gilt danach fuer alle als bekannt),
@@ -5793,8 +5819,9 @@ class PokemonFireRedEnv(gym.Env):
 
             # Safe entry anchors include Pallet: BRIDGE needs stage_1 for
             # the first bottleneck. Entry states remain immutable.
+            # 2026-09-07: only FRONTIER agents may capture/own stage checkpoints.
             if (
-                _route_roller
+                getattr(self, "training_mode", "") == "FRONTIER"
                 and location_refreshed
                 and self.has_target_starter
                 and in_battle == 0
@@ -5812,9 +5839,18 @@ class PokemonFireRedEnv(gym.Env):
                     self._stage_hold_steps = 1
                 # Require three stable location reads before capturing.
                 _hold_required = 3
+                # 2026-09-07: ONLY FRONTIER creates/owns stage checkpoints - it
+                # has the strongest party, and BRIDGE resuming a weak-party
+                # checkpoint gets stranded on the route. BRIDGE/FULL never write
+                # them (BRIDGE's objective is "scout", which was passing the old
+                # _route_roller gate). And a checkpoint for a NEW stage may only
+                # be created once the way in is reproduced >=80%.
+                _is_frontier = getattr(self, "training_mode", "") == "FRONTIER"
                 if (
-                    _stage_now >= 1
+                    _is_frontier
+                    and _stage_now >= 1
                     and self._stage_hold_steps >= _hold_required
+                    and self._v20_can_create_stage_checkpoint(_stage_now)
                 ):
                     _saved_now = self._save_stage_checkpoint(
                         _stage_now, bank, map_id, x, y,
@@ -5834,7 +5870,7 @@ class PokemonFireRedEnv(gym.Env):
                     # on real topological progress - the episode-best frontier
                     # value at the saved position, NOT tile count.
                     # A thorough graze of already-known ground does not move it.
-                    if _stage_now >= 2 and getattr(self, "training_mode", "") == "FRONTIER":
+                    if _stage_now >= 2:
                         _frontier_here = self._current_frontier_value(bank, map_id, x, y)
                         _fsaved = False
                         if _frontier_here is not None:

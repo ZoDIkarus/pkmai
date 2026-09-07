@@ -208,6 +208,17 @@ class TransitionRecord:
             and self.full_chain_confirmations >= FULL_CHAIN_CONFIRMATIONS
         )
 
+    def is_reproduced(self):
+        """2026-09-07: mastery WITHOUT the Full-chain requirement. Full-chain
+        confirmations only come from FULL-from-beginning runs; FRONTIER/BRIDGE
+        cannot produce them. Used to gate FRONTIER advancing to the next stage
+        and creating a checkpoint in the new map - i.e. "this crossing is
+        reliably reproduced" without requiring a proven whole-chain run yet."""
+        return (
+            self.window_attempts >= TRANSITION_MASTERY_MIN_ATTEMPTS
+            and self.success_rate >= TRANSITION_MASTERY_RATE
+        )
+
     # -- serialization ------------------------------------------------
     def to_dict(self):
         return {
@@ -311,9 +322,22 @@ class CurriculumState:
 
     def frontier_stage(self):
         """Stage FRONTIER agents work from: the deepest discovered stage, but
-        never racing more than one hop past what the chain can reach."""
+        never racing more than one hop past what the chain can reach.
+
+        2026-09-07: FRONTIER no longer picks its start from this - it resumes
+        the deepest checkpoint that actually EXISTS on disk (see
+        _v20_choose_episode_start), and a checkpoint for stage N+1 is only
+        created once transition N is reproduced (`is_reproduced`). Kept for
+        the BRIDGE fallback ("everything discovered is mastered")."""
         return max(self.mastered_stage, min(self.discovered_stage,
                                             self.mastered_stage + 2))
+
+    def transition_reproduced(self, src_stage):
+        """True once transition src_stage -> src_stage+1 is reliably reproduced
+        (>=80% in the window, >=20 attempts) - the gate for a stage_(src+1)
+        checkpoint being created and for FRONTIER advancing onto stage src+1."""
+        rec = self.transitions.get(int(src_stage))
+        return rec is not None and rec.is_reproduced()
 
     def mastered_transitions(self):
         return [s for s in range(1, MAX_KNOWN_STAGE)

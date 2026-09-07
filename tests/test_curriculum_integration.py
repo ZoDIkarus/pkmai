@@ -163,17 +163,21 @@ class RewardAndLoopIntegrationTests(unittest.TestCase):
 
 class StepWiringTests(unittest.TestCase):
     def test_pallet_entry_capture_requires_three_fresh_safe_reads(self):
+        # 2026-09-07: entry-checkpoint capture is FRONTIER-only. The outer `if`
+        # now tests `getattr(self, "training_mode", "") == "FRONTIER"`.
         tree = ast.parse(Path('src/pokemon_env.py').read_text())
         node = next(n for n in ast.walk(tree) if isinstance(n, ast.If)
                     and n.lineno > 5000 and isinstance(n.test, ast.BoolOp)
-                    and isinstance(n.test.values[0], ast.Name)
-                    and n.test.values[0].id == '_route_roller')
+                    and isinstance(n.test.values[0], ast.Compare)
+                    and 'FRONTIER' in ast.unparse(n.test.values[0]))
         code = compile(ast.Module(body=[node], type_ignores=[]), '<capture>', 'exec')
         captures = []
         e = bare_env(has_target_starter=True, player_party_cache=[{'cur_hp': 20}],
-                     training_mode='BRIDGE', current_reward=0)
+                     training_mode='FRONTIER', current_reward=0)
         e._save_stage_checkpoint = lambda *a, **kw: captures.append(a) or False
-        scope = dict(self=e, _route_roller=True, location_refreshed=False,
+        e._stage_at_current_location = lambda *a: 1
+        e._v20_can_create_stage_checkpoint = lambda *a: True
+        scope = dict(self=e, location_refreshed=False,
                      in_battle=0, _wipe_cooldown_active=False, loc={'valid': True},
                      bank=3, map_id=0, x=16, y=14, reward=0, milestone_saved=None)
         for _ in range(8):
@@ -185,6 +189,28 @@ class StepWiringTests(unittest.TestCase):
         self.assertEqual(captures, [])
         exec(code, scope)
         self.assertEqual(captures[0][:3], (1, 3, 0))
+
+    def test_bridge_and_full_never_capture_stage_checkpoints(self):
+        tree = ast.parse(Path('src/pokemon_env.py').read_text())
+        node = next(n for n in ast.walk(tree) if isinstance(n, ast.If)
+                    and n.lineno > 5000 and isinstance(n.test, ast.BoolOp)
+                    and isinstance(n.test.values[0], ast.Compare)
+                    and 'FRONTIER' in ast.unparse(n.test.values[0]))
+        code = compile(ast.Module(body=[node], type_ignores=[]), '<capture>', 'exec')
+        for mode in ('BRIDGE', 'FULL', 'RETENTION', 'FIGHTER'):
+            captures = []
+            e = bare_env(has_target_starter=True,
+                         player_party_cache=[{'cur_hp': 20}],
+                         training_mode=mode, current_reward=0)
+            e._save_stage_checkpoint = lambda *a, **kw: captures.append(a) or False
+            e._stage_at_current_location = lambda *a: 1
+            e._v20_can_create_stage_checkpoint = lambda *a: True
+            scope = dict(self=e, location_refreshed=True, in_battle=0,
+                         _wipe_cooldown_active=False, loc={'valid': True},
+                         bank=3, map_id=0, x=16, y=14, reward=0, milestone_saved=None)
+            for _ in range(8):
+                exec(code, scope)
+            self.assertEqual(captures, [], f"{mode} must not capture checkpoints")
 
     def test_reset_bookkeeping_preserves_selected_bridge_bottleneck(self):
         tree = ast.parse(Path('src/pokemon_env.py').read_text())

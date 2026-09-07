@@ -113,22 +113,6 @@ def curriculum_roles(agent_count, milestones, status=None, watcher_validation=No
         plan = [("exit", 1), ("starter", 4), ("battle", 3), ("progress", 2)]
     else:
         plan = [("intro", 1), ("stairs", 1), ("exit", 1), ("starter", 1), ("battle", 2), ("progress", 4)]
-    # Do not spend frontier capacity on downstream stages while the next
-    # transition is demonstrably stalled. Keep one maintenance worker for the
-    # earliest skill, two bridge workers for the next transition, and focus
-    # the remainder on the deepest stage that still produces successes.
-    frontier = next(
-        (stage for stage in STAGE_ORDER if stage not in milestones or not stage_is_confirmed(status.get(stage))),
-        None,
-    )
-    if frontier == "stairs_down":
-        downstream = [status.get(stage) or {} for stage in ("left_house", "starter")]
-        if any(
-            len(record.get("recent", ())) >= MIN_EVALUATION_EPISODES
-            and sum(bool(value) for value in record.get("recent", ())) / len(record.get("recent", ())) < 0.20
-            for record in downstream
-        ):
-            plan = [("intro", 1), ("stairs", 6), ("exit", 2), ("starter", 1)]
     roles = [role for role, count in plan for _ in range(count)]
     return tuple((roles + [roles[-1]] * n)[:n])
 

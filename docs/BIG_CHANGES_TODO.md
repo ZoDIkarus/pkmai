@@ -59,31 +59,68 @@ bzw. `tools/v20_reset.sh` (Letzteres löscht Savestates — anpassen).
      unmöglich zu queren, fixe Schrittweite oszilliert weiter. Variabel +
      policy-gewählt: „offener Korridor ↑×4, Abzweig ↑×1".
 
-**2. FRONTIER an den Bottleneck binden (kein Racing auf mastered+2).**
-   - `frontier_stage` (bzw. der FRONTIER-Zweig in `_v20_choose_episode_start`):
-     höchste Stufe N, für die Übergang N-1 die **Reproduktions-Schwelle** packt
-     (Fenster-Erfolgsrate ≥ 0.8; die 5 Full-Chain-Bestätigungen NICHT verlangen —
-     die kommen nur aus FULL-ab-Anfang, kann FRONTIER nicht liefern).
-   - Effekt: solange 2→3 bei 0 % ist, arbeiten ALLE 12 FRONTIER auf Stufe 2
-     (`stage_2` / `stage_frontier_2`) und pushen in den Wald. Zusammen mit den
-     ~8 BRIDGE → **~20 Agenten auf der Wand statt ~8** (≈ 2,5× Lernsignal).
-   - FRONTIER + BRIDGE rücken dann GEMEINSAM eine Stufe vor.
+**2. Start-Logik: BRIDGE bei Prof. Eich, FRONTIER eine Stufe voraus — via *bekannt* vs *gemeistert*.**
 
-**3. `stage_frontier_N` nur speichern, wenn Übergang N-1 die Schwelle packt.**
-   - Guard in `_save_stage_checkpoint(kind="frontier")` bzw. am Aufruf
-     (`pokemon_env.py` ~5837): `if transition(stage-1).window_rate < 0.8: skip`.
-   - Verhindert „Vorpreschen" durch einen Glückslauf — kein Checkpoint in der
+   Zwei getrennte Schwellen sauber trennen:
+   | | Bedeutung | Rolle |
+   |---|---|---|
+   | **KNOWN** (`known_transitions.navigation_state`) | Übergang ≥2× sauber beobachtet | ab hier rückt **FRONTIER** eine Stufe weiter |
+   | **MASTERED** (`current_bottleneck`) | Fenster-Erfolgsrate ≥ 0.8 | **BRIDGE** bleibt hier bis es sitzt |
+
+   - **BRIDGE-Start** = `stage_(current_bottleneck)` — der erste NICHT-gemeisterte
+     Übergang. Nach Reset (mastered=1) → `stage_1` = **Prof. Eich / Alabastia**.
+     Job: den Weg nach Route 1 bombenfest machen.
+   - **FRONTIER-Start** = Stufe des ersten NICHT-**bekannten** Übergangs. Sobald
+     Übergang 1 KNOWN wird (BRIDGE quert ihn ein paar Mal) → **FRONTIER rückt auf
+     `stage_2` = Route-1-Savegame** und pusht in den Wald. BRIDGE bleibt in
+     Alabastia bis Übergang 1 die 80 % packt.
+   - FRONTIER darf physisch bis Vertania City / Route 2 laufen — **aber `stage_3`
+     wird erst gespeichert, wenn Übergang 2 ≥ 0.8 ist** (siehe 3). „Laufen ja,
+     Savegame aktivieren nein."
+   - `mastered_stage`-Zähler bricht ohnehin beim ersten nicht-gemeisterten
+     Übergang ab → Übergang 3 kann nie „vor" 2 als gemeistert gelten.
+   - Effekt: solange 2→3 bei 0 % ist, arbeiten ~12 FRONTIER auf Stufe 2 +
+     ~8 BRIDGE auf Stufe 1/2 → **~20 Agenten auf der Kette statt ~8** (≈ 2,5×).
+   - `frontier_stage()` in `curriculum_v20.py` bzw. der FRONTIER-Zweig in
+     `_v20_choose_episode_start` entsprechend umschreiben. `discovered+2`-Racing raus.
+
+**3. NUR FRONTIER erstellt/besitzt die Savegames — BRIDGE schreibt NIE.**  ← WICHTIG (User)
+
+   Grund: FRONTIER hat die **größere, stärkere Party** (grindet auf der Stufe).
+   Startet BRIDGE aus einem Savegame mit schwacher Party, kommt es durch Route 1s
+   Wild-Encounter nicht durch. Und: wenn BRIDGE nach dem 80 %-Knacken selbst den
+   nächsten Checkpoint schreiben dürfte, würde die starke FRONTIER-Party durch
+   eine schwache BRIDGE-Party **überschrieben**.
+
+   - **`stage_N` (entry) UND `stage_frontier_N` dürfen nur von
+     `training_mode == "FRONTIER"` geschrieben werden.** Aktuell: `stage_N` wird
+     von jedem `_route_roller` erstellt (`training_objective in WORLD_ROLES`, und
+     `"scout"` ist drin → **BRIDGE erstellt aktuell entry-Checkpoints!**). Das
+     abstellen: Bedingung bei `pokemon_env.py:~5796` auf FRONTIER einschränken.
+   - `stage_N` bleibt **immutable** wenn einmal von FRONTIER gesetzt (BRIDGE-Start
+     bleibt konstant am Stufen-Anfang). `stage_frontier_N` advanced weiter nur via
+     `may_replace_frontier` (FRONTIER-only, schon so).
+   - **Party-Gate auch für entry:** `_save_stage_checkpoint(kind="entry")` bekommt
+     denselben `party_ready`-Check wie `kind="frontier"` (aktuell nur frontier/fighter,
+     `pokemon_env.py:2091`).
+   - **`stage_(N+1)` (egal ob entry oder frontier) nur speichern, wenn
+     Übergang N Fenster-Rate ≥ 0.8.** Guard am Aufruf. Kein Checkpoint in der
      neuen Map, bevor der Weg dahin solide ist.
    - Feinheit: FRONTIER zählt aktuell nur ERFOLGE in die Übergangsstatistik
-     (`_v20_record_episode_outcome`, FRONTIER-Zweig) — Fehlversuche zählt es
-     nicht. Umlenken bringt also v. a. positives Signal. Ggf. auch Fehlversuche
-     zählen lassen (FRONTIER startet Stufe N, `reached == N` → `record_transition_
-     attempt(N, success=False)`), damit die Rate ehrlich ist.
+     (`_v20_record_episode_outcome`) — auch Fehlversuche zählen lassen (FRONTIER
+     startet Stufe N, `reached == N` → `record_transition_attempt(N, success=False)`),
+     sonst ist die 80 %-Rate geschönt.
 
-**4. `discovered_stage` 5 → 3 re-baseline** (in `runtime/curriculum_v20/state.json`,
-   Datei-Op) — damit das Curriculum die reale Reichweite des frischen Netzes zeigt.
-   Mit Änderung 2/3 hält es diesmal (FRONTIER inflatiert es nicht mehr von Stufe 4).
-   Tiefe Savestates bleiben liegen, ungenutzt bis verdient.
+**3b. Tiefe geerbte Savestates löschen.** `stage_3`, `stage_4`, `stage_frontier_3`,
+   `stage_frontier_4` (+ evtl. `stage_5+`) im Reset **mit-löschen** — sie sind vom
+   alten Netz, haben eine Party die das frische Netz nicht erarbeitet hat, und
+   verleiten FRONTIER zum Vorpreschen. BEHALTEN: `stage_1`, `stage_2`,
+   `stage_frontier_2`, `progress_*`, `squirtle_*`, `stage_fighter_2`.
+   → Reset-Script anpassen: `curriculum_shared/` selektiv statt komplett behalten,
+   `curriculum_states/agent_*/` ebenso (die haben je `stage_frontier_2..4`).
+
+**4. `discovered_stage` nach dem Reset frisch** (`curriculum_v20/` wird eh geleert)
+   → startet bei 1/2. Mit 2+3 hält es diesmal (FRONTIER inflatiert es nicht mehr).
 
 **5. (optional) `FRONTIER_PROGRESS_REWARD` 0.15 → 0.25** — der nicht-farmbare
    „geh tiefer"-Anreiz (strikt High-Watermark auf BFS-Graph-Tiefe). Wird erst

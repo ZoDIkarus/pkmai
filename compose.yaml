@@ -74,7 +74,9 @@ services:
     entrypoint: ["python", "-u", "src/dynamic_watcher.py"]
     environment:
       PKMAI_WATCHER_RELOAD_SECONDS: "1.0"
-      PKMAI_WATCHER_EVAL_MODE: "1"
+      # Keep the visible watcher on the rollout-equivalent policy distribution.
+      # Set PKMAI_WATCHER_EVAL_MODE=1 only for explicit greedy evaluation.
+      PKMAI_WATCHER_EVAL_MODE: "0"
     volumes:
       - ./runtime:/app/runtime
       - ./local:/app/local:ro

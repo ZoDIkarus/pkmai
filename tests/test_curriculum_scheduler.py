@@ -63,6 +63,20 @@ class CurriculumRolesTests(unittest.TestCase):
         self.assertEqual(curriculum_roles(10, states, status).count("exit"), 3)
         self.assertEqual(curriculum_roles(10, states, status).count("starter"), 2)
 
+    def test_concentrates_on_frontier_when_downstream_stage_is_stalled(self):
+        states = {"intro_complete", "stairs_down", "left_house", "starter"}
+        status = {
+            "intro_complete": {"recent": [True] * 20},
+            "stairs_down": {"recent": [True] * 7 + [False] * 13},
+            "left_house": {"recent": [False] * 20},
+            "starter": {"recent": [False] * 20},
+        }
+        roles = curriculum_roles(10, states, status)
+        self.assertEqual(roles.count("intro"), 1)
+        self.assertEqual(roles.count("stairs"), 6)
+        self.assertEqual(roles.count("exit"), 2)
+        self.assertEqual(roles.count("starter"), 1)
+
     def test_watcher_validation_keeps_a_balanced_early_frontier(self):
         states = {"intro_complete", "stairs_down", "left_house"}
         status = {"intro_complete": {"recent": [True] * 7 + [False] * 3}}

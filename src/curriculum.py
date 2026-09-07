@@ -30,6 +30,9 @@ GOAL_CATALOG = (
 MIN_EVALUATION_EPISODES = 10
 MIN_SUCCESS_RATE = 0.60
 RECENT_WINDOW = 20
+# A one-step intro result is a reset/telemetry artifact, not a real
+# bedroom-arrival measurement.
+MIN_VALID_STAGE_STEPS = {"intro_complete": 2}
 
 
 def local_frontier_roles(agent_count, milestones):
@@ -194,6 +197,9 @@ def quality_is_better(candidate, baseline):
 
 
 def record_stage_result(path, stage, success, steps):
+    steps = max(0, int(steps))
+    if steps < MIN_VALID_STAGE_STEPS.get(stage, 0):
+        return load_status(path)
     data = load_status(path); stages = data.setdefault("stages", {}); record = stages.setdefault(stage, {"recent": [], "success_steps": [], "recent_steps": []})
     record["recent"] = (list(record.get("recent", [])) + [bool(success)])[-RECENT_WINDOW:]
     record["recent_steps"] = (list(record.get("recent_steps", [])) + [max(0, int(steps))])[-RECENT_WINDOW:]

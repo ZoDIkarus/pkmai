@@ -28,6 +28,16 @@ class CurriculumRolesTests(unittest.TestCase):
         self.assertEqual(record["recent_steps"], [100, 300])
         self.assertEqual(record["average_steps"], 200)
 
+    def test_discards_one_step_intro_reset_artifact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = f"{directory}/quality.json"
+            record_stage_result(path, "intro_complete", True, 1)
+            record_stage_result(path, "intro_complete", True, 240)
+            record = load_status(path)["stages"]["intro_complete"]
+
+        self.assertEqual(record["recent_steps"], [240])
+        self.assertEqual(record["average_steps"], 240)
+
     def test_local_frontier_uses_two_battle_specialists_after_the_starter_chain(self):
         roles = local_frontier_roles(
             10,

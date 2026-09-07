@@ -132,7 +132,7 @@ class V17RewardTuningTests(unittest.TestCase):
         )
 
     def test_gameplay_time_and_combat_rewards_favor_progress(self):
-        self.assertEqual(PokemonFireRedEnv.GAMEPLAY_STEP_COST, -0.001)
+        self.assertEqual(PokemonFireRedEnv.GAMEPLAY_STEP_COST, -0.002)
         self.assertEqual(PokemonFireRedEnv.ENEMY_DAMAGE_REWARD_PER_HP, 0.008)
         self.assertEqual(PokemonFireRedEnv.ENEMY_FAINT_REWARD, 0.0)
         self.assertEqual(PokemonFireRedEnv.NEW_TRANSITION_REWARD, 100.0)

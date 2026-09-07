@@ -172,7 +172,7 @@ class PokemonFireRedEnv(gym.Env):
     INTRO_NOVELTY_REWARD_CAP = 5.0
     # A non-zero time cost keeps stationary or indecisive gameplay from being
     # neutral while remaining far below every meaningful progress reward.
-    GAMEPLAY_STEP_COST = -0.001
+    GAMEPLAY_STEP_COST = -0.002
     # V6.1: bekannte, notwendige Wege sind neutral.
     # Nur neue Entdeckung / Ziel-Fortschritt ist positiv;
     # echte Wiederholungs-Loops bleiben negativ.

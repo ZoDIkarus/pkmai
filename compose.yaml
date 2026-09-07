@@ -74,6 +74,7 @@ services:
     entrypoint: ["python", "-u", "src/dynamic_watcher.py"]
     environment:
       PKMAI_WATCHER_RELOAD_SECONDS: "1.0"
+      PKMAI_WATCHER_EVAL_MODE: "1"
     volumes:
       - ./runtime:/app/runtime
       - ./local:/app/local:ro

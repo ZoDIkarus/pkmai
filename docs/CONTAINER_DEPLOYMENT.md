@@ -11,10 +11,10 @@ This project is deployed only on the local Windows/Docker Desktop host.
 - `web` — watcher-first dashboard on the same configurable host and container port (`8001` by default);
 - `dynamic-watcher` (watcher profile) — non-training emulator stream.
 
-Start the core services:
+Start the core services. The explicit profiles are required because all application services are profile-gated:
 
 ```bash
-docker compose up -d cluster-master cluster-brain web
+docker compose --profile cluster --profile web up -d cluster-master cluster-brain web
 docker compose --profile watcher up -d dynamic-watcher
 ```
 
@@ -28,22 +28,24 @@ Do not use Compose scaling for the trainer service with Docker Desktop host netw
 
 ## Dashboard
 
-Set `PKMAI_WEB_HOST` to the intended LAN/VPN interface and `PKMAI_WEB_PORT` to `8001`. The web application listens and publishes on that same port.
+Set `PKMAI_WEB_HOST` to the intended LAN/VPN interface for Docker's host-side bind and `PKMAI_WEB_PORT` to `8001`. The web application binds inside the container to `PKMAI_WEB_BIND_HOST` (default `0.0.0.0`) and listens on `PKMAI_WEB_PORT`.
 
 - Dashboard: `http://<host>:8001/`
-- Watcher page: `http://<host>:8001/watcher`
+- Observer page: `http://<host>:8001/watcher-observer`
+- Compatibility redirect: `http://<host>:8001/watcher` → `/`
 - JPEG stream: `http://<host>:8001/watcher.jpg`
 - Watcher API: `http://<host>:8001/api/watchers`
 
-The start page renders the watcher list and automatically selects the first watcher as the live preview. The watcher writes status metadata without private model paths.
+The start page renders the watcher list and automatically selects the first watcher as the live preview. The watcher writes status metadata without private model paths. The brain's `dynamic_policy_best.pt` is currently reward-based; it is not yet independently evaluated.
 
 ## Required verification
 
 After any worker, brain or watcher deployment:
 
-1. confirm all ten uniquely named trainer containers are online and registered;
-2. confirm the learner serves an increasing policy version;
-3. compare several sequential watcher JPEG hashes and inspect selected watcher actions;
-4. verify dashboard and JPEG availability through the configured external interface.
+1. before restarting `cluster-brain`, preserve `runtime/cluster/dynamic_policy.pt` and verify the restarted brain restores it;
+2. confirm all ten uniquely named trainer containers are online and registered;
+3. confirm the learner serves an increasing policy version;
+4. compare several sequential watcher JPEG hashes and inspect selected watcher actions;
+5. verify dashboard and JPEG availability through the configured external interface.
 
 A running container or an HTTP 200 alone is not sufficient evidence that the watcher is controlling the emulator.

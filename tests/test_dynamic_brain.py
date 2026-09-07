@@ -11,7 +11,7 @@ from dynamic_brain import DynamicLearner, combine_rollouts, load_best_mean_rewar
 class DynamicLearnerTests(unittest.TestCase):
     def test_missing_best_score_does_not_invent_a_quality_value(self):
         with tempfile.TemporaryDirectory() as directory:
-            self.assertEqual(load_best_mean_reward(Path(directory) / "missing.json"), float("-inf"))
+            self.assertEqual(load_best_mean_reward(Path(directory) / "missing.json"), (-1, float("-inf"), float("inf")))
 
     def test_combines_several_rollouts_before_a_policy_update(self):
         batch = {

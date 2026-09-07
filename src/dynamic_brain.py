@@ -37,11 +37,19 @@ def combine_rollouts(batches: list[dict[str, np.ndarray]]) -> dict[str, np.ndarr
     }
 
 
-def load_best_mean_reward(path: Path = BEST_SCORE_FILE) -> float:
+def load_best_mean_reward(path: Path = BEST_SCORE_FILE) -> tuple[int, float, float]:
     try:
-        return float(json.loads(path.read_text(encoding="utf-8"))["mean_reward"])
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return (int(value.get("successes", 0)), float(value.get("mean_reward", 0.0)), float(value.get("speed", 0.0)))
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
-        return float("-inf")
+        return (-1, float("-inf"), float("inf"))
+
+
+def rollout_quality(batch: dict[str, np.ndarray], mean_reward: float) -> tuple[int, float, float]:
+    rewards = np.asarray(batch["rewards"], dtype=np.float32)
+    success_indices = np.flatnonzero(rewards >= 100.0)
+    speed = float(success_indices[0] + 1) if len(success_indices) else float("inf")
+    return (int(len(success_indices)), float(mean_reward), -speed)
 
 
 class DynamicLearner:
@@ -105,16 +113,16 @@ class DynamicLearner:
             "mean_reward": float(rewards.mean()),
         }
 
-    def publish(self, checkpoint: str | None = None, best: bool = False, mean_reward: float | None = None) -> None:
+    def publish(self, checkpoint: str | None = None, best: bool = False, quality: tuple[int, float, float] | None = None) -> None:
         CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
         artifact = {"version": self.version, "state_dict": self.model.state_dict()}
         for model_file in (MODEL_FILE, BEST_MODEL_FILE) if best else (MODEL_FILE,):
             temporary_model = model_file.with_suffix(".pt.tmp")
             torch.save(artifact, temporary_model)
             os.replace(temporary_model, model_file)
-        if best and mean_reward is not None:
+        if best and quality is not None:
             temporary_score = BEST_SCORE_FILE.with_suffix(".json.tmp")
-            temporary_score.write_text(json.dumps({"mean_reward": float(mean_reward)}), encoding="utf-8")
+            temporary_score.write_text(json.dumps({"successes": quality[0], "mean_reward": quality[1], "speed": quality[2]}), encoding="utf-8")
             os.replace(temporary_score, BEST_SCORE_FILE)
         payload = {
             "version": self.version,
@@ -133,7 +141,7 @@ def main() -> None:
     batches_per_update = max(2, int(os.getenv("PKMAI_CLUSTER_BATCHES_PER_UPDATE", "8")))
     learner = DynamicLearner()
     CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
-    best_mean_reward = load_best_mean_reward()
+    best_quality = load_best_mean_reward()
     learner.restore_latest()
     learner.publish()
     pending_batches = []
@@ -144,17 +152,19 @@ def main() -> None:
             consumed += 1
             if len(pending_batches) < batches_per_update:
                 continue
-            metrics = learner.learn(combine_rollouts(pending_batches))
+            combined = combine_rollouts(pending_batches)
+            metrics = learner.learn(combined)
             pending_batches.clear()
             checkpoint = None
             if learner.version % checkpoint_every == 0:
                 checkpoint_path = CHECKPOINTS_DIR / f"dynamic-v{learner.version:08d}.pt"
                 torch.save({"version": learner.version, "state_dict": learner.model.state_dict()}, checkpoint_path)
                 checkpoint = str(checkpoint_path)
-            is_best = float(metrics["mean_reward"]) >= best_mean_reward
+            quality = rollout_quality(combined, float(metrics["mean_reward"]))
+            is_best = quality > best_quality
             if is_best:
-                best_mean_reward = float(metrics["mean_reward"])
-            learner.publish(checkpoint, best=is_best, mean_reward=metrics["mean_reward"] if is_best else None)
+                best_quality = quality
+            learner.publish(checkpoint, best=is_best, quality=quality if is_best else None)
             print(json.dumps({"policy_version": learner.version, "timesteps": learner.timesteps}), flush=True)
         if not consumed:
             time.sleep(0.25)

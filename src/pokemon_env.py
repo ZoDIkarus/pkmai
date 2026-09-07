@@ -882,7 +882,9 @@ class PokemonFireRedEnv(gym.Env):
         return self.persistent_known_edges | self.shared_edge_snapshot
 
     def _confirmed_warp_dir(self):
-        path = os.path.join(SHARED_CURRICULUM_DIR, "confirmed_story_warps")
+        # Legacy records used reset-time X/Y with current map IDs. Retain
+        # those files, but require fresh evidence with coherent coordinates.
+        path = os.path.join(SHARED_CURRICULUM_DIR, "confirmed_story_warps_v2")
         os.makedirs(path, exist_ok=True)
         return path
 
@@ -1624,15 +1626,31 @@ class PokemonFireRedEnv(gym.Env):
 
         if not self.left_house_rewarded:
             targets = []
+            exit_maps = set()
             for t in self._load_confirmed_story_warps("exit"):
                 if len(t) != 8:
                     continue
                 a = tuple(int(v) for v in t[:4])
                 b = tuple(int(v) for v in t[4:])
+                for endpoint in (a, b):
+                    if endpoint[0] != self.OVERWORLD_BANK:
+                        exit_maps.add(endpoint[:2])
                 if (a[0], a[1]) == key:
                     targets.append((a[2], a[3]))
                 if (b[0], b[1]) == key:
                     targets.append((b[2], b[3]))
+            # Milestones stay completed after backtracking. If the exit is
+            # on another floor, target the confirmed stairs leading there.
+            # Do not use initial_indoor_map: specialists can start downstairs.
+            if not targets and key not in exit_maps:
+                for t in self._load_confirmed_story_warps("stairs"):
+                    if len(t) != 8:
+                        continue
+                    a = tuple(int(v) for v in t[:4])
+                    b = tuple(int(v) for v in t[4:])
+                    for source, destination in ((a, b), (b, a)):
+                        if source[:2] == key and destination[:2] in exit_maps:
+                            targets.append(source[2:])
             return list(dict.fromkeys(targets))
 
         if bank != self.OVERWORLD_BANK:
@@ -2270,7 +2288,7 @@ class PokemonFireRedEnv(gym.Env):
 
 
     def _exit_route_dir(self):
-        path = os.path.join(SHARED_CURRICULUM_DIR, "exit_routes")
+        path = os.path.join(SHARED_CURRICULUM_DIR, "exit_routes_v2")
         os.makedirs(path, exist_ok=True)
         return path
 
@@ -3620,6 +3638,8 @@ class PokemonFireRedEnv(gym.Env):
 
             self.previous_valid_bank = bank
             self.previous_valid_map = map_id
+            self.previous_valid_x = x
+            self.previous_valid_y = y
         else:
             self.stuck_counter = 0
             self.last_progress_signature = None

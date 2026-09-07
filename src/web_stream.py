@@ -33,10 +33,10 @@ def web_bind_settings() -> tuple[str, int]:
     )
 
 
-def _load_json(path: Path) -> dict:
+def _load_json(path: Path):
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        return payload if isinstance(payload, dict) else {}
+        return payload
     except (OSError, ValueError, json.JSONDecodeError):
         return {}
 

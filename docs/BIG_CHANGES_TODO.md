@@ -128,6 +128,28 @@ bzw. `tools/v20_reset.sh` (Letzteres löscht Savestates — anpassen).
    Gilt NUR für FRONTIER (`training_mode == "FRONTIER"`, [pokemon_env.py:5946]),
    nicht FULL/BRIDGE/Watcher.
 
+**6. Post-Wipe: neue Route / neue Stadt wieder erhaltbar, mit Anti-Farm-Decay.**  ← User 2026-09-07
+   - Aktuell (V19, `_record_party_wipe:1906`): `visited_maps`/`seen_coords` werden
+     bei einem Wipe BEWUSST NICHT geleert — Recovery-Modus (Graph-Distanz zur
+     alten Front + Wildkampf ×0.05). Genau, damit „absichtlich sterben" kein
+     Farm-Trick wird (siehe POST_WIPE +300-Exploit in [[pkmai-v18-reward-model]]).
+   - Neu gewünscht: nach einem Wipe sollen `CITY_EPISODE_REWARD` /
+     `EPISODE_NEW_MAP_REWARD` **wieder erhaltbar** sein (Rückweg zur Stadt zahlt
+     echt), ABER **ab dem 4. Wipe der Episode auf 1 %** (`× 0.01`) — damit
+     Sterben→Stadt-neu-abholen→Sterben kein Loop wird.
+   - Umsetzung: per-Episode-Wipe-Zähler (`self.episode_party_wipes`, reset in
+     `reset()`; hoch in `_record_party_wipe`). Bei einem Wipe die Städte/Routen
+     ab `pre_wipe_best_stage` aus `visited_maps` + Replay-Flags entfernen
+     (NICHT `seen_coords` — Tile-Farm bleibt zu). Beim Auszahlen von
+     `new_map_episode` / `replay_map_once`: wenn `episode_party_wipes >= 4`
+     → `_map_reward *= 0.01`.
+   - Interaktion mit `post_wipe_recovery` / `POST_WIPE_TARGET_PROGRESS_REWARD`
+     prüfen — ggf. das Distanz-zur-Front-Shaping abschwächen, wenn die Stadt-
+     Rewards das jetzt übernehmen (sonst Doppel-Anreiz). NICHT den Wipe-Cooldown
+     (`POST_WIPE_REWARD_COOLDOWN_STEPS = 40`) anfassen — der verhindert nur, dass
+     der Pokecenter-Teleport selbst als „neue Map" zählt.
+   - **Reward-only, kein Reset.** Kann Teil A ODER separat.
+
 **NICHT gemacht (bewusst):** Edge-Reward wieder an. Diskutiert, aber: Farm-Risiko
 (A↔B / A→B→C→A-Loops), das das Projekt schon 2× gebissen hat. Erst 1-5 ausreizen.
 Falls FULL/BRIDGE auf Route 1 dann noch zu wenig rumlaufen: `FULL_FRONTIER_TILE_

@@ -92,8 +92,12 @@ def confirmed_stages(milestones, status):
 def curriculum_roles(agent_count, milestones, status=None, watcher_validation=None):
     """Frontier majority plus one maintenance worker for every prior state."""
     n, milestones, status = max(1, int(agent_count)), set(milestones or ()), status or {}
-    # The visible watcher is inference-only. Its acceptance result must not
-    # freeze trainer allocation on the intro frontier.
+    # The visible watcher validates the from-start chain. Keep that gate, but
+    # spread the early fleet across the current and immediately following goals.
+    if watcher_validation is not None and not bool(
+        (watcher_validation.get("intro_complete") or {}).get("passed", False)
+    ):
+        return tuple((["intro"] * 5 + ["stairs"] * 3 + ["exit"] * 2)[:n])
     # A state is a usable start point, not proof that the current policy is
     # reliable. Revalidate the full early chain after policy/reward changes.
     if "intro_complete" not in milestones or not stage_is_confirmed(status.get("intro_complete")):

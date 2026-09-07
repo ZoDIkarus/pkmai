@@ -213,7 +213,7 @@ def read_player_location(env, allow_scan=True):
 # struct Pokemon size = 100 bytes.
 PLAYER_PARTY_OFFSET = 0x24284
 ENEMY_PARTY_OFFSET = 0x2402C
-BATTLE_TYPE_FLAGS_OFFSET = 0x22FEC
+BATTLE_TYPE_FLAGS_OFFSET = 0x22B4C  # BPRE gBattleTypeFlags (0x02022B4C - EWRAM base)
 POKEMON_STRUCT_SIZE = 100
 MAX_PARTY_SIZE = 6
 

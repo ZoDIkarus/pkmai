@@ -71,6 +71,8 @@ class RamLocationSafetyTests(unittest.TestCase):
         self.assertFalse(firered_ram._valid_location(ram, 0))
 
     def test_reads_battle_type_flags_from_confirmed_offset(self):
+        # BPRE gBattleTypeFlags: 0x02022B4C - 0x02000000.
+        self.assertEqual(firered_ram.BATTLE_TYPE_FLAGS_OFFSET, 0x22B4C)
         env = _RamEnv(firered_ram.BATTLE_TYPE_FLAGS_OFFSET + 4)
         env.ram[firered_ram.BATTLE_TYPE_FLAGS_OFFSET:firered_ram.BATTLE_TYPE_FLAGS_OFFSET + 4] = bytes((8, 0, 0, 0))
         self.assertEqual(firered_ram.read_battle_type_flags(env), 8)

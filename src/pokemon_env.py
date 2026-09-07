@@ -87,6 +87,13 @@ def intro_bedroom_arrival(location):
     return tuple(location[:2]) == (4, 1)
 
 
+def intro_speed_bonus(steps, limit=2500, maximum=25.0):
+    """Reward only a fast, confirmed arrival at the bedroom."""
+    elapsed = max(0, int(steps))
+    horizon = max(1, int(limit))
+    return max(0.0, float(maximum) * (horizon - elapsed) / horizon)
+
+
 def intro_novelty_bonus(total_rewarded, screen_diff, is_new_state, limit=5.0):
     """Keep visual-only intro progress subordinate to actual map control."""
     total = max(0.0, float(total_rewarded))
@@ -2720,23 +2727,8 @@ class PokemonFireRedEnv(gym.Env):
                 quant = (thumb // 32).astype(np.uint8)
                 state_key = quant.tobytes()
 
-                # Cursor movement on the name keyboard can alter the visual
-                # fingerprint. Treat this only as a tiny diagnostic signal;
-                # trusted map progress remains the actual completion signal.
-                bonus = intro_novelty_bonus(
-                    self.intro_novelty_reward_total,
-                    diff,
-                    state_key not in self.intro_seen_states,
-                    self.INTRO_NOVELTY_REWARD_CAP,
-                )
-                if bonus > 0.0:
-                    reward += bonus
-                    self.intro_novelty_reward_total += bonus
-                    self.intro_seen_states.add(state_key)
-                    self.reward_event_counts["intro_state"] += 1
-                    reward_events.append(
-                        f"intro_state:+{bonus:.1f}"
-                    )
+                # Screen/cursor changes are diagnostic only. They never pay.
+                self.intro_seen_states.add(state_key)
 
                 self.intro_last_thumb = thumb
 
@@ -2759,11 +2751,14 @@ class PokemonFireRedEnv(gym.Env):
             and not self.intro_complete_rewarded
             and intro_bedroom_arrival((bank, map_id, x, y))
         ):
-            # Erst der Mapwechsel nach der ersten lesbaren Spielerposition
-            # beendet Intro/Namenswahl; der erste valide RAM-Lock allein nicht.
+            # Nur die bestaetigte Schlafzimmer-Ankunft beendet das Intro.
             self.intro_complete_rewarded = True
             reward += 100.0
             reward_events.append("intro_complete:+100")
+            speed_bonus = intro_speed_bonus(self.total_steps)
+            if speed_bonus > 0.0:
+                reward += speed_bonus
+                reward_events.append(f"intro_speed:+{speed_bonus:.1f}")
 
             if self.training_objective == "intro":
                 reward += 50.0

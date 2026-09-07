@@ -17,10 +17,18 @@ class FighterRewardTests(unittest.TestCase):
         cls.code = compile(ast.Module(body=[cls.selection], type_ignores=[]), '<real fighter reward>', 'exec')
 
     def select(self, mode, general, combat):
-        scope = dict(self=SimpleNamespace(training_mode=mode), reward=general,
-                     reward_events=['new_stage:+250','fighter_leash:truncate'], combat_rewards=combat)
-        exec(self.code,scope)
-        return scope['reward'],scope['reward_events']
+        scope = dict(
+            self=SimpleNamespace(
+                training_mode=mode,
+                FIGHTER_COMBAT_UNCUT_MULT=Env.FIGHTER_COMBAT_UNCUT_MULT,
+                FIGHTER_COMBAT_UNCUT_KEYS=Env.FIGHTER_COMBAT_UNCUT_KEYS,
+            ),
+            reward=general,
+            reward_events=['new_stage:+250', 'fighter_leash:truncate'],
+            combat_rewards=combat,
+        )
+        exec(self.code, scope)
+        return scope['reward'], scope['reward_events']
 
     def test_exploration_and_story_never_pay_fighter(self):
         reward,events=self.select('FIGHTER',1300,[])
@@ -28,11 +36,23 @@ class FighterRewardTests(unittest.TestCase):
         self.assertEqual(events,['fighter_leash:truncate'])
 
     def test_exact_combat_amounts_not_rounded_log_values(self):
-        combat=[('battle_win',10),('enemy_damage',.08*7),('took_damage',-.1*3),('battle_step',-.005)]
+        # 2026-09-07: FIGHTER combat components are restored to pre-cut
+        # magnitude (x10 on enemy_damage / battle_win / took_damage / ...),
+        # the -0.005 step cost is NOT boosted.
+        combat=[('battle_win',1.0),('enemy_damage',.008*7),('took_damage',-.01*3),('battle_step',-.005)]
         reward,events=self.select('FIGHTER',300,combat)
-        self.assertAlmostEqual(reward,10.255)
+        self.assertAlmostEqual(reward, 10.0 + .08*7 - .1*3 - .005)  # 10.255
         self.assertFalse(any('new_stage' in e for e in events))
+        # penalties are NOT boosted
         self.assertEqual(self.select('FIGHTER',250,[('party_wiped',-100)])[0],-100)
+        self.assertEqual(self.select('FIGHTER',250,[('fled_battle',-25)])[0],-25)
+        self.assertAlmostEqual(
+            self.select('FIGHTER',0,[('battle_step',-.005)])[0], -.005)
+
+    def test_non_fighter_combat_is_not_boosted(self):
+        for mode in ('FULL','BRIDGE','FRONTIER','RETENTION'):
+            r,_=self.select(mode,321,[('enemy_damage',0.5),('battle_win',1.0)])
+            self.assertEqual(r,321)  # non-FIGHTER reward is the general total
 
     def test_other_modes_keep_existing_total(self):
         for mode in ('FULL','BRIDGE','FRONTIER','RETENTION'):

@@ -355,6 +355,19 @@ class PokemonFireRedEnv(gym.Env):
     # (enemy_faint) oder den Sieg/EP-Anstieg (BATTLE_WIN_REWARD) - die haben
     # das Kaempfen ueberbewertet.
     ENEMY_FAINT_REWARD = 0.0
+    # 2026-09-07 (user): der "Combat auf 10%"-Cut trifft FIGHTER am haertesten -
+    # FIGHTER-Reward IST nur combat_rewards, und die ungekuerzten -0.005/Step
+    # Kampfkosten haben den geschrumpften Schadens-Reward ueberdeckt (lange
+    # Kaempfe wurden netto negativ -> Policy lernt "Kaempfen ist schlecht").
+    # Fuer FIGHTER die positiven/symmetrischen Kampf-Komponenten wieder auf
+    # Vor-Cut-Niveau: x10 auf enemy_damage / battle_win / team_level_up /
+    # battle_heal / took_damage. NICHT auf die Step-Kosten, den Wipe (-100)
+    # oder die Flucht-Strafe.
+    FIGHTER_COMBAT_UNCUT_MULT = 10.0
+    FIGHTER_COMBAT_UNCUT_KEYS = (
+        "enemy_damage", "battle_win", "team_level_up", "battle_heal",
+        "took_damage", "enemy_faint",
+    )
     # V18: Wildkampf-Abklingen pro Episode. Die ersten WILD_BATTLE_DECAY_AFTER
     # besiegten Wild-Pokemon auf einer WILD_TRAINING_MAP zahlen voll, ab dem
     # naechsten sinken Schaden- UND Level-Up-Reward auf WILD_BATTLE_DECAY_FACTOR.
@@ -6692,9 +6705,17 @@ class PokemonFireRedEnv(gym.Env):
 
         # Select before all telemetry/accounting so PPO and dashboard agree.
         if getattr(self, "training_mode", "") == "FIGHTER":
-            reward = sum(value for _, value in combat_rewards)
+            _fkeys = self.FIGHTER_COMBAT_UNCUT_KEYS
+            _fmul = self.FIGHTER_COMBAT_UNCUT_MULT
+
+            def _fval(event, value):
+                return value * _fmul if event in _fkeys else value
+            reward = sum(_fval(event, value) for event, value in combat_rewards)
             reward_events = [event for event in reward_events if event.endswith(":truncate")]
-            reward_events.extend(f"{event}:{value:+.4f}" for event, value in combat_rewards if value)
+            reward_events.extend(
+                f"{event}:{_fval(event, value):+.4f}"
+                for event, value in combat_rewards if value
+            )
         _role_wipe_terminal = (
             getattr(self, "training_mode", "") in ("FIGHTER", "FRONTIER")
             and self.wipe_active

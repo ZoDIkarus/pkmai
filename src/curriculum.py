@@ -97,17 +97,17 @@ def curriculum_roles(agent_count, milestones, status=None, watcher_validation=No
     if watcher_validation is not None and not bool(
         (watcher_validation.get("intro_complete") or {}).get("passed", False)
     ):
-        return tuple((["intro"] * 5 + ["stairs"] * 3 + ["exit"] * 2)[:n])
+        return tuple((["intro"] * 4 + ["stairs"] * 3 + ["exit"] * 2)[:n])
     # A state is a usable start point, not proof that the current policy is
     # reliable. Revalidate the full early chain after policy/reward changes.
     if "intro_complete" not in milestones or not stage_is_confirmed(status.get("intro_complete")):
-        plan = [("intro", 5), ("stairs", 3), ("exit", 2)]
+        plan = [("intro", 4), ("stairs", 3), ("exit", 2)]
     elif "stairs_down" not in milestones or not stage_is_confirmed(status.get("stairs_down")):
-        plan = [("stairs", 5), ("exit", 3), ("starter", 2)]
+        plan = [("intro", 1), ("stairs", 4), ("exit", 3), ("starter", 2)]
     elif "left_house" not in milestones or not stage_is_confirmed(status.get("left_house")):
-        plan = [("exit", 5), ("starter", 3), ("progress", 2)]
+        plan = [("stairs", 1), ("exit", 4), ("starter", 3), ("progress", 2)]
     elif "starter" not in milestones or not stage_is_confirmed(status.get("starter")):
-        plan = [("starter", 5), ("battle", 3), ("progress", 2)]
+        plan = [("exit", 1), ("starter", 4), ("battle", 3), ("progress", 2)]
     else:
         plan = [("intro", 1), ("stairs", 1), ("exit", 1), ("starter", 1), ("battle", 2), ("progress", 4)]
     roles = [role for role, count in plan for _ in range(count)]

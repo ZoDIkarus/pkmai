@@ -40,15 +40,16 @@ class CurriculumRolesTests(unittest.TestCase):
 
     def test_uses_intro_frontier_until_intro_state_exists(self):
         roles = curriculum_roles(10, set(), {})
-        self.assertEqual(roles.count("intro"), 5)
+        self.assertEqual(roles.count("intro"), 4)
         self.assertEqual(roles.count("stairs"), 3)
-        self.assertEqual(roles.count("exit"), 2)
+        self.assertEqual(roles.count("exit"), 3)
 
     def test_revalidates_earliest_saved_stage_before_using_later_frontier(self):
         states = {"intro_complete", "stairs_down", "left_house"}
-        self.assertEqual(curriculum_roles(10, states, {}).count("intro"), 5)
+        self.assertEqual(curriculum_roles(10, states, {}).count("intro"), 4)
         status = {"intro_complete": {"recent": [True] * 7 + [False] * 3}}
-        self.assertEqual(curriculum_roles(10, states, status).count("stairs"), 5)
+        self.assertEqual(curriculum_roles(10, states, status).count("intro"), 1)
+        self.assertEqual(curriculum_roles(10, states, status).count("stairs"), 4)
         self.assertEqual(curriculum_roles(10, states, status).count("exit"), 3)
         self.assertEqual(curriculum_roles(10, states, status).count("starter"), 2)
 
@@ -57,10 +58,11 @@ class CurriculumRolesTests(unittest.TestCase):
         status = {"intro_complete": {"recent": [True] * 7 + [False] * 3}}
         blocked = curriculum_roles(10, states, status, {"intro_complete": {"passed": False}})
         released = curriculum_roles(10, states, status, {"intro_complete": {"passed": True}})
-        self.assertEqual(blocked.count("intro"), 5)
+        self.assertEqual(blocked.count("intro"), 4)
         self.assertEqual(blocked.count("stairs"), 3)
         self.assertEqual(blocked.count("exit"), 2)
-        self.assertEqual(released.count("stairs"), 5)
+        self.assertEqual(released.count("intro"), 1)
+        self.assertEqual(released.count("stairs"), 4)
 
     def test_keeps_starter_frontier_until_it_is_confirmed(self):
         states = {"intro_complete", "stairs_down", "left_house", "starter"}
@@ -71,7 +73,8 @@ class CurriculumRolesTests(unittest.TestCase):
             "starter": {"recent": [True] * 6},
         }
         roles = curriculum_roles(10, states, status)
-        self.assertEqual(roles.count("starter"), 5)
+        self.assertEqual(roles.count("exit"), 1)
+        self.assertEqual(roles.count("starter"), 4)
         self.assertEqual(roles.count("battle"), 3)
         self.assertEqual(roles.count("progress"), 2)
 

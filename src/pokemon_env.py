@@ -80,6 +80,13 @@ def intro_map_transition_completed(first_map, current_map):
     return tuple(first_map[:2]) != tuple(current_map[:2])
 
 
+def intro_bedroom_arrival(location):
+    """Confirm the intro only once the player is in the bedroom map."""
+    if location is None or len(location) < 2:
+        return False
+    return tuple(location[:2]) == (4, 1)
+
+
 def intro_novelty_bonus(total_rewarded, screen_diff, is_new_state, limit=5.0):
     """Keep visual-only intro progress subordinate to actual map control."""
     total = max(0.0, float(total_rewarded))
@@ -2750,9 +2757,7 @@ class PokemonFireRedEnv(gym.Env):
             gameplay_ready
             and self.episode_start == "beginning"
             and not self.intro_complete_rewarded
-            and intro_map_transition_completed(
-                self.intro_initial_map, (bank, map_id)
-            )
+            and intro_bedroom_arrival((bank, map_id, x, y))
         ):
             # Erst der Mapwechsel nach der ersten lesbaren Spielerposition
             # beendet Intro/Namenswahl; der erste valide RAM-Lock allein nicht.

@@ -11,11 +11,17 @@ from pokemon_env import (
     stairs_no_new_edge_timeout,
     stuck_loop_penalty,
     intro_map_transition_completed,
+    intro_bedroom_arrival,
     watcher_episode_start,
 )
 
 
 class ShortCycleRepeatsTests(unittest.TestCase):
+    def test_intro_completes_only_after_reaching_the_bedroom(self):
+        self.assertFalse(intro_bedroom_arrival(None))
+        self.assertFalse(intro_bedroom_arrival((4, 2, 5, 6)))
+        self.assertTrue(intro_bedroom_arrival((4, 1, 5, 6)))
+
     def test_watcher_retries_location_discovery_on_every_invalid_location_read(self):
         self.assertTrue(location_discovery_scan_due(True, False, 604, 120))
         self.assertFalse(location_discovery_scan_due(False, False, 604, 120))

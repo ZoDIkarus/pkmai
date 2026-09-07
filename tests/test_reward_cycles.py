@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from pokemon_env import (
+    intro_action_shaping,
     PokemonFireRedEnv,
     battle_hp_stagnation_update,
     battle_stagnation_penalty,
@@ -18,6 +19,11 @@ from pokemon_env import (
 
 
 class ShortCycleRepeatsTests(unittest.TestCase):
+    def test_intro_prioritizes_a_without_rewarding_non_a_repeats(self):
+        self.assertEqual(intro_action_shaping(0, 1), (0.02, "intro_a:+0.02"))
+        self.assertEqual(intro_action_shaping(6, 8), (0.0, None))
+        self.assertLess(intro_action_shaping(6, 9)[0], 0.0)
+
     def test_intro_completes_only_after_reaching_the_bedroom(self):
         self.assertFalse(intro_bedroom_arrival(None))
         self.assertFalse(intro_bedroom_arrival((4, 2, 5, 6)))

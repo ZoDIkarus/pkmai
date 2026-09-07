@@ -63,6 +63,18 @@ def stuck_loop_penalty(stuck_steps):
     return -0.001 * max(0, int(stuck_steps) - 59)
 
 
+def intro_action_shaping(action, repeated_actions, *, a_action=0, grace=8):
+    """Favor advancing intro dialogs and penalize persistent non-A repeats."""
+    action = int(action)
+    repeats = max(0, int(repeated_actions))
+    if action == int(a_action):
+        return 0.02, "intro_a:+0.02"
+    if repeats > int(grace):
+        penalty = -0.02 * min(5, repeats - int(grace))
+        return penalty, f"intro_repeat:{penalty:.2f}"
+    return 0.0, None
+
+
 def stairs_no_new_edge_timeout(steps_since_new_edge, limit=256):
     """Stop a stairs specialist after a bounded run on verified known edges."""
     return max(0, int(steps_since_new_edge)) >= max(1, int(limit))
@@ -2344,6 +2356,11 @@ class PokemonFireRedEnv(gym.Env):
             step_res = self.env.step(self.btn_none)
 
         self.total_steps += 1
+        if requested_action == getattr(self, "intro_last_action", None):
+            self.intro_action_repeats = getattr(self, "intro_action_repeats", 0) + 1
+        else:
+            self.intro_action_repeats = 1
+        self.intro_last_action = requested_action
         if self.total_steps == 1 or not hasattr(self, "v9_last_pos"):
             self.v9_last_pos = None
             self.v9_same_pos_steps = 0
@@ -2505,6 +2522,14 @@ class PokemonFireRedEnv(gym.Env):
         reward_events = []
         truncated = False
         objective_done = False
+
+        if not gameplay_ready and self.episode_start == "beginning":
+            intro_reward, intro_event = intro_action_shaping(
+                requested_action, self.intro_action_repeats
+            )
+            reward += intro_reward
+            if intro_event:
+                reward_events.append(intro_event)
 
         if self._pending_party_wipe:
             reward += self._record_party_wipe(reward_events)

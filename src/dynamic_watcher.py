@@ -51,13 +51,18 @@ def load_published_policy(path: Path) -> tuple[PKMAIPolicy, int]:
 
 
 def choose_watcher_action(
-    policy: PKMAIPolicy, observation: dict, generator: torch.Generator | None = None
+    policy: PKMAIPolicy,
+    observation: dict,
+    generator: torch.Generator | None = None,
+    deterministic: bool = False,
 ) -> int:
     image = torch.from_numpy(np.asarray(observation["image"], dtype=np.uint8))[None, ...]
     nav = torch.from_numpy(np.asarray(observation["nav"], dtype=np.float32))[None, ...]
     with torch.no_grad():
         logits, _ = policy(image, nav)
         probabilities = torch.softmax(logits, dim=1)
+    if deterministic:
+        return int(torch.argmax(probabilities, dim=1).item())
     return int(torch.multinomial(probabilities, 1, generator=generator).item())
 
 
@@ -134,6 +139,7 @@ def main() -> None:
     reload_seconds = max(0.1, float(os.getenv("PKMAI_WATCHER_RELOAD_SECONDS", "1.0")))
     watcher_rank = max(0, int(os.getenv("PKMAI_WATCHER_RANK", "120")))
     fleet_size = max(1, int(os.getenv("PKMAI_WATCHER_FLEET_SIZE", "121")))
+    deterministic = os.getenv("PKMAI_WATCHER_EVAL_MODE", "0").lower() in {"1", "true", "yes"}
     env = PokemonFireRedEnv(rank=watcher_rank, agent_count=fleet_size, is_watcher=True)
     env.EXPLORATION_MEMORY_ENABLED = False
     policy: PKMAIPolicy | None = None
@@ -158,7 +164,7 @@ def main() -> None:
                     print(f"watcher waiting for best brain: {exc}", flush=True)
                     time.sleep(reload_seconds)
                     continue
-            action = choose_watcher_action(policy, observation)
+            action = choose_watcher_action(policy, observation, deterministic=deterministic)
             observation, reward, terminated, truncated, info = env.step(action)
             recent_reward_events = append_recent_reward_events(
                 recent_reward_events,

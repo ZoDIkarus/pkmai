@@ -90,6 +90,8 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.assertIn("/api/watchers", page)
         self.assertIn("watchers[0]", page)
         self.assertIn("w.reward_events", page)
+        self.assertIn("overflow:auto", page)
+        self.assertIn("place-items:start", page)
         self.assertIn("w.active_goal", page)
         self.assertIn("Aktuelles Lernziel", page)
         self.assertIn("Trainings-Reward", page)

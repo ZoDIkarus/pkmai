@@ -91,7 +91,7 @@ def watcher_telemetry(
             str(event)[:120]
             for event in (reward_events or [])
             if isinstance(event, str)
-        ][-8:],
+        ][-64:],
     }
 
 
@@ -103,7 +103,7 @@ def append_recent_reward_events(
         str(event)[:120]
         for event in [*recent_events, *(current_events or [])]
         if isinstance(event, str)
-    ][-8:]
+    ][-64:]
 
 
 def write_watcher_status(

@@ -47,7 +47,10 @@ def load_best_mean_reward(path: Path = BEST_SCORE_FILE) -> tuple[int, float, flo
 
 def rollout_quality(batch: dict[str, np.ndarray], mean_reward: float) -> tuple[int, float, float]:
     rewards = np.asarray(batch["rewards"], dtype=np.float32)
-    success_indices = np.flatnonzero(rewards >= 100.0)
+    if "objective_success" in batch:
+        success_indices = np.flatnonzero(np.asarray(batch["objective_success"], dtype=np.bool_))
+    else:
+        success_indices = np.flatnonzero(rewards >= 100.0)
     speed = float(success_indices[0] + 1) if len(success_indices) else float("inf")
     return (int(len(success_indices)), float(mean_reward), -speed)
 

@@ -189,7 +189,7 @@ def load_policy() -> tuple[PKMAIPolicy, int]:
 
 
 def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: dict) -> tuple[dict[str, np.ndarray], dict, dict]:
-    rows = {name: [] for name in ("images", "nav", "actions", "rewards", "dones", "log_probs", "values")}
+    rows = {name: [] for name in ("images", "nav", "actions", "rewards", "dones", "log_probs", "values", "objective_success")}
     telemetry = live_telemetry(env, action=0, reward=0.0)
     reward_trace = []
     started_at = time.monotonic()
@@ -204,6 +204,7 @@ def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: di
         rows["dones"].append(done)
         rows["log_probs"].append(log_prob)
         rows["values"].append(value)
+        rows["objective_success"].append(bool(info.get("objective_success", False)) and done)
         reward_trace.append(
             {
                 "step": max(0, int(info.get("episode_steps", getattr(env, "total_steps", 0)) or 0)),
@@ -229,6 +230,7 @@ def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: di
         "dones": np.asarray(rows["dones"], dtype=np.bool_),
         "log_probs": np.asarray(rows["log_probs"], dtype=np.float32),
         "values": np.asarray(rows["values"], dtype=np.float32),
+        "objective_success": np.asarray(rows["objective_success"], dtype=np.bool_),
     }, observation, telemetry
 
 

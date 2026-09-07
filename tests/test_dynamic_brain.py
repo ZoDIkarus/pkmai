@@ -82,3 +82,11 @@ class DynamicLearnerTests(unittest.TestCase):
         )
         self.assertEqual(learner.version, before + 1)
         self.assertEqual(metrics["samples"], 4)
+
+    def test_rollout_quality_uses_explicit_objective_success(self):
+        quality = dynamic_brain.rollout_quality(
+            {"rewards": np.array([200.0, 0.0], dtype=np.float32),
+             "objective_success": np.array([False, True], dtype=np.bool_)},
+            0.0,
+        )
+        self.assertEqual(quality[0], 1)

@@ -29,6 +29,7 @@ CLUSTER_DIR = RUNTIME_DIR / "cluster"
 CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
 KEY_FILE = Path(os.getenv("PKMAI_CLUSTER_KEY_FILE", CLUSTER_DIR / "cluster_key.txt"))
 STATE_FILE = CLUSTER_DIR / "workers.json"
+KNOWN_TILES_FILE = CLUSTER_DIR / "known_tiles.json"
 POLICY_FILE = CLUSTER_DIR / "policy.json"
 MODEL_FILE = CLUSTER_DIR / "dynamic_policy.pt"
 ROLLOUT_INBOX = CLUSTER_DIR / "rollout_inbox"
@@ -53,6 +54,11 @@ SETTINGS = ClusterSettings(
 app = FastAPI(title="PKMAI Cluster Control", version="2")
 LOCK = threading.Lock()
 WORKERS: dict[str, dict] = {}
+KNOWN_TILES: set[tuple[int, int, int, int]] = set()
+try:
+    KNOWN_TILES = {tuple(item) for item in json.loads(KNOWN_TILES_FILE.read_text(encoding="utf-8")) if isinstance(item, list) and len(item) == 4}
+except Exception:
+    pass
 
 
 def _policy_version() -> int:
@@ -72,6 +78,12 @@ def _save_state() -> None:
     temp = STATE_FILE.with_suffix(".json.tmp")
     temp.write_text(json.dumps(WORKERS, sort_keys=True), encoding="utf-8")
     os.replace(temp, STATE_FILE)
+
+
+def _save_known_tiles() -> None:
+    temp = KNOWN_TILES_FILE.with_suffix(".json.tmp")
+    temp.write_text(json.dumps([list(item) for item in sorted(KNOWN_TILES)]), encoding="utf-8")
+    os.replace(temp, KNOWN_TILES_FILE)
 
 
 def _prune_workers(now: float) -> None:
@@ -161,6 +173,9 @@ def _record(payload: dict, decision_reason: str) -> dict:
     }
     with LOCK:
         WORKERS[worker_id] = record
+        if raw_position.get("valid"):
+            KNOWN_TILES.add((int(raw_position.get("map_bank", 0) or 0), int(raw_position.get("map_id", 0) or 0), int(raw_position.get("x", 0) or 0), int(raw_position.get("y", 0) or 0)))
+            _save_known_tiles()
         _save_state()
     return record
 
@@ -234,7 +249,7 @@ def cluster(x_pkmai_key: str | None = Header(default=None)):
     with LOCK:
         _prune_workers(now)
         workers = [dict(row, online=now - float(row.get("last_seen", 0)) < 15) for row in WORKERS.values()]
-    return {"policy_version": _policy_version(), "workers": sorted(workers, key=lambda item: item["worker_id"])}
+    return {"policy_version": _policy_version(), "workers": sorted(workers, key=lambda item: item["worker_id"]), "known_tiles": [list(item) for item in sorted(KNOWN_TILES)]}
 
 
 if __name__ == "__main__":

@@ -53,7 +53,7 @@ def write_result(payload):
     os.replace(temporary, RESULT_FILE)
 
 
-def evaluate_stage(policy, stage, start, objective, seed, episodes):
+def evaluate_stage(policy, stage, start, objective, seed, episodes, on_result=None):
     results = []
     for episode in range(episodes):
         env = PokemonFireRedEnv(
@@ -73,7 +73,10 @@ def evaluate_stage(policy, stage, start, objective, seed, episodes):
                     action = int(torch.multinomial(torch.softmax(logits, dim=1), 1, generator=generator).item())
                 observation, _, terminated, truncated, info = env.step(action)
                 if terminated or truncated:
-                    results.append({"stage": stage, "success": bool(info.get("objective_success", False)), "steps": int(info.get("episode_steps", env.total_steps))})
+                    result = {"stage": stage, "success": bool(info.get("objective_success", False)), "steps": int(info.get("episode_steps", env.total_steps))}
+                    results.append(result)
+                    if on_result is not None:
+                        on_result(result)
                     break
         finally:
             env.close()
@@ -89,9 +92,26 @@ def main():
             policy, version = load_policy()
             if version != last_version:
                 rows = []
+                payload = {"policy_version": version, "seed": seed, "episodes_per_stage": episodes, "status": "running", "stages": {}}
+                write_result(payload)
                 for index, (stage, start, objective) in enumerate(STAGES):
-                    rows.extend(evaluate_stage(policy, stage, start, objective, seed + index * 1000, episodes))
-                write_result({"policy_version": version, "seed": seed, "episodes_per_stage": episodes, "stages": summarize_stage_results(rows), "updated_at": time.time()})
+                    def publish_partial(result):
+                        rows.append(result)
+                        payload["stages"] = summarize_stage_results(rows)
+                        payload["updated_at"] = time.time()
+                        write_result(payload)
+                    evaluate_stage(policy, stage, start, objective, seed + index * 1000, episodes, publish_partial)
+                    stage_summary = payload["stages"].get(stage, {})
+                    if stage_summary.get("episodes", 0) >= 3 and stage_summary.get("successes", 0) == 0:
+                        payload["status"] = "blocked"
+                        payload["blocked_stage"] = stage
+                        payload["updated_at"] = time.time()
+                        write_result(payload)
+                        break
+                else:
+                    payload["status"] = "complete"
+                    payload["updated_at"] = time.time()
+                    write_result(payload)
                 print(json.dumps({"evaluated_policy_version": version}), flush=True)
                 last_version = version
         except (OSError, RuntimeError, KeyError) as exc:

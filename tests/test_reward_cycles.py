@@ -10,6 +10,7 @@ from pokemon_env import (
     location_discovery_scan_due,
     short_cycle_repeats,
     stairs_no_new_edge_timeout,
+    exit_no_new_edge_timeout,
     stuck_loop_penalty,
     intro_map_transition_completed,
     intro_bedroom_arrival,
@@ -56,6 +57,10 @@ class ShortCycleRepeatsTests(unittest.TestCase):
     def test_stairs_no_new_edge_timeout_only_triggers_after_a_bounded_verified_loop(self):
         self.assertFalse(stairs_no_new_edge_timeout(255))
         self.assertTrue(stairs_no_new_edge_timeout(256))
+
+    def test_exit_no_new_edge_timeout_allows_a_longer_bounded_route(self):
+        self.assertFalse(exit_no_new_edge_timeout(383))
+        self.assertTrue(exit_no_new_edge_timeout(384))
 
     def test_detects_repeating_backtrack_cycle(self):
         a = (3, 0, 10, 10)

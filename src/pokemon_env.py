@@ -80,6 +80,11 @@ def stairs_no_new_edge_timeout(steps_since_new_edge, limit=256):
     return max(0, int(steps_since_new_edge)) >= max(1, int(limit))
 
 
+def exit_no_new_edge_timeout(steps_since_new_edge, limit=384):
+    """Stop an exit specialist after a longer bounded run without route evidence."""
+    return max(0, int(steps_since_new_edge)) >= max(1, int(limit))
+
+
 def watcher_episode_start(is_watcher, curriculum_start):
     """Keep the visible observer on a full from-beginning journey."""
     return "beginning" if bool(is_watcher) else curriculum_start
@@ -277,6 +282,7 @@ class PokemonFireRedEnv(gym.Env):
     INTRO_TIMEOUT_STEPS = 1800
     STAIRS_TIMEOUT_STEPS = 900
     STAIRS_NO_NEW_EDGE_TIMEOUT = 256
+    EXIT_NO_NEW_EDGE_TIMEOUT = 384
     EXIT_TIMEOUT_STEPS = 7500
     EARLY_HOUSE_HARD_CAP = 12000
 
@@ -3577,6 +3583,18 @@ class PokemonFireRedEnv(gym.Env):
                 )
             ):
                 stage_timeout = "stairs_no_new_edge_timeout"
+
+            elif (
+                stage_timeout is None
+                and self.training_objective == "exit"
+                and self.stairs_down_rewarded
+                and not self.left_house_confirmed
+                and exit_no_new_edge_timeout(
+                    self.steps_since_new_edge,
+                    self.EXIT_NO_NEW_EDGE_TIMEOUT,
+                )
+            ):
+                stage_timeout = "exit_no_new_edge_timeout"
 
             elif stage_timeout is None and self.stairs_down_rewarded:
                 stairs_step = self.episode_milestone_steps.get(

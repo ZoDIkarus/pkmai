@@ -31,6 +31,7 @@ ACTIVE_AGENTS = max(1, int(os.getenv("PKMAI_WORKER_AGENTS", "1")))
 HEARTBEAT_SECONDS = max(3, int(os.getenv("PKMAI_HEARTBEAT_SECONDS", "10")))
 ROLLOUT_STEPS = max(8, int(os.getenv("PKMAI_ROLLOUT_STEPS", "32")))
 ACTION_EXPLORATION_FLOOR = min(0.35, max(0.0, float(os.getenv("PKMAI_ACTION_EXPLORATION_FLOOR", "0.35"))))
+OBJECTIVE_CODES = {"intro": 1, "stairs": 2, "exit": 3, "starter": 4, "battle": 5, "progress": 6, "scout": 7, "full": 8}
 
 
 def configure_cpu_inference() -> None:
@@ -189,7 +190,7 @@ def load_policy() -> tuple[PKMAIPolicy, int]:
 
 
 def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: dict) -> tuple[dict[str, np.ndarray], dict, dict]:
-    rows = {name: [] for name in ("images", "nav", "actions", "rewards", "dones", "log_probs", "values", "objective_success")}
+    rows = {name: [] for name in ("images", "nav", "actions", "rewards", "dones", "log_probs", "values", "objective_success", "objective_code", "success_steps")}
     telemetry = live_telemetry(env, action=0, reward=0.0)
     reward_trace = []
     started_at = time.monotonic()
@@ -205,6 +206,8 @@ def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: di
         rows["log_probs"].append(log_prob)
         rows["values"].append(value)
         rows["objective_success"].append(bool(info.get("objective_success", False)) and done)
+        rows["objective_code"].append(OBJECTIVE_CODES.get(str(info.get("training_objective", "full")), 0))
+        rows["success_steps"].append(int(info.get("episode_steps", 0) or 0) if rows["objective_success"][-1] else -1)
         reward_trace.append(
             {
                 "step": max(0, int(info.get("episode_steps", getattr(env, "total_steps", 0)) or 0)),
@@ -231,6 +234,8 @@ def collect_rollout(env: PokemonFireRedEnv, policy: PKMAIPolicy, observation: di
         "log_probs": np.asarray(rows["log_probs"], dtype=np.float32),
         "values": np.asarray(rows["values"], dtype=np.float32),
         "objective_success": np.asarray(rows["objective_success"], dtype=np.bool_),
+        "objective_code": np.asarray(rows["objective_code"], dtype=np.int8),
+        "success_steps": np.asarray(rows["success_steps"], dtype=np.int32),
     }, observation, telemetry
 
 

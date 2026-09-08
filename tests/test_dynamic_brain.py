@@ -90,3 +90,13 @@ class DynamicLearnerTests(unittest.TestCase):
             0.0,
         )
         self.assertEqual(quality[0], 1)
+
+    def test_rollout_stage_summary_separates_objectives_from_rewards(self):
+        summary = dynamic_brain.rollout_stage_summary({
+            "objective_code": np.array([1, 1, 2], dtype=np.int8),
+            "objective_success": np.array([True, False, True], dtype=np.bool_),
+            "success_steps": np.array([40, -1, 80], dtype=np.int32),
+        })
+        self.assertEqual(summary[1]["successes"], 1.0)
+        self.assertEqual(summary[1]["success_rate"], 0.5)
+        self.assertEqual(summary[2]["median_success_steps"], 80.0)

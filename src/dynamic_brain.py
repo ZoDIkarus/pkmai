@@ -55,6 +55,24 @@ def rollout_quality(batch: dict[str, np.ndarray], mean_reward: float) -> tuple[i
     return (int(len(success_indices)), float(mean_reward), -speed)
 
 
+def rollout_stage_summary(batch: dict[str, np.ndarray]) -> dict[int, dict[str, float]]:
+    """Summarize explicit objective outcomes without confusing shaping rewards."""
+    codes = np.asarray(batch.get("objective_code", []), dtype=np.int8)
+    successes = np.asarray(batch.get("objective_success", []), dtype=np.bool_)
+    steps = np.asarray(batch.get("success_steps", []), dtype=np.int32)
+    result = {}
+    for code in sorted(set(int(value) for value in codes)):
+        mask = codes == code
+        success_mask = mask & successes
+        result[code] = {
+            "samples": float(mask.sum()),
+            "successes": float(success_mask.sum()),
+            "success_rate": float(success_mask.sum() / max(1, mask.sum())),
+            "median_success_steps": float(np.median(steps[success_mask])) if success_mask.any() else float("inf"),
+        }
+    return result
+
+
 class DynamicLearner:
     def __init__(self, learning_rate: float = 3e-4) -> None:
         self.model = PKMAIPolicy()

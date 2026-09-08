@@ -114,6 +114,13 @@ class DynamicLearnerTests(unittest.TestCase):
         self.assertEqual(summary[3]["samples"], 1.0)
         self.assertEqual(summary[3]["success_rate"], 0.0)
 
+    def test_stage_summary_skips_legacy_rollouts_without_stage_fields(self):
+        summary = dynamic_brain.rollout_stage_summary({
+            "dones": np.array([False, True], dtype=np.bool_),
+        })
+
+        self.assertEqual(summary, {})
+
     def test_stage_gate_blocks_regression_of_confirmed_stage(self):
         self.assertFalse(dynamic_brain.stage_gate_allows_promotion(
             {1: {"samples": 64, "success_rate": 0.2}},

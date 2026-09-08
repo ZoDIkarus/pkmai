@@ -81,7 +81,11 @@ def rollout_stage_summary(batch: dict[str, np.ndarray]) -> dict[int, dict[str, f
     codes = np.asarray(batch.get("objective_code", []), dtype=np.int8)
     successes = np.asarray(batch.get("objective_success", []), dtype=np.bool_)
     steps = np.asarray(batch.get("success_steps", []), dtype=np.int32)
+    if not len(codes) or len(successes) != len(codes) or len(steps) != len(codes):
+        return {}
     terminals = np.asarray(batch.get("dones", np.ones(len(codes), dtype=np.bool_)), dtype=np.bool_)
+    if len(terminals) != len(codes):
+        return {}
     result = {}
     for code in sorted(set(int(value) for value in codes[terminals])):
         mask = (codes == code) & terminals

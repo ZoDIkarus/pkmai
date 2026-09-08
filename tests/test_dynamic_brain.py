@@ -100,3 +100,15 @@ class DynamicLearnerTests(unittest.TestCase):
         self.assertEqual(summary[1]["successes"], 1.0)
         self.assertEqual(summary[1]["success_rate"], 0.5)
         self.assertEqual(summary[2]["median_success_steps"], 80.0)
+
+    def test_stage_gate_blocks_regression_of_confirmed_stage(self):
+        self.assertFalse(dynamic_brain.stage_gate_allows_promotion(
+            {1: {"samples": 64, "success_rate": 0.2}},
+            {"1": {"samples": 64, "success_rate": 0.9}},
+        ))
+
+    def test_stage_gate_allows_unobserved_stage(self):
+        self.assertTrue(dynamic_brain.stage_gate_allows_promotion(
+            {2: {"samples": 8, "success_rate": 0.0}},
+            {"2": {"samples": 64, "success_rate": 0.9}},
+        ))

@@ -45,6 +45,18 @@ def load_best_mean_reward(path: Path = BEST_SCORE_FILE) -> tuple[int, float, flo
         return (-1, float("-inf"), float("inf"))
 
 
+def stage_gate_allows_promotion(candidate, baseline) -> bool:
+    """Protect earlier skills when a candidate contains enough stage samples."""
+    for code in (1, 2, 3, 4):
+        current = (candidate or {}).get(code)
+        previous = (baseline or {}).get(str(code), (baseline or {}).get(code))
+        if not current or not previous or current["samples"] < 32:
+            continue
+        if previous.get("success_rate", 0.0) >= 0.5 and current["success_rate"] < 0.5:
+            return False
+    return True
+
+
 def rollout_quality(batch: dict[str, np.ndarray], mean_reward: float) -> tuple[int, float, float]:
     rewards = np.asarray(batch["rewards"], dtype=np.float32)
     if "objective_success" in batch:
@@ -134,7 +146,7 @@ class DynamicLearner:
             "mean_reward": float(rewards.mean()),
         }
 
-    def publish(self, checkpoint: str | None = None, best: bool = False, quality: tuple[int, float, float] | None = None) -> None:
+    def publish(self, checkpoint: str | None = None, best: bool = False, quality: tuple[int, float, float] | None = None, stage_summary: dict | None = None) -> None:
         CLUSTER_DIR.mkdir(parents=True, exist_ok=True)
         artifact = {"version": self.version, "state_dict": self.model.state_dict()}
         for model_file in (MODEL_FILE, BEST_MODEL_FILE) if best else (MODEL_FILE,):
@@ -143,7 +155,7 @@ class DynamicLearner:
             os.replace(temporary_model, model_file)
         if best and quality is not None:
             temporary_score = BEST_SCORE_FILE.with_suffix(".json.tmp")
-            temporary_score.write_text(json.dumps({"successes": quality[0], "mean_reward": quality[1], "speed": quality[2]}), encoding="utf-8")
+            temporary_score.write_text(json.dumps({"successes": quality[0], "mean_reward": quality[1], "speed": quality[2], "stage_summary": stage_summary or {} }), encoding="utf-8")
             os.replace(temporary_score, BEST_SCORE_FILE)
         payload = {
             "version": self.version,
@@ -163,6 +175,10 @@ def main() -> None:
     learner = DynamicLearner()
     CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
     best_quality = load_best_mean_reward()
+    try:
+        best_stage_summary = json.loads(BEST_SCORE_FILE.read_text(encoding="utf-8")).get("stage_summary", {})
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        best_stage_summary = {}
     learner.restore_latest()
     learner.publish()
     pending_batches = []
@@ -182,10 +198,12 @@ def main() -> None:
                 torch.save({"version": learner.version, "state_dict": learner.model.state_dict()}, checkpoint_path)
                 checkpoint = str(checkpoint_path)
             quality = rollout_quality(combined, float(metrics["mean_reward"]))
-            is_best = quality > best_quality
+            stage_summary = rollout_stage_summary(combined)
+            is_best = quality > best_quality and stage_gate_allows_promotion(stage_summary, best_stage_summary)
             if is_best:
                 best_quality = quality
-            learner.publish(checkpoint, best=is_best, quality=quality if is_best else None)
+                best_stage_summary = stage_summary
+            learner.publish(checkpoint, best=is_best, quality=quality if is_best else None, stage_summary=stage_summary if is_best else None)
             print(json.dumps({"policy_version": learner.version, "timesteps": learner.timesteps}), flush=True)
         if not consumed:
             time.sleep(0.25)

@@ -1,5 +1,169 @@
 # PKMAI — Live Work Log
 
+## 2026-09-08 — Directed nav graph · Route-1 blocker fix · Catch-v2 · grass/shiny — BUILT, NOT LIVE
+
+Four subsystems built and tested on top of the live 2×2 stack. **827 tests
+green. Nothing is loaded by the running processes, no champion / model /
+savestate touched, no process restarted, and — until this commit — nothing was
+committed.** Each waits for an explicit operator go-live.
+
+**1. Directed navigation graph** (`src/nav_graph.py`, `src/nav_shaping_state.py`,
+`src/loop_guard.py`; `NAV_DIM 31→36`, `nav_obs_v3_directed`).
+The old movement graph was undirected (`_edge_key()` sorted endpoints,
+`_adjacency_for_map()` added both directions) and only recorded 1-tile moves, so
+a one-way Route-1 ledge read as a valid back-path → the endless
+`right-up → ledge-down → right-up` loop, plus a `route_approach ±0.03` oscillation
+farm and `new_tile_full:capped:+0.002` forever on known tiles. New
+`DirectedNavGraph` keys every edge on `(map, from_xy, action)` with a movement
+kind (walk / jump_or_ledge / warp / blocked_static / blocked_dynamic / unknown);
+`directed_bfs` (strict, then a legacy display-only fallback that never grants
+reward); blocked directions need `BLOCKED_CONFIRM_DISTINCT_VISITS = 3`
+temporally-independent confirmations and decay, and any later successful move
+clears the block instantly. `nav_shaping_state` splits into `NavGlobalState`
+(`training_run_id` only, locked RMW) + per-agent `NavAgentState`
+(`runtime/navigation/shaping/agent_<rank>.json`) — highwater and pre-wipe
+recovery are per objective key `(run_id, world_stage, target_source, targets)`;
+`rewarded_next_hop_edges` is run-wide (a physical edge that paid once never
+re-pays through stage/wipe/reset/recovery). `RegionLoopGuard` catches ledge/region
+loops (repeated directed-edge subsequence + return to a prior `(pos, dist)` since
+the last real advance).
+
+**2. Route-1 progress-blocker fix** (`src/pokemon_env.py`, `src/train.py`,
+`tools/clean_nav_graph.py`).
+Champion v4/v5 stuck at `max_world_stage = 2` despite ~100 % Route-1 reach and
+~4 M learner steps — **not** a training-time problem. Root causes:
+- **`target_valid = false` on Route 1.** The strategic target `(10,0)` is a
+  warp-trigger tile (the Route1→Viridian map connection). Stepping onto it leaves
+  the map, so `observe_move`'s cross-map guard never records an incoming edge →
+  `directed_bfs` can never confirm a route → the whole directed reward block
+  (gated on `obj.valid`) never runs → the PPO gets **no** gradient north.
+- **`is_blocked` TTL bug.** `blocked_static` decayed on
+  `(now_step - last_confirmed_step) <= 6000`, but `now_step` (= per-episode
+  `total_steps`) resets every episode while the persisted `last_confirmed_step`
+  does not — so a block confirmed once read as "active" during the exact step
+  window when agents cross Route 1, every later episode. ~343 false statics
+  walled off the south entry.
+- **4-frame position sampling** (`LOCATION_READ_EVERY = 4` × `ACTION_HOLD_FRAMES`)
+  stored continuous walking as >1-tile deltas → ~1380 fake one-way ledges;
+  edges keyed on the last pressed button, not the geometry.
+- **`stage_advance 1→2` +250 paid per episode** (`episode_best_stage` resets) —
+  ~5000 approach steps == one +250 → a "sprint to Route 1, then stop" magnet.
+
+Fix: a symmetric **potential-based geometric approach reward**
+(`_geometric_approach_component`, `GEO_APPROACH_REWARD = 0.02`,
+`GEO_APPROACH_MAX_DELTA = 3`) toward a *verified* exit while the directed route is
+incomplete — closer +, farther the mirror −, A→B→A nets 0 before step cost,
+clamped, gated off during loop / recovery / battle / warp-settle frames.
+`_nav_objective` gains `approach_mode` (directed / legacy / geometric / none),
+`target_verified`, `target_manhattan`; `target_valid` stays confirmed-route-only
+(honest). `stage_advance` is deduped **run-wide** via
+`NavAgentState.stage_advance_already_paid` — explicitly verified that reset, wipe
+and savestate-reload do **not** renew the +250 claim; only a genuine fresh run
+clears it. Move/block recording is gated by `_clean_nav_ctx` (no battle / menu /
+warp-settle frames, `effective_action == requested_action`) with a rank-prefixed
+`visit_id`. `_score()` in `train.py` is the **sole** promotion authority
+(geographic only — no level / XP / KO; `twoby2.promotion.evaluate_promotion`
+marked NOT WIRED); `last_eval_detail` records the concrete rejection reason; the
+nav horizon stamps `_published_champion_version()` (from `model_version.json`),
+not the learner version, so a horizon bump can't fake a champion. `NAV_EVAL_WORKERS = 6`
+ranks 8–13 are bounded at `NAV_EVAL_HORIZON = 55000` so champion eval can't starve
+at large horizons (and never steal a probe slot).
+`tools/clean_nav_graph.py` (dry-run only) backs up `movement_graph_v1.json` and
+removes **only** provably-wrong entries (ledge edges; blocks contradicted by a
+confirmed reverse walk / a legacy adjacency / a same-tile walk edge). Dry-run:
+1380 ledges → 0, ~2509 statics → ~1056, Pallet→`(12,0)` route coverage
+0.4 % → 82 %, Route1→`(10,0)` legacy coverage 82 % → 96 %.
+
+**3. Catch-v2 Battle-PPO** (`src/battle_catch.py`, `src/catch_planner.py`,
+`src/battle_executor.py`). Battle schema **v2** with a **CATCH** action:
+`battle_obs_v2_catch` (116→140), `battle_actions_v2_catch` (11→12),
+`battle_reward_v2_catch` (`_reward_components_v2`, Σ components == step exact).
+v1 (116/11) is untouched and stays the live combat fallback. Gen-III catch maths,
+`_do_catch` state machine + `catch_precheck`. `battle_train.py`: v2 artifacts
+`battle_*_v2.zip` + `battle_model_manifest.json`, `battle_schema_preflight`
+(readable error, never v1-in-v2), `MixedObjectiveScenarioSampler` (75/25
+combat/catch), `evaluate_battle_catch_suite`; `main()` default stays `--schema v1`.
+Promotion gate `twoby2.battle_promotion.battle_catch_gate`
+(success-rate-when-requested ≥ 0.70, per-group ≥ 0.50, target-KO ≤ 0.10,
+balls/catch ≤ 3.0, zero unrequested/trainer catch); reward is never a criterion.
+**Live catch is fail-closed** — `twoby2.battle_ram_live.catch_ram_ready()` returns
+`(False, …)` because the bag / ball-pocket / dex-owned / catch-result RAM is not
+verified for BPRD; `EmulatorBattleDriver.legal_macros` only offers CATCH when the
+flag is True and the precheck passes. Nav side: `species_caught_first:+0.5` is now
+paid only on a validated catch summary (`catch_requested ∧ catch_success ∧
+caught_species_id == target == new`); raw/random catch pays 0.
+
+**4. Grass wild-encounter harvester + fail-closed shiny telemetry**
+(`src/shiny.py`, `src/twoby2/{wild_encounter_harvester,shiny_ram,shiny_counters}.py`).
+`CorridorWalker` + `WildEncounterHarvester`: tile-aware movement (holds a
+direction, re-reads the position every frame, `MAX_FRAMES_PER_TILE = 24`, no
+overshoot; map change / y change / jump / wrong-direction / unreadable → abort +
+anchor restore), ±3 tiles from the *original* scenario anchor, not a PPO action
+and no reward, wired into `battle_env.LiveBattleDriver.reset()` **only** when
+`scenario["harvest"]`. Per-episode variety via `harvest_episode_seed` (same
+`run_seed` reproduces the sequence). `twoby2.scenario_pool.scenario_bucket`
+dedups scenarios per `area|species|enemy_lvl|player_lvl|party_sig|objective_mode`
+bucket (max 3), and `LiveScenarioSampler` serves the least-served bucket first so
+one Rattata seed can't dominate. Shiny is **telemetry only**:
+`src/shiny.py` computes `(tid ^ sid ^ pid_hi ^ pid_lo) < 8`;
+`twoby2.shiny_ram.SHINY_RAM_VERIFIED = False` → `shiny_status()` always returns
+`("unknown", "shiny_ram_unverified")` for wild (player TID/SID offset unverified
+for BPRD). `ShinyCounters(<agent_class>)` writes per-class atomic files
+`runtime/shiny/{battle_fighter,full_agent,watcher}.json` with `fcntl.flock`
+around the whole load→check→modify→atomic-write cycle (tested with 9 spawn
+writers, no lost updates); a persistent `verified_shiny_encounters` set + a
+`resolved_shiny_encounters` map enforce exactly one terminal outcome per
+encounter, and a re-check against the un-truncated set stops an old shiny
+replayed after the 4000-cap eviction from re-counting. FULL vs watcher routing is
+by explicit `NavBattleDriverAdapter(agent_class=)` (never sniffed off `env`).
+Dashboard Status tab: Seen/Caught/Lost/Unknown per Battle/FULL/Watcher + a red
+"SHINY-RAM NICHT VERIFIZIERT" banner. Shiny-catch priority (mask RUN + likely-KO
+moves, `SHINY_CATCH_SUCCESS = 10.0`) is prepared but dormant (only fires on
+`catch_priority == "critical"`, impossible while the RAM is unverified).
+
+**Go-live sequence (operator, after review):** stop the nav trainer →
+`tools/reset_navigation.py --fresh-obs-schema --apply` (fresh nav brain,
+savestates kept) → `tools/clean_nav_graph.py --apply` → restart the nav trainer
+on the new code → sample `inst_*` after ~20–30 min and compare Route-1 reach,
+`target_valid`, blocked-direction count, ledge counter, and Stage-3 reach.
+Catch-v2 and shiny stay gated until their RAM probes pass and are approved
+separately.
+
+## 2026-09-07 — Navigation/Battle 2×2 CUT OVER — split stack is LIVE
+
+The 2×2 split is **running now**, started with `scripts/start_2x2_visible.sh`
+(`PKMAI_TWOBY2_LIVE=1`, which flips the six `twoby2.FEATURES` live gates ON).
+`tools/migrate_to_2x2.py --execute` ran (`runtime/model_manifest.json`,
+`migration_state: executed`); the learners were initialised from their champions.
+
+Live processes: `src/train.py` (`NUM_ENVS = 40`, **40 FULL agents from the master
+start — no BRIDGE/FRONTIER/RETENTION/FIGHTER under 2×2**, one navigation PPO) ·
+`src/battle_train.py --workers 9` (separate battle PPO, 8 headless + 1 mirror) ·
+`tools/battle_mirror_watch.py` · `src/watch.py` (inference only) ·
+`src/web_stream.py` :8001 (`twoby2_brains_v1` status) · `tools/pkmai_status.py`
+(`PKMai 2x2 STATUS`).
+
+Last reported (~22:52, `tools/pkmai_status.py`):
+- **Navigation**: learner ≈ 2.72 M steps, champion **v5 @ 2.50 M**, +≈0.22 M;
+  8 FULL runs done; intro/stairs/exit/starter all 1000‰; max stage 2, 7 maps,
+  0 badges. `training_phase: full_brain`.
+- **Battle**: ≈ 200 K steps, 348 PPO updates, learner_version 43; champion still
+  **RULE fallback** (`battle_champion.rule.json`); 1699 episodes, **0 wins**,
+  37 KOs, 0 wipes, 1 scenario (route1), in champion-evaluation. The 0-win rate
+  is a training issue to watch, not a wiring one.
+- **Watcher**: navigation champion v5, no learning.
+
+Isolation (enforced): out of battle only the navigation PPO learns; in battle
+`NavigationBattleWrapper` runs the fight via the real `EmulatorBattleDriver`
+stepping the raw emulator, so the navigation PPO never sees damage/KO/win/level.
+`max_level` removed from the champion promotion key in `train.py`.
+`PPO_N_STEPS = 512` navigation updates independent of the horizon.
+5 BPRD battle RAM addresses verified (20 dumps); live SWITCH still masked.
+592 tests green. Backup: `brain_backups/pre_2x2_activation_20260907_200507/`.
+
+**Rollback**: stop the stack, unset `PKMAI_TWOBY2_LIVE`, restore from that backup
+(`RESTORE.md`), start the legacy stack (`scripts/start_all.sh`). No commit, no push.
+
 ## 2026-09-06 — Restore training throughput; preserve live watcher
 
 User clarified that only the watcher needs smooth pacing. Reverted TRAIN_DEVICE

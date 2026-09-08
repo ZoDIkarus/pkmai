@@ -58,6 +58,7 @@ class MainBattleReader:
         self.candidates = None
         self.samples = 0
         self.offset = None
+        self.last_result = None
 
     def read(self, ram, frames=14):
         if ram is None or len(ram) < 0x48000:
@@ -70,9 +71,16 @@ class MainBattleReader:
             return callback(u32(base+4)) and callback(u32(base+12))
         if self.offset is not None:
             if valid(self.offset):
-                return bool(int(ram[self.offset+0x439]) & 2)
-            self.__init__()
-            return None
+                self.last_result = bool(int(ram[self.offset+0x439]) & 2)
+                return self.last_result
+            # Callback transitions can make the located gMain look invalid for
+            # a sample. Re-discover it without turning a known active battle
+            # into a false out-of-battle edge.
+            last = self.last_result
+            self.candidates = None
+            self.samples = 0
+            self.offset = None
+            return last
         if self.candidates is None:
             self.candidates = {
                 base: u32(base+0x24)
@@ -90,5 +98,6 @@ class MainBattleReader:
             self.samples = 0
         elif len(self.candidates) == 1 and self.samples >= 2:
             self.offset = next(iter(self.candidates))
-            return bool(int(ram[self.offset+0x439]) & 2)
-        return None
+            self.last_result = bool(int(ram[self.offset+0x439]) & 2)
+            return self.last_result
+        return self.last_result

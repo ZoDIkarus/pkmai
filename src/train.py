@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import math
 import torch
@@ -24,7 +25,7 @@ from pokemon_env import PokemonFireRedEnv
 # Das ergibt 25.600 Samples pro PPO-Update und laesst Rewards innerhalb langer
 # Intro-/Navigationsfolgen wesentlich weiter zurueckwirken.
 # Sichtbar gerendert wird nur der unabhaengige Watcher; Rendering trainiert nicht.
-NUM_ENVS = 46  # 2026-09-07 (user): 60 -> 46 to lift per-env FPS
+NUM_ENVS = 40 if os.environ.get("PKMAI_TWOBY2_LIVE") == "1" else 46
 
 # Endlos-Training: laeuft in Bloecken weiter, bis du Ctrl+C drueckst.
 # TRAIN_CHUNK_TIMESTEPS ist nur die Groesse eines learn()-Blocks.
@@ -71,14 +72,16 @@ SHARED_CURRICULUM_DIR = os.path.join(RUNTIME_DIR, "curriculum_shared")
 # ================================================================
 # INTERNAL PATHS - normalerweise nicht aendern
 # ================================================================
-MODEL_DIR = os.path.join(RUNTIME_DIR, "checkpoints")
-LATEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_latest.zip")
-BEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_champion.zip")
-CANDIDATE_MODEL = os.path.join(MODEL_DIR, "pokemon_model_candidate.zip")
-RESUME_MODEL = os.path.join(MODEL_DIR, "pokemon_model_resume.zip")
-CHAMPION_FILE = os.path.join(RUNTIME_DIR, "champion_score.json")
-TRAINER_STATUS_FILE = os.path.join(RUNTIME_DIR, "trainer_status.json")
-VERSION_FILE = os.path.join(RUNTIME_DIR, "model_version.json")
+_TWOBY2_LIVE = os.environ.get("PKMAI_TWOBY2_LIVE") == "1"
+MODEL_DIR = os.path.join(RUNTIME_DIR, "navigation", "checkpoints") if _TWOBY2_LIVE else os.path.join(RUNTIME_DIR, "checkpoints")
+LATEST_MODEL = os.path.join(MODEL_DIR, "navigation_latest.zip" if _TWOBY2_LIVE else "pokemon_model_latest.zip")
+BEST_MODEL = os.path.join(MODEL_DIR, "navigation_champion.zip" if _TWOBY2_LIVE else "pokemon_model_champion.zip")
+CANDIDATE_MODEL = os.path.join(MODEL_DIR, "navigation_candidate.zip" if _TWOBY2_LIVE else "pokemon_model_candidate.zip")
+RESUME_MODEL = os.path.join(MODEL_DIR, "navigation_learner.zip" if _TWOBY2_LIVE else "pokemon_model_resume.zip")
+_NAV_STATUS_DIR = os.path.join(RUNTIME_DIR, "navigation") if _TWOBY2_LIVE else RUNTIME_DIR
+CHAMPION_FILE = os.path.join(_NAV_STATUS_DIR, "champion_score.json")
+TRAINER_STATUS_FILE = os.path.join(_NAV_STATUS_DIR, "trainer_status.json")
+VERSION_FILE = os.path.join(_NAV_STATUS_DIR, "model_version.json")
 SKILL_SCORE_FILE = os.path.join(RUNTIME_DIR, "skill_vault_scores.json")
 SKILL_MODELS = {
     "intro": os.path.join(MODEL_DIR, "pokemon_skill_intro_best.zip"),
@@ -172,6 +175,17 @@ def load_global_exploration():
     return edges, maps, transitions
 
 
+# 2x2 live seam — no-op while twoby2.FEATURES['nav_battle_wrapper'] is OFF.
+try:
+    from twoby2.live_integration import maybe_wrap_full_agent as _twoby2_wrap
+    from twoby2.live_integration import latest_battle_champion_policy as _twoby2_rule_policy
+    from twoby2.nav_chunk_rollout import NavChunkedRollout as _TwoBy2NavChunk  # noqa: F401
+except Exception:  # pragma: no cover - twoby2 always importable in this repo
+    def _twoby2_wrap(env, **_):
+        return env
+    _twoby2_rule_policy = None
+
+
 def make_env(
     rank,
     shared_edges,
@@ -182,9 +196,10 @@ def make_env(
     shared_species,
     shared_tiles,
     n_envs=NUM_ENVS,
+    battle_policy=None,
 ):
     def _init():
-        return PokemonFireRedEnv(
+        env = PokemonFireRedEnv(
             rank=rank,
             shared_edges=shared_edges,
             shared_maps=shared_maps,
@@ -195,6 +210,10 @@ def make_env(
             shared_tiles=shared_tiles,
             n_envs=n_envs,
         )
+        # FULL agent: navigation champion/learner out of battle, pinned battle
+        # champion in battle (via NavigationBattleWrapper + EmulatorBattleDriver).
+        policy = battle_policy or _twoby2_rule_policy
+        return _twoby2_wrap(env, learning=True, battle_policy=policy)
     return _init
 
 
@@ -229,10 +248,12 @@ class MilestoneCheckpointCallback(BaseCallback):
         self.min_full_episodes = 8
         self.champion_score = None
         self.champion_metrics = {}
+        self._champion_route1_reach = None
         self.rollback_count = 0
         self.regression_strikes = 0
         self.last_eval_metrics = {}
         self.last_eval_result = ""
+        self.last_eval_detail = ""          # concrete rejection / promotion reason
         self.last_eval_at_step = 0
         self.skill_scores = {}
         # Nur Telemetrie. V10.28.1: der zeitbasierte Stale-Champion-Fallback
@@ -240,6 +261,24 @@ class MilestoneCheckpointCallback(BaseCallback):
         # eine fruehgame-vergessliche Policy ersetzen, nur weil Zeit verging.
         self.steps_since_champion_update = 0
         self.champion_published_at_step = 0
+
+        # 2x2 adaptive navigation horizon (twoby2.horizon). The per-worker
+        # episode-length split (80% current rung / 20% probe next) is already
+        # read live by pokemon_env._episode_step_limit; what was missing is the
+        # advancement trigger. Every champion eval now feeds the gate and, when
+        # it passes, raises the rung by one and persists nav_horizon.json (which
+        # the workers re-read per episode). No-op unless PKMAI_TWOBY2_LIVE and
+        # the adaptive_nav_horizon feature gate are on.
+        self._nav_horizon_path = os.path.join(_NAV_STATUS_DIR, "nav_horizon.json")
+        self._horizon_runs_at_rung = 0
+        self._nav_horizon_snapshot = {}
+        try:
+            if os.path.exists(self._nav_horizon_path):
+                with open(self._nav_horizon_path, "r") as f:
+                    _hd = json.load(f) or {}
+                self._horizon_runs_at_rung = int(_hd.get("evaluated_full_runs", 0) or 0)
+        except Exception:
+            pass
 
         # V10.9:
         # Letzten bekannten Episode-Zustand jedes VecEnv-Slots
@@ -260,6 +299,7 @@ class MilestoneCheckpointCallback(BaseCallback):
                     data = json.load(f) or {}
                 raw = data.get("score")
                 self.champion_metrics = dict(data.get("metrics") or {})
+                self._champion_route1_reach = data.get("route1_reach_rate")
                 if data.get("progress_schema") != PokemonFireRedEnv.PROGRESS_SCHEMA:
                     old = int(self.champion_metrics.get("max_stage", 0))
                     self.champion_metrics["max_stage"] = {4: 1, 5: 1, 6: 4, 7: 5, 8: 6, 9: 6}.get(old, old)
@@ -593,7 +633,6 @@ class MilestoneCheckpointCallback(BaseCallback):
             int(m.get("full_exit_permille", 0)),
             int(m.get("full_stairs_permille", 0)),
             int(m.get("full_intro_permille", 0)),
-            int(m.get("max_level", 0)),
             int(m.get("max_maps", 0)),
             -int(m.get("full_best_stage_steps", 1_000_000) or 1_000_000),
         )
@@ -700,7 +739,7 @@ class MilestoneCheckpointCallback(BaseCallback):
         measured_stage = int(metrics.get("max_stage", 0))
         old_stage = int(old.get("max_stage", 0))
         # world_stage / Tiefe immer als Untergrenze halten (auch mit Full-Runs).
-        for k in ("max_stage", "max_level", "max_badges"):
+        for k in ("max_stage", "max_badges"):
             metrics[k] = max(int(metrics.get(k, 0)), int(old.get(k, 0)))
         if int(metrics.get("full_episodes", 0)) > 0:
             # Eine schnelle Episode auf einer flacheren Stufe ist kein
@@ -783,7 +822,11 @@ class MilestoneCheckpointCallback(BaseCallback):
                 "effective_skill_scores": effective_scores,
                 "last_eval_metrics": dict(self.last_eval_metrics),
                 "last_eval_result": str(self.last_eval_result),
+                "last_eval_detail": str(self.last_eval_detail),
                 "last_eval_at_step": int(self.last_eval_at_step),
+                "promotion_authority": "train._score (geographic navigation only)",
+                "published_champion_version": self._published_champion_version(),
+                "nav_horizon": dict(getattr(self, "_nav_horizon_snapshot", {}) or {}),
                 "frontier": self._frontier_stats(),
                 "training_phase": "full_brain" if full_only else (
                     "1_intro" if int(effective_scores.get("intro", 1000)) < 880
@@ -807,6 +850,8 @@ class MilestoneCheckpointCallback(BaseCallback):
                 "score": list(score),
                 "metrics": metrics,
                 "progress_schema": PokemonFireRedEnv.PROGRESS_SCHEMA,
+                "nav_obs_schema": PokemonFireRedEnv.NAV_OBS_SCHEMA,
+                "route1_reach_rate": self._champion_route1_reach,
                 "timesteps": int(self.num_timesteps),
                 "version": int(self.version),
             }, f)
@@ -817,6 +862,7 @@ class MilestoneCheckpointCallback(BaseCallback):
         self.model.save(LATEST_MODEL)
         self.champion_score = tuple(score)
         self.champion_metrics = dict(metrics)
+        self._champion_route1_reach = self._route1_reach_rate()
         self._write_champion_score(score, metrics)
         self.steps_since_champion_update = 0
         self.champion_published_at_step = int(self.num_timesteps)
@@ -885,6 +931,35 @@ class MilestoneCheckpointCallback(BaseCallback):
 
         return False
 
+    def _protected_regression_detail(self, candidate):
+        """A concrete reason string for the trainer status (spec point 5) -
+        never just 'rejected'."""
+        old = self.champion_metrics or {}
+        n = int(candidate.get("full_episodes", 0))
+        if n < self.min_full_episodes:
+            return (f"only {n} completed full runs (need "
+                    f"{self.min_full_episodes})")
+        pairs = [("full_starter_permille", "starter"),
+                 ("full_intro_permille", "intro"),
+                 ("full_exit_permille", "exit"),
+                 ("full_stairs_permille", "stairs")]
+        drops = [f"{name} {int(old.get(k, 0))/10:.1f}% -> "
+                 f"{int(candidate.get(k, 0))/10:.1f}%"
+                 for k, name in pairs
+                 if int(candidate.get(k, 0)) < int(old.get(k, 0)) - 50]
+        return "protected regression: " + ("; ".join(drops) or "early-game skill drop")
+
+    def _published_champion_version(self):
+        """The version of the ACTUALLY-published champion (model_version.json),
+        NOT self.version (the learner counter, always one ahead). A horizon
+        advance must never stamp a champion version that was never published
+        (spec point 5: v4 file vs nav_horizon v5)."""
+        try:
+            with open(VERSION_FILE) as f:
+                return int(json.load(f).get("version", 0) or 0)
+        except (OSError, ValueError, TypeError):
+            return 0
+
     def _rollback_to_champion(self):
         """Restore policy + optimizer and make the safe state restartable."""
         if not os.path.exists(BEST_MODEL):
@@ -906,6 +981,17 @@ class MilestoneCheckpointCallback(BaseCallback):
             print(f"⚠️ Auto-Rollback fehlgeschlagen: {exc}")
             return False
 
+    def _route1_reach_rate(self):
+        """Fleet Route-1 reach rate (curriculum transition 1->2 success). The
+        directed-nav champion must not regress this vs the standing champion."""
+        try:
+            import curriculum_v20
+            cur = curriculum_v20.CurriculumState.load(pokemon_env.V20_STATE_FILE)
+            rec = cur.transitions.get(1)
+            return round(float(rec.success_rate), 3) if rec is not None else None
+        except Exception:
+            return None
+
     def _evaluate(self):
         metrics = self._metrics()
         if metrics["episodes"] < self.min_eval_episodes or metrics["full_episodes"] < self.min_full_episodes:
@@ -916,33 +1002,167 @@ class MilestoneCheckpointCallback(BaseCallback):
         score = self._score(metrics)
         self.model.save(CANDIDATE_MODEL)
 
-        if self._protected_regression(metrics):
-            self.last_eval_result = "regression"
+        _r1_now = self._route1_reach_rate()
+        _r1_champ = getattr(self, "_champion_route1_reach", None)
+        _r1_regressed = (
+            _r1_now is not None and _r1_champ is not None
+            and _r1_now < _r1_champ - 0.05)
+
+        # Navigation champion promotion has EXACTLY ONE authority: _score()
+        # below (geographic depth + reproducible story chain, never level / XP /
+        # KO / battle reward). The reference design in twoby2.promotion is NOT
+        # wired into this path. Every rejection records a concrete reason.
+        if self._protected_regression(metrics) or _r1_regressed:
+            self.last_eval_result = (
+                "route1_reach_regressed" if _r1_regressed else "regression"
+            )
+            if _r1_regressed:
+                self.last_eval_detail = (
+                    f"route1 reach {_r1_now:.0%} < champion {_r1_champ:.0%} - 5pp")
+            else:
+                self.last_eval_detail = self._protected_regression_detail(metrics)
             self.regression_strikes += 1
             self.steps_since_champion_update += int(metrics["full_episodes"])
-            print(
-                f"⚠️ Full-Regression erkannt "
-                f"(Messung {self.regression_strikes}). "
-                "Champion bleibt erhalten."
-            )
+            if _r1_regressed:
+                print(
+                    f"⚠️ Route-1 reach rate {_r1_now:.0%} < champion "
+                    f"{_r1_champ:.0%} - 5pp "
+                    f"(Messung {self.regression_strikes}). "
+                    "Champion bleibt erhalten."
+                )
+            else:
+                print(
+                    f"⚠️ Full-Regression erkannt "
+                    f"(Messung {self.regression_strikes}). "
+                    "Champion bleibt erhalten."
+                )
             if self.regression_strikes >= 3:
                 self._rollback_to_champion()
         elif self.champion_score is None or score > self.champion_score:
             self.last_eval_result = "champion"
+            self.last_eval_detail = f"score {score} > champion {self.champion_score}"
             self.regression_strikes = 0
             self._publish_champion(score, metrics, "Recent-Eval")
         else:
             self.last_eval_result = "rejected"
+            self.last_eval_detail = (
+                f"score not improved: candidate {score} <= champion "
+                f"{self.champion_score} (max_stage cand="
+                f"{metrics.get('max_stage')} vs champ="
+                f"{(self.champion_metrics or {}).get('max_stage')}; "
+                f"exit permille cand={metrics.get('full_exit_permille')} vs "
+                f"champ={(self.champion_metrics or {}).get('full_exit_permille')})")
             self.regression_strikes = 0
             self.steps_since_champion_update += int(metrics["full_episodes"])
             print(
                 "🧪 Candidate noch nicht Champion, aber ohne harte Regression "
-                "-> Training innerhalb der Schutzgrenze geht weiter."
+                f"-> {self.last_eval_detail}"
             )
+
+        # A regressed learner must never unlock a longer horizon. Only a
+        # candidate inside the champion safety envelope may advance it.
+        if self.last_eval_result not in ("regression", "route1_reach_regressed"):
+            self._maybe_advance_nav_horizon(metrics)
 
         self.recent.clear()
         self.recent_full.clear()
         return True
+
+    def _maybe_advance_nav_horizon(self, metrics):
+        """Raise the navigation episode horizon by exactly one rung when the
+        twoby2.horizon gate passes (>=100 evaluated full runs at the current
+        rung, >=80% reproduction of the reliably-reached stage, >=80% on every
+        crossed transition, early-game retention intact, no hard candidate
+        regression). Persists runtime/navigation/nav_horizon.json; the workers
+        re-read it per episode. No-op unless PKMAI_TWOBY2_LIVE and the
+        adaptive_nav_horizon feature gate are on."""
+        if not _TWOBY2_LIVE:
+            return
+        try:
+            from twoby2 import feature_enabled
+            if not feature_enabled("adaptive_nav_horizon"):
+                return
+            from twoby2.horizon import NavHorizonState, NAV_EPISODE_HORIZONS
+        except Exception:
+            return
+
+        full = list(self.recent_full)
+        n_full = len(full)
+        self._horizon_runs_at_rung += int(metrics.get("full_episodes", 0) or 0)
+
+        max_stage = int(metrics.get("max_stage", 0) or 0)
+        if n_full and max_stage > 0:
+            stage_repro = sum(
+                1 for r in full if int(r.get("stage", 0)) >= max_stage
+            ) / n_full
+        else:
+            stage_repro = 0.0
+
+        transition_rates = {}
+        try:
+            import curriculum_v20
+            cur = curriculum_v20.CurriculumState.load(pokemon_env.V20_STATE_FILE)
+            for s in range(1, max(1, max_stage)):
+                rec = cur.transitions.get(s)
+                if rec is not None:
+                    transition_rates[str(s)] = round(float(rec.success_rate), 3)
+        except Exception:
+            pass
+
+        retention_passed = not self._protected_regression(metrics)
+        candidate_passed = self.last_eval_result not in (
+            "regression", "route1_reach_regressed"
+        )
+
+        try:
+            _champ_ver = self._published_champion_version()
+            st = NavHorizonState.load_or_new(
+                self._nav_horizon_path,
+                champion_metrics={
+                    "confirmed": True,
+                    "effective_live_horizon": PokemonFireRedEnv.LONG_FULL_PROBE_STEPS,
+                    "version": _champ_ver,
+                },
+            )
+            res = st.advance_if_ready(
+                evaluated_full_runs=self._horizon_runs_at_rung,
+                stage_reproduction_rate=stage_repro,
+                transition_rates=transition_rates,
+                retention_passed=retention_passed,
+                candidate_passed=candidate_passed,
+                navigation_champion_version=_champ_ver,
+            )
+            if res.get("advanced"):
+                self._horizon_runs_at_rung = 0
+                st.evaluated_full_runs = 0
+                nxt = NAV_EPISODE_HORIZONS[min(res["horizon_index"] + 1,
+                                               len(NAV_EPISODE_HORIZONS) - 1)]
+                print(
+                    f"🎚️ NAV-HORIZON: {res['advancement_reason']} "
+                    f"| Episodenlaenge jetzt {res['horizon']:,} Steps "
+                    f"(~80% Flotte), 20% probt {nxt:,}"
+                )
+            else:
+                print(
+                    "🎚️ NAV-HORIZON haelt bei "
+                    f"{st.current_horizon:,} Steps "
+                    f"(runs {self._horizon_runs_at_rung}/100): "
+                    + "; ".join(res.get("reasons", []) or ["-"])
+                )
+            st.save_atomic(self._nav_horizon_path)
+            self._nav_horizon_snapshot = {
+                "horizon": st.current_horizon,
+                "horizon_index": st.current_horizon_index,
+                "next_horizon": st.next_horizon,
+                "at_top": bool(st.at_top),
+                "runs_at_rung": int(self._horizon_runs_at_rung),
+                "stage_reproduction_rate": round(stage_repro, 3),
+                "transition_rates": transition_rates,
+                "advanced": bool(res.get("advanced")),
+                "blocked_by": [] if res.get("advanced") else list(res.get("reasons", [])),
+            }
+        except Exception as exc:
+            print(f"⚠️ NAV-HORIZON check failed: {exc}")
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
@@ -968,7 +1188,6 @@ class MilestoneCheckpointCallback(BaseCallback):
             1 if int(champion.get("full_starter_permille", 0)) > 0 else 0,
             1 if int(champion.get("full_exit_permille", 0)) > 0 else 0,
             1 if int(champion.get("full_stairs_permille", 0)) > 0 else 0,
-            int(champion.get("max_level", 0)),
         )
 
         for info in infos:
@@ -995,14 +1214,13 @@ class MilestoneCheckpointCallback(BaseCallback):
             stairs = int(stage in ("F1_TO_EXIT", "OUTDOOR"))
             exit_done = int(stage == "OUTDOOR")
 
-            key = (badges, wstage, starter, exit_done, stairs, level)
+            key = (badges, wstage, starter, exit_done, stairs)
             if key <= champion_key:
                 continue
 
             metrics = self._metrics_floor(self._metrics())
             metrics["max_badges"] = max(int(metrics.get("max_badges", 0)), badges)
             metrics["max_stage"] = max(int(metrics.get("max_stage", 0)), wstage)
-            metrics["max_level"] = max(int(metrics.get("max_level", 0)), level)
             metrics["full_best_stage_steps"] = int(
                 info.get("episode_steps", 0) or 0
             )
@@ -1380,12 +1598,39 @@ def main():
     else:
         load_model = LATEST_MODEL
 
+    def _nav_obs_schema_preflight(path):
+        """Fail closed: a checkpoint whose 'nav' Box width != the env's current
+        NAV_DIM must NOT be loaded silently with the wrong shape."""
+        try:
+            import zipfile, pickle, io
+            with zipfile.ZipFile(path) as z:
+                raw = z.read("data")
+            # SB3 stores a JSON blob; find the nav Box shape without a full load
+            import json as _j
+            txt = raw.decode("utf-8", "ignore")
+            want = int(PokemonFireRedEnv.NAV_DIM)
+            m = re.search(r'"nav".{0,400}?"shape".{0,40}?\[\s*(\d+)', txt, re.S)
+            if m and int(m.group(1)) != want:
+                raise SystemExit(
+                    f"\n❌ Navigation obs schema mismatch: {os.path.basename(path)} "
+                    f"expects nav width {m.group(1)}, this env is "
+                    f"{PokemonFireRedEnv.NAV_OBS_SCHEMA} (width {want}).\n"
+                    f"   Run:  PYTHONPATH=src python tools/reset_navigation.py "
+                    f"--fresh-obs-schema --apply\n"
+                    f"   (archives the old models, keeps savestates + curriculum "
+                    f"+ movement graph)\n")
+        except SystemExit:
+            raise
+        except Exception:
+            pass   # unreadable zip -> let PPO.load surface its own error
+
     if os.path.exists(load_model):
         print(
             "🏆 Lade Champion-Modell..."
             if load_model == BEST_MODEL
             else "🧠 Lade aktuelles Modell als Champion-Basis..."
         )
+        _nav_obs_schema_preflight(load_model)
         model = PPO.load(
             load_model,
             env=vec_env,
@@ -1423,6 +1668,16 @@ def main():
             verbose=1,
             device=device
         )
+        # A genuinely fresh navigation PPO -> bump the shared training_run_id so
+        # every worker's private shaping file (per-objective highwater, run-wide
+        # rewarded next-hop edges, wild-win + catch counters) restarts clean.
+        try:
+            from nav_shaping_state import NavGlobalState
+            _g = NavGlobalState(pokemon_env.NAV_GLOBAL_FILE)
+            _rid = _g.start_fresh_run(lock=None)
+            print(f"🧭 nav shaping: fresh training run #{_rid}")
+        except Exception as _exc:
+            print("nav shaping fresh-run bump failed:", _exc)
 
     # Validate and publish the initial policy so a fresh watcher can act
     # immediately, even before the first periodic checkpoint.

@@ -1,5 +1,14 @@
 # PKMAI V10.25 AI handoff
 
+> **Historical (V10.25).** This predates the V13–V20 curriculum work and the
+> 2026-09-07 Navigation/Battle 2×2 build. For the current state read, in order:
+> [`AI_STATUS.md`](AI_STATUS.md) (top entry), [`CURRENT_LOGIC.md`](CURRENT_LOGIC.md),
+> [`BATTLE_ARCHITECTURE.md`](BATTLE_ARCHITECTURE.md) and
+> [`BIG_CHANGES_TODO.md`](BIG_CHANGES_TODO.md). The observation/action invariants
+> and the learner/champion/skill-vault separation described here still hold for
+> the legacy single-PPO stack; the fleet size, roles, reward numbers and phase
+> names are superseded.
+
 This document is the technical continuation point for an AI or developer working on PKMAI. Read it together with `README.md` and inspect the current Git diff before changing source files.
 
 ## Current objective

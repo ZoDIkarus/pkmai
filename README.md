@@ -1,1081 +1,305 @@
 # PKMAI — Pokémon FireRed AI by Alex
 
-PKMAI is an experimental reinforcement-learning project that trains a PPO agent to play Pokémon FireRed with Stable-Retro. It combines visual input, RAM-derived navigation features, persistent exploration memory, curriculum states, a live watcher and a browser dashboard.
-
-> This repository does not contain a Pokémon ROM or proprietary game assets. You must provide your own legally obtained game data and local Stable-Retro integration.
-
-## Consolidated behavior — 2026-09-06
-
-**Authoritative current reference:** [Roles, rewards, checkpoints and update timing](docs/CURRENT_LOGIC.md).
-This supersedes conflicting numbers and restart advice in the historical release notes below.
-
-- Trainer battles: normal combat rewards plus +50 start/+50 complete win per trainer and episode. Brock start +500 replaces +50; badge +2000. Navigation roles get only 10% positive wild-combat rewards after three opponent KOs; Fighter exempt.
-- Unknown onward transition: **+0.3 per new episode tile, uncapped**, for all navigation roles; fleet-first discovery adds **+1**, including FULL. Combat values unchanged.
-- 46 learners: **FULL 18 / BRIDGE 8 / FRONTIER 12 / RETENTION 4 / FIGHTER 4**, one shared PPO.
-- Fighter receives **only combat rewards**, at the same values as other roles; only wild-battle decay after three fainted opponents is disabled for Fighter.
-- Healthy Frontier starts require every party member at least 80% HP, no status ailment and usable PP. The local Route-1 anchor was repaired to 62/62 HP with its original position and team preserved.
-- Frontier/Fighter episodes end after a party wipe. Frontier resets after 120 trusted travel steps below its starting stage; Fighter resets after 400 consecutive non-battle steps.
-- Default training restart resumes the saved learner and its real step count; no champion rollback or fresh reset.
-- Trainer is intentionally stopped. Watcher remains running; do not restart it during the stream. Reload only the dashboard when convenient to get the filters.
-- PPO updates every 512 actions per environment (30,720 samples at 60 environments). Longer episode limits do not postpone updates until episode end.
-
-## Current training and watcher behavior
-
-Only the trainer learns. The watcher evaluates valid `pokemon_model_resume.zip`
-snapshots, independently of champion promotion. Before switching, it checks all
-policy parameters for finite values and verifies a prediction. A rejected
-snapshot never replaces an already working policy; a changed snapshot is checked
-again. At startup, fallback order is champion, latest, then the local
-`runtime/checkpoints/watcher_recovery.zip`.
-
-### Watcher display baseline — 2026-09-06
-
-The default watcher now displays **every emulator frame**, targeting **59.7 FPS**.
-The AI still holds each button for **9 frames** and releases it for **5 frames**:
-training inputs, action boundaries and observations are unchanged. Only the
-watcher enables the optional per-frame display callback. Deadline pacing avoids
-catch-up bursts after a pause. No audio output is required.
-
-Statistics refresh separately every 0.5 seconds. A background worker publishes
-JPEGs at up to 30 FPS with only one pending frame, so slow encoding cannot build
-an old-frame backlog. The browser uses `/watcher.mjpg` instead of polling a JPEG
-every 500 ms; hidden watcher views disconnect. Snapshot endpoints remain available.
-Model loading and reward computation can still introduce pauses between actions.
-
-**Current run: fresh reset, as requested by the user.** No old learned policy is
-active. The temporary recovery model and existing progress were moved into
-`brain_backups/fresh_reset_20260906_141332/`. Trainer, watcher, web and status
-were restarted with empty curriculum/exploration state and a newly initialized
-PPO policy. Training uses `TRAIN_DEVICE = "auto"` again (MPS on this Mac), with no FPS
-limit or display callback in training. Only the watcher is paced at 59.7 FPS.
-The origin of the previous non-finite checkpoint values is still unconfirmed.
-The trainer checks initial policy weights and atomically publishes the fresh
-resume immediately, allowing the watcher to act before periodic checkpoints.
-The 9+5 inputs and per-frame watcher display remain enabled. Every ordinary trainer restart preserves the saved learner and its step counter,
-even before a champion exists; no environment flag is required. Do not restart the watcher during an active stream.
-
-**Verified:** 106 tests passed; the running watcher executed actions and reported
-59.7 displayed FPS, with about 24 JPEG updates/s measured locally. These are
-observed values, not guaranteed performance on every machine.
-
-This behavior is the source default used by `src/watch.py` and `src/web_stream.py`.
-The stopped trainer picks up source changes on its next start. Reload the dashboard
-to get UI changes; preserve the active watcher process during streaming. Model archives,
-backups, ROMs and runtime data are deliberately excluded from Git. On another
-machine, supply a compatible, valid checkpoint locally; Git alone does not carry
-model weights. Details: [live work log](docs/AI_STATUS.md).
-
-As of **V20 CURRICULUM MODES** (`BUILD_TAG = "V20_CURRICULUM_MODES"`) the fleet
-is split into five mutually exclusive training modes that all train the **same**
-PPO policy (no second network):
-
-| Mode | Start | Purpose |
-|---|---|---|
-| `FULL` | real `StartGame` | can the shared policy chain everything together? |
-| `BRIDGE` | entry checkpoint of the current bottleneck stage | learn the first hop Full runs cannot reproduce |
-| `FRONTIER` | deepest discovered frontier | discover the next unknown story transition |
-| `RETENTION` | rotates mastered-transition entry checkpoints | prevent catastrophic forgetting |
-| `FIGHTER` | healthy Route-1 frontier anchor | train only combat rewards |
-
-plus the existing dynamic `POST_WIPE_RECOVERY` overlay. Allocation is the
-12 / 12 / 6 / 3 ratio applied after reserving four Fighter slots
-(at 46 envs: 18 / 8 / 12 / 4 / 4).
-
-Two separate progress concepts now exist:
-
-- **`discovered_stage`** — deepest world-stage *any* agent has ever reached.
-- **`mastered_stage`** — deepest transition the *shared* PPO policy reproduces
-  reliably. A transition (Pallet→Route1, Route1→Viridian, …) is *mastered* only
-  when its rolling window (50) has ≥ 20 attempts, ≥ 80 % success **and** ≥ 5
-  Full-from-start confirmations. A lucky scout can never promote a stage; only
-  Full-chain evidence moves `mastered_stage`.
-
-The **`current_bottleneck`** is the earliest discovered transition that is not
-mastered; `BRIDGE` agents concentrate there and automatically walk forward
-(Route1→Viridian → Viridian→Route2 → Route2→Forest → Forest→Pewter) as each hop
-is mastered.
-
-Navigation targets come **only** from real recorded `stage N → stage N+1`
-crossings (`runtime/curriculum_v20/known_transitions.json`). An undiscovered
-next hop → `UNKNOWN_NEXT_TRANSITION`: exploration on, no target, no fake
-coordinate (no north-most point, map edge, nearest frontier, house or dead end).
-
-Reward model (see the dated section in `docs/STATUS_TODO.md` for the full list):
-the push forward comes from `STAGE_ADVANCE_REWARD` (+250 per new world-stage,
-new episode best only) and **non-farmable** target shaping — `TargetShaper`
-pays `TARGET_PROGRESS_REWARD` (0.05) × improvement **only on a new episode-best
-graph distance** to the known target; returning to an already-achieved distance
-pays nothing, so `A→B→A→B` can never repeatedly earn positive progress. Backtrack
-is a tiny flat `−0.01` only past a 3-tile margin. Tiles are a flat "keep moving"
-trickle (Pallet 0.1 … Pewter 3.0, first 20/map/episode then 10 %, +1 fleet-once).
-New route 50/run, city 300/run, **generic city buildings pay 0** (a random house
-is no longer a story jackpot — Center/Mart/Gym keep their own dedicated rewards),
-first global stage unlock 1000-once. Pokécenter enter 50/run, deeper heal 500/run
-(wipe respawn anchor), 1000-once; Poké Mart 100/run + 1000-once; badge 3000/run +
-5000-once. Pewter/Brock split into small episode-flagged milestones (reach Pewter
-with Pikachu +300, gym enter +200, Brock battle start +500, first gym KO +300).
-**In a battle only continuous signals pay** — dealt/taken damage, healing,
-level-up, catching; no flat KO or win bonus. Trainer battles pay double on damage
-and skip the wild decay (30 % after 6 wild wins). All edge/warp/corridor farm
-rewards stay off. A `ShortCycleGuard` detects `A-B-A-B` / `A-B-C-A-B-C` loops,
-suppresses positive shaping, applies an escalating `−0.05 … −0.25` penalty and
-truncates the episode after sustained cycling. Persistent claim history
-(`reward_events.json`) keeps every one-time bonus one-time across restarts.
-
-Checkpoints are now two kinds (the old "north-most Y wins" replacement is gone —
-invalid in forests, caves, buildings): `stage_<n>` is the **entry** checkpoint,
-saved on first safe entry and **immutable** thereafter; `stage_frontier_<n>` is
-an optional discovery anchor that advances only on a strictly higher **topological
-frontier value** (see the FRONTIER-redesign section below), never on Y or tile
-count.
-
-`_episode_step_limit()` now gives **every** FULL run (and the watcher)
-`LONG_FULL_PROBE_STEPS` (32768) — the old code silently capped most Full episodes
-at `MAX_EPISODE_STEPS` (12000), which is nowhere near enough for the full
-journey. `MAX_EPISODE_STEPS` still bounds `progress` / `badge` runs.
-
-After a party wipe a **recovery mode** kicks in (no novelty-memory reset, so
-dying is never a farm): wild-battle rewards are cut to 5 %, generic catches pay 0,
-and graph-distance guidance back to the pre-wipe story front pulls harder (scaled
-by `POST_WIPE_TARGET_PROGRESS_REWARD / TARGET_PROGRESS_REWARD`) via the same
-non-farmable high-watermark. **The recovery bonus only arms if the blackout
-actually demoted the agent** (`_post_wipe_start_stage < pre_wipe_best_stage`) —
-dying and respawning at the same stage costs the −100 and nothing else
-(`post_wipe_no_loss:+0`). When the agent does climb back to its pre-wipe front
-(or a deeper Center / a badge) it gets `POST_WIPE_FRONT_RECOVERED_PER_STAGE` (40)
-× stages lost, capped at `POST_WIPE_FRONT_RECOVERED_MAX` (80) — **strictly below
-the −100 penalty**, so a wipe + full recovery is always net negative. (Before
-2026-09-06 this was a flat +300 that fired on the first post-blackout step for
-any agent whose best stage equalled its respawn stage — a net +200 for dying,
-which is why the fleet just fought and wiped.)
-
-### 2026-09-06 — Start-state rule, battle rewards, FIGHTER role, 32k FULL horizon
-
-**Start-state rule (non-negotiable):** the **watcher and every FULL agent always
-start from the user-recorded master savegame** (`StartGame.state`, inside Oak's
-lab, post starter + parcel) — never a curriculum checkpoint. **Only FRONTIER may
-start from newly discovered savepoints** (`stage_frontier_<n>`). BRIDGE/RETENTION
-resume the immutable `stage_<n>` ENTRY markers; FIGHTER *reuses* the FRONTIER
-Route 1 anchor, it never creates its own. Enforced by `env.is_watcher` (set in
-`watcher_runtime.make_evaluation_env`) short-circuiting `_choose_episode_start`
-to `"beginning"`, and by FIGHTER sitting at the **end** of `allocate_modes` so
-rank 0 stays FULL (the watcher and the champion probe both key on rank 0).
-
-**Battle rewards** — the V18 change had zeroed `BATTLE_WIN_REWARD` /
-`ENEMY_FAINT_REWARD`, so a chip-and-flee slugfest scored the same as a clean
-win; the fleet fought ~33 % win rate, **3.5 wipes/episode**, never reaching
-Viridian. Fixes:
-- `BATTLE_WIN_REWARD 0 → 10` (event `battle_win:+10`, once per won battle).
-  **Exempt from the post-wipe ×0.05** (`_battle_reward_scale(..., post_wipe_exempt
-  =True)`) — the recovering fleet is almost always post-wipe, so that scaling was
-  zeroing the learning signal exactly when it is needed. Damage
-  (`ENEMY_DAMAGE_REWARD_PER_HP 0.08`) still teaches the attack mechanics; the
-  wild-grind decay (×0.3 after 6 wins) still applies.
-- `LEVEL_GAIN_REWARD 15 → 10`, also post-wipe-exempt.
-- **Low-HP flee:** at/below `LOW_HP_FLEE_RATIO = 0.10` party HP the flee penalty
-  is `LOW_HP_FLED_BATTLE_PENALTY = -2` instead of `-25` — a hurt team walking
-  away beats wiping at −100.
-
-**FIGHTER role** (`curriculum_v20.MODE_FIGHTER`, `FIGHTER_SLOTS = 4` at fleets
-≥ 20; 46 envs → FULL 18 / BRIDGE 8 / FRONTIER 12 / RETENTION 4 / **FIGHTER 4**).
-Dedicated ranks that resume the FRONTIER Route 1 anchor and just fight, feeding
-the shared PPO net concentrated, undecayed battle experience:
-- **400-step out-of-battle leash** (`FIGHTER_LEASH_STEPS = 400`): in-battle steps
-  do not consume this leash (`_fighter_out_of_battle_steps` resets while `in_battle`);
-  the shared 2,000-action single-battle timeout still applies,
-  400 steps outside a battle → `fighter_leash:truncate` → reset onto the anchor
-  with a full party, back in the encounter zone.
-- Exempt from the wild-grind decay (`_battle_reward_scale`) and the per-episode
-  battle-step cap (`MAX_EPISODE_BATTLE_STEPS`) — fighting *is* its episode.
-  Only combat rewards at the normal values; no navigation/story/catching bonuses.
-  Fighter does not submit transition mastery attempts.
-- If the shared-net win rate doesn't climb → FighterBrain (separate net,
-  `docs/BIG_CHANGES_TODO.md`).
-
-**32k FULL horizon** — every FULL run (and the watcher) now gets
-`LONG_FULL_PROBE_STEPS` (32768), not just the probe subset. Oak's lab → Route 1
-→ Viridian → … needs far more than the old 12k cap.
-
-**Backtrack shaping** — `TARGET_BACKTRACK_PENALTY` was briefly toggled to 0 (it
-was pinning FULL/BRIDGE against town walls) but that removed all pressure toward
-the exit and un-mastered transition 1. Compromise: a gentle `-0.005` with a
-town-sized `TARGET_BACKTRACK_MARGIN = 12` — normal navigation inside a town never
-triggers it, only real drift (12+ tiles worse than the episode best). Progress
-stays positive-only (`route_progress_best` high-watermark). `_map_change_count`
-was added to the `TargetShaper` objective key so leaving and returning to a map
-re-anchors the best-distance at the current position (an agent that reached
-Route 1 and walked back to town no longer eats a backtrack storm).
-
-### 2026-09-06 — FRONTIER redesign: topological graph progress, not tile count
-
-`frontier_score` is no longer "tiles explored on this stage". A scout that grazed
-167 tiles in south Route 1 used to beat one that pushed 40 tiles toward the
-unknown northern end — backwards. New module `src/frontier_v20.py`:
-
-- **`frontier_value`** at the agent's own tile = pure BFS **graph depth** from the
-  stage origin on the known walkable graph (`_combined_edges`; largest connected
-  component, so RAM-glitch islands don't distort it) `+ 0.25 × still-open cardinal
-  directions − 0.15 × local re-walk density`. Direction-independent — no `−y`, no
-  north bonus, no compass target. `None` (no reward) when the tile is not
-  connected to the origin.
-- **`FrontierHighWater`** shaper (mirrors `TargetShaper`): FRONTIER mode only,
-  anchored at `max(fleet-best stored for this stage, first connected reading)`,
-  pays `FRONTIER_PROGRESS_REWARD` (0.15) × gain **only on a strict new best past
-  the fleet anchor**. Re-walking known ground, or `depth 21→22→21→22`, pays
-  nothing. The `stage_frontier_<n>` anchor advances to the deepest graph position
-  any scout reaches; `frontier_metric_version: 2` migrates old tile-count values
-  (treated as 0, one re-anchor).
-- **Role split (spec §7):** only FRONTIER agents explore. FULL / BRIDGE /
-  RETENTION exploit known paths, driven by story + `PROVEN_EXIT_REWARD` (+25,
-  crossing an already-proven forward transition, once/episode); they keep only a
-  tiny **capped** `FULL_NEW_TILE_REWARD` (0.02, whole town ≈ +0.8 max) as a
-  "keep moving toward the exit" trickle so they don't pile against a city wall
-  with only the backtrack penalty. FRONTIER gets `SCOUT_NEW_TILE_REWARD` (0.02,
-  `new_tile_scout`) plus the fleet-first global tile bonus.
-- **Proven progress edges (spec §8/§9):** a `stage N → N+1` crossing becomes a
-  proven navigation target only after its canonical variant is seen **twice**
-  (`KnownTransitions.record_and_state`; a single RAM misread can no longer poison
-  navigation — this had pinned the fleet to the Route 1 south border for ~2M
-  steps). The scout that confirms one gets `PROVEN_PROGRESS_EDGE_REWARD` (+40)
-  once.
-- **Warp-loop penalty (spec §10):** `WARP_LOOP_PENALTY` (−0.10) on `A→B→A` /
-  `A→B→A→B` map-pair oscillation (`_recent_map_transitions` deque); first
-  discovery of a warp keeps its normal reward.
-- The old dense per-step `target_closer / target_farther` (±0.20) signal is
-  **deleted** — all distance shaping is now the `TargetShaper` high-watermark.
-- `frontier_score` was never in the champion score / eval — unchanged.
-  `explored_tiles`, `max_frontier_graph_depth`, `best_frontier_value`,
-  `warp_loops`, `proven_*` are logged as separate stats
-  (`trainer_status.json → frontier`, per-agent dashboard fields).
-
-Tests: `tests/test_frontier_v20.py` (13). Full suite 131 green.
-
-## 2026-09-06 — V20 CURRICULUM MODES
-
-`BUILD_TAG = "V20_CURRICULUM_MODES"`. Goal: an architecture that can eventually
-learn the **complete** game instead of another one-off reward patch. Deployed
-with a **100 % clean reset** — fresh PPO net, `world_stage 0`, no checkpoints,
-empty stats; only the `StartGame` master savegame is kept. Backup in
-`brain_backups/V20_CLEAN_RESET_*`. 100 unit tests pass.
-
-### The problem it fixes
-
-After ~23 M steps scouts could reach later areas but full runners still failed
-around Route 1: the policy learned isolated checkpoint skills without chaining
-them. Recent target shaping also created Pallet / house / two-tile oscillation
-loops.
-
-### New modules
-
-| File | Role |
-|---|---|
-| `src/curriculum_v20.py` | modes, `CurriculumState` (discovered/mastered stage, rolling per-transition stats, `current_bottleneck`), `allocate_modes`, generic story-`Objective` system |
-| `src/nav_transitions_v20.py` | `KnownTransitions` — KNOWN/UNKNOWN state, real recorded crossings only |
-| `src/target_shaper_v20.py` | `TargetShaper` — non-farmable best-distance shaping |
-| `src/loop_guard.py` | added `ShortCycleGuard` (A-B-A-B / A-B-C detection, escalating penalty, truncate); `LocalLoopGuard` unchanged |
-
-### Four modes, one PPO policy
-
-`FULL` (real `StartGame`), `BRIDGE` (bottleneck stage entry checkpoint),
-`FRONTIER` (deepest discovered frontier), `RETENTION` (rotates mastered
-transitions) — allocated 12 / 12 / 6 / 3 scaled to `NUM_ENVS`, plus a fixed
-`FIGHTER` block of 4 at the end at fleets ≥ 20 (`curriculum_v20.allocate_modes`;
-46 envs → FULL 18 / BRIDGE 8 / FRONTIER 12 / RETENTION 4 / FIGHTER 4).
-`POST_WIPE_RECOVERY` still overrides dynamically on a wipe. `V20_CURRICULUM =
-True` is the master switch; set it `False` to fall back to the V17–V19 scout-band
-behaviour. See the dated "Start-state rule …" section near the top for the
-FIGHTER role and the watcher/FULL master-savegame rule.
-
-### discovered vs mastered stage
-
-- `discovered_stage` = deepest stage any episode reached.
-- A transition is **mastered** only when: window (`TRANSITION_MASTERY_WINDOW`
-  50) has ≥ `TRANSITION_MASTERY_MIN_ATTEMPTS` (20) attempts, `success_rate` ≥
-  `TRANSITION_MASTERY_RATE` (0.80) **and** `full_chain_confirmations` ≥
-  `FULL_CHAIN_CONFIRMATIONS` (5). `full_chain_confirmations` is incremented only
-  by `FULL`-mode, `episode_start=="beginning"` episodes
-  (`record_full_chain_result`). BRIDGE/scout successes build the rolling rate
-  but never promote a stage alone.
-- `mastered_stage` = 1 + the contiguous run of mastered transitions from stage 1.
-- `current_bottleneck` = earliest discovered transition that is not mastered;
-  BRIDGE trains it and walks forward automatically as each hop is mastered.
-- State lives in `runtime/curriculum_v20/state.json` (env reads it with a
-  256-step cache, writes under the fleet lock at episode end).
-
-### Two checkpoint types (brief §4)
-
-The "north-most Y wins" replacement heuristic is **removed** — smaller Y is not
-more story progress in a forest / cave / building / gym.
-
-- `stage_<n>` — **entry** checkpoint. Saved on first safe entry (trusted RAM,
-  correct stage, starter present, not in battle / not wiping, stable position)
-  and then **immutable**. `BRIDGE` / `RETENTION` resume from it.
-- `stage_frontier_<n>` — optional discovery anchor; advances only on a strictly
-  higher exploration score (tiles explored on that stage), never on Y.
-  `FRONTIER` resumes from it.
-
-### KNOWN vs UNKNOWN transitions (brief §5, §21)
-
-`UNKNOWN_NEXT_TRANSITION` → exploration on, target shaping off, no fake
-coordinate. When a real forward `stage N → stage N+1` crossing is observed the
-exact source map, source exit coord, destination map and destination coord are
-persisted (`runtime/curriculum_v20/known_transitions.json`); that exact
-transition becomes the navigation objective and exploration reward on the solved
-stage drops away. Pallet is a solved transit area — its only objective is the
-real `(3,0)→(3,19)` transition; missing → an explicit diagnostic, never an
-invented target.
-
-### Non-farmable target shaping (brief §6, §22)
-
-`TARGET_PROGRESS_REWARD` 0.20 → **0.05**, new `TARGET_BACKTRACK_PENALTY = −0.01`.
-`TargetShaper` maintains `best_target_distance` per objective/episode and pays
-`0.05 × improvement` **only** on a strict new best. Returning to an achieved
-distance pays 0; moving past `best + 3` pays a flat `−0.01`. Combined with the
-`ShortCycleGuard` (suppresses positive shaping while cycling, `−0.05 … −0.25`
-escalating, truncate after ~600 cycle steps) the anti-loop invariants hold:
-A/B target loop, house in/out loop, warp replay, tile revisit, wipe farm, endless
-wild battles, Center farm and `5→4→5` stage farm can none of them be net
-profitable.
-
-### Other changes
-
-- `BUILDING_FIRST_GLOBAL_REWARD` 500 → **0** (brief §8). Generic Viridian/Pewter
-  houses are worth 0; real objectives keep their dedicated `POKECENTER_*`,
-  `POKEMART_*`, `PEWTER_GYM_*` rewards. The Bank-4 `!= 4` guard still stands.
-- **Long-Full-probe horizon bug fixed** (brief §16): new `_episode_step_limit()`
-  — `scout` → `SCOUT_EPISODE_STEPS`; `full` + long probe → `LONG_FULL_PROBE_STEPS`
-  (32768); other `full` → `MAX_EPISODE_STEPS` (12000). Previously every `full`
-  episode was forced to 12000, making `_is_long_full_probe()` inert.
-- Generic story-`Objective` representation (`reach_map`, `reach_transition`,
-  `enter_required_building`, `heal_center`, `win_trainer`, `win_gym`,
-  `obtain_badge`, `obtain_item`, `trigger_story_flag`) so the same architecture
-  extends to Route 3 → Mt. Moon → Cerulean → Misty → … → Elite Four → Champion by
-  adding objects, not code. `world_stage` (geography) and `story_objective` stay
-  separate.
-- Dashboard `info` fields: `training_mode`, `current_stage`, `discovered_stage`,
-  `mastered_stage`, `current_bottleneck`, `objective`, `target_source`,
-  `target_coordinate`, `best_target_distance`, `post_wipe_recovery`,
-  `transition_attempt`, `transition_success`. Reward events distinguish
-  `route_progress_best`, `loop_penalty`, `route_backtrack`, `stage_advance`,
-  `post_wipe_front_recovered`.
-
-### Reset / restart
-
-`bash tools/v20_reset.sh --yes` — full clean wipe (keeps only the `StartGame`
-master savegame), then `bash scripts/start_all.sh`. `train.py` seeds
-`discovered_stage` from any valid `stage_*` metas + `global_progress.json` and,
-if the champion / global record already shows Full depth ≥ Route 1, one-time
-pre-confirms `Pallet→Route1` so the detected bottleneck starts at
-`Route1→Viridian`. On the clean reset there is no such evidence, so the first
-picture is `discovered = mastered = 1`, bottleneck `Pallet→Route1`, whole fleet
-running `FULL` until the fresh net actually holds Route 1.
-
-## 2026-09-06 — V19 BROCK RUSH + POST_WIPE_RECOVERY
-
-`BUILD_TAG = "V19_BROCK_RUSH"`. Goal: faster real story progress to badge 1,
-without re-introducing reward loops. Existing logic reused; every V17/V18
-anti-farm fix kept. 72 unit tests pass. Deployed with a map/global reset (brain
-kept — see below); all fleet-once bonuses re-fire against the new reward shape.
-
-**Forward push moved off exploration novelty.** Tiles are now just a flat
-"keep moving" trickle: `TILE_REWARD_BY_STAGE = {1:0.1, 2:1.5, 3:2.0, 4:2.5,
-5:3.0, 6:3.0}`, first 20 per map per episode then 10 %, +1 fleet-once. The real
-pull comes from:
-- `STAGE_ADVANCE_REWARD = 250` per new world-stage — paid only on a new episode
-  best (`_world_stage()` is monotone within an episode, so walking back pays 0).
-- `TARGET_PROGRESS_REWARD = ±0.20` graph-distance shaping. New helper
-  `_v19_forward_targets(bank, map_id)` returns the on-map transition coords that
-  lead to a *higher* world-stage map (or the current city's Center while unhealed,
-  or the Pewter gym while Brock is unfought). Pure graph distance, no compass;
-  symmetric so a there-and-back nets zero. Wired as a third fallback in the
-  existing `target_closer` / `target_farther` block (the older generic target
-  sources deliberately return nothing for world roles — they used to prefer
-  houses and dead ends).
-
-**Milestones toward Brock** (each once per episode via an episode flag, never
-farmable by re-entering or re-starting a battle):
-- reach Pewter with Pikachu in the party: +300 (`PEWTER_WITH_PIKACHU_REWARD`)
-- Pewter gym entered: +200 (inert until `PEWTER_GYM_MAPS` has a confirmed id)
-- Brock/gym battle started (trainer flag + `bank == 6` or world-stage 6): +500
-- first gym KO in such a battle: +300 (**approximate** — without a trainer-id RAM
-  read this can't be told apart from Brock's first Pokémon if the gym trainer is
-  skipped)
-- badge itself: `BADGE_EARNED_REWARD` 3000/run + `BADGE_FIRST_GLOBAL_REWARD` 5000-once
-
-**Other value changes:** `FRONTIER_SCOUT_SLOTS` 2→3 · `EPISODE_NEW_MAP_REWARD`
-25→50 · `CITY_EPISODE_REWARD` 250→300 · `LEVEL_GAIN_REWARD` 10→15 ·
-`POKECENTER_ENTER_REWARD` 100→50 · `POKECENTER_ADVANCE_HEAL_REWARD` 250→**500**
-(the wipe-respawn anchor) · `SPECIES_CAUGHT_FIRST_REWARD` 120→50, level bonus 4→2 ·
-`PIKACHU_FOREST_CAUGHT_REWARD` 1000→400 (Pikachu stays useful for Misty but is
-not a Brock prerequisite) · `TILE_REWARD_AFTER_CAP_FACTOR` 0.2→0.1. All
-edge / warp / corridor farm rewards stay at 0.
-
-**`POST_WIPE_RECOVERY_MODE`.** After a wipe the episode keeps going and visited
-tiles/maps rightly don't repay, so wild grass at the respawn can become the best
-remaining reward stream and the policy just fights there instead of walking back
-to the front. `_record_party_wipe()` now also sets `post_wipe_recovery = True`
-and stores `pre_wipe_best_stage / _best_center_stage / _badges` — **no** reset of
-`seen_coords` / `visited_maps` / any novelty memory (dying on purpose must never
-be a farm). While recovering:
-- wild-battle rewards (damage + level-up) are additionally ×`0.05`
-  (`POST_WIPE_WILD_BATTLE_SCALE`); trainer / gym / Brock battles are untouched
-- the generic catch reward is 0 (the Pikachu-forest bonus is a separate branch and stays)
-- the graph-distance guidance back to the old front pulls at ±`0.50`
-  (`POST_WIPE_TARGET_PROGRESS_REWARD`)
-
-Recovery ends — checked out of battle on the outdoor-coordinate path — when the
-agent's *current map* stage reaches `pre_wipe_best_stage`, or a deeper Center
-respawn was activated, or a badge was won. Then a one-time
-`post_wipe_front_recovered: +300` (`POST_WIPE_FRONT_RECOVERED_REWARD`) and
-`post_wipe_recovery = False`. The `party_wiped: -100` charge and the
-Center-respawn teleport are unchanged.
-
-**Story priority the shaping encodes:** Route 1 → Viridian → Viridian Center →
-Route 2 → Viridian Forest → (optional Pikachu) → Pewter → Pewter Center →
-Pewter Gym → Brock → badge 1.
-
-**Deploy:** full stop, backup + delete `exploration_memory/agent_*.json` +
-`reward_events.json`, `global_progress.json` → `max_world_stage 0` (fleet and the
-watcher's isolated dir), keep all model / skill zips, `champion_score.json`,
-`model_version.json`, savestates and stage checkpoints; full start. Backups under
-`brain_backups/V19_*`.
-
-## 2026-09-06 — V18: per-run tile ladder, one-time fleet bonuses, battle rebalance, dashboard
-
-Full trainer + watcher + web restart (brain kept: learner ~21.5M, champion v9).
-67 unit tests pass. Live-verified in the watcher and dashboard.
-
-**Tiles pay per run now.** The fleet-once tile bonus meant the watcher (and any
-agent on long-known ground) saw no tile reward at all. First-find of a tile is
-now rewarded every episode (`seen_coords`), on a hand-set ladder tied to the
-tile's own map: `TILE_REWARD_BY_STAGE = {1:0.2, 2:3, 3:4, 4:5, 5:5, 6:6}` — Alabastia
-is the spawn so exploring it barely pays; Route 1 onward is where it kicks in, so
-the pile of tiles in Pallet never beats the higher rate ahead. Interior tiles by
-city bank: Pallet houses 0.2, Vertania 2, Marmoria 3. Only the first 20 new tiles
-per map per episode pay (`new_tile:…:capped` after). On top, `GLOBAL_NEW_TILE_BONUS = 1`
-fleet-once for the very first agent ever to step on a tile — first foot into
-Pewter = 6 + 1.
-
-**One-time fleet-wide bonuses** (persisted in `reward_events.json`, cannot repay
-after a restart), each on top of a per-run value:
-- Pokécenter: +100/run to enter, +250/run for a heal at a center deeper than any
-  used this run (the wipe respawn point advances), **+1000 once per center**.
-- Poké Mart (Vertania `5,3`): +100/run to enter, **+1000 once** — so the brain
-  learns the shop exists and can buy Poké Balls.
-- First badge: +2000/run kept, **+5000 once** per badge number.
-
-**Battle rebalance** (watcher was 45 % of steps fighting): enemy-damage reward
-0.15 → 0.08 per HP; after 6 wild wins in an episode on a wild map, wild
-damage/faint/win drop to 30 %; **trainer/gym battles pay ×2** and are exempt from
-that decay. Catch reward 50 → 120 + `min(level,20)×4`.
-
-**Scouts** back to 2 per checkpoint (from 5) — scouts were getting through,
-full runners were not.
-
-**Warp reward** now claims a coarse `(map_a↔map_b)` pair instead of exact
-coordinates, and it is persisted (`claim_event` → `reward_events.json`) plus
-pre-seeded from the navigation history, so the first global warp bonus truly
-fires once ever and does not repay after a restart (the watcher was granting
-+100 for Pallet↔Route 1 on every restart). Navigation data stays
-coordinate-exact. No warp reward on the step a battle ends. A scout that drifts
-back onto/behind its spawn stage now also earns no per-run tile reward there.
-
-**Dashboard:** the watcher live image is gone from the Overworld-Map side column
-(it only shows under the Watcher tab now); that column shows the clicked agent's
-detail plus its **last 10 reward events**. Localisation: ~40 missing German→English
-strings added, the `Beste`→`Best` substring bug that produced "Bestr" removed, and
-the translation pass rewritten to run synchronously in the mutation observer
-(`requestAnimationFrame` was paused in background tabs and silently stopped
-translating) with a 700 ms safety interval.
-
-**Deferred** to `docs/BIG_CHANGES_TODO.md`: a separate combat policy (FighterBrain)
-beside the champion, and special handling for the house past Viridian Forest
-(needs its map id first).
-
-## 2026-09-06 — Geographic progression and battle/loop corrections
-
-These changes supersede the older parcel-based stage descriptions below. No trainer,
-watcher, web or mapper process was stopped or restarted during this change.
-
-- Immutable master: the user-recorded `local/custom_integrations/PokemonFireRed-Gba/StartGame.state`
-  after Oak's parcel, verified inside the lab at bank 4/map 3, x6/y4. Every full runner
-  restores this exact original; only scouts load geographic checkpoints.
-  The briefly prepared outdoor derivative was removed, per the latest instruction.
-  Lab/indoor baseline counts as stage 1 and produces no geographic stage jump.
-- Geography: Pallet 1, Route 1 2, Viridian 3, Route 2 4, Viridian Forest 5, Pewter 6.
-  Parcel flags, stairs, buildings and badges do not manufacture geographic stages.
-- Exactly five scouts per valid checkpoint on Route 1, Viridian, Route 2, Forest and Pewter.
-  Fixed rank bands prevent reassignment when another checkpoint appears. Replacing
-  a savestate never adds scouts. No Pallet scouts. Other agents continue full runs.
-- Each stage independently prefers a further-north position (smaller Y), even
-  with lower reward. At equal Y, strictly higher reward wins; south is rejected.
-  This also applies to later full runners returning through earlier maps. Battle/wipe states are not captured.
-  Legacy lab checkpoints are rejected by their actual map; old fleet depth is
-  migrated from persisted visited maps at trainer startup, preserving model weights.
-- Battle detection uses dynamically validated gMain.inBattle (not battle-type flags).
-  An isolated real-ROM test detected a zero-type-flag wild encounter and cleared the
-  battle after fleeing without overworld movement. Observations use this same signal.
-- Fresh party HP on every decision; one wipe charge until recovery; wipe healing
-  receives no heal bonus. EXP rewards require the same party and battle context.
-- Global center-heal claim now persists in exploration_memory/reward_events.json.
-  Historical claims made before this file existed cannot be reconstructed reliably;
-  the first post-migration qualifying claim establishes the persistent baseline.
-- A shared local-loop guard ends an episode after 900 overworld decisions on at most
-  eight tiles without exploration/EXP/stage/badge progress. Battles pause counting.
-  This also bounds short back-and-forth loops that reset the old stationary counter.
-- Watcher remains policy evaluation without learning. Updated code takes effect only
-  on the next explicitly approved restart; refreshing navigation is not code reload.
-
-Validation: 58 unit tests, plus isolated emulator checks. Full environment smoke
-validation: 1,000 isolated decisions. Two final resets restored the original master
-location and stage 1; its SHA-256 remained unchanged.
-No user savestate was modified.
-
-## Previous release (historical)
-
-**V17.4 — Reward-Rebalance gegen Farm-Loops, Frontier-Scouts pro Stage, kritische Checkpoint-/Warp-Bugs behoben** (2026-09-06, Nachtsession)
-
-Ausgangspunkt war ein wiederkehrendes Live-Symptom: die Flotte lief lieber
-zurück in längst bekanntes Gebiet (Alabastia, Starterhaus) statt weiter nach
-Norden vorzustoßen, weil dort garantierter, risikofreier Reward wartete.
-Mehrere Runden aus Live-Beobachtung → Root-Cause-Suche → Fix haben dabei vier
-unabhängige, teils schon länger aktive Bugs zutage gefördert.
-
-**Reward-Rebalance (Farm-Loops geschlossen):**
-- Kanten-Reward komplett auf 0 (auch nicht mehr beim ersten Mal) — der
-  Pro-Episode-Anteil resettete sich bei jedem Reset und machte bekannte
-  Kurz-Loops am Spawn jede Episode neu profitabel.
-- Kachel-Reward: Pro-Run-Anteil (`EPISODE_TILE_REWARD`) auf 0 — dieselbe
-  Farm-Lücke wie bei Kanten, nur eine Stufe kleiner (sicheres Rumlaufen in
-  bekannten Innenräumen gab bisher noch kleines Dauer-Einkommen). Nur der
-  fleet-weite Einmal-Fund (`NEW_TILE_REWARD=2`) bleibt.
-- Map/Stadt-Reward: kein fleet-weiter Einmal-Jackpot mehr (ging strukturell
-  nur an den einen Agenten, der eine Map zuerst fand) — jetzt ein fester Wert
-  pro Run für JEDEN Agenten (`EPISODE_NEW_MAP_REWARD=100`,
-  `CITY_EPISODE_REWARD=250`). Gebäude-Erstfund (Reds Haus etc.) zahlt separat
-  nur noch einmal für die ganze Flotte, nicht mehr pro Agent.
-- Warp-Reward: kein Pro-Run-Bonus mehr für bekannte Türen
-  (`EPISODE_TRANSITION_REWARD=0`), nur der fleet-weite Einmal-Fund
-  (`NEW_TRANSITION_REWARD=100`) bleibt.
-- Neuer, benannter `BADGE_EARNED_REWARD=2000` (vorher unbenannt inline 2500).
-- Artenvielfalt-Fang und Pikachu-Wald-Bonus von fleet-weit-einmalig auf
-  pro-Run umgestellt (`SPECIES_CAUGHT_FIRST_REWARD=50`,
-  `PIKACHU_FOREST_CAUGHT_REWARD=1000`) — die Party resettet ja jede Episode,
-  ein Lifetime-Claim hätte ab dem zweiten jemals gefangenen Exemplar nie
-  wieder Anreiz gegeben, überhaupt zu fangen.
-- `GAMEPLAY_STEP_COST` 5× verschärft (`-0.001` → `-0.005`), da die echten
-  Ziele deutlich größer wurden, Herumstehen aber gleich billig blieb.
-
-**Vier kritische Bugs live gefunden und behoben:**
-1. **Stage-Checkpoints für Route 1/Vertania konnten nie entstehen.** Der
-   feste Savestate startet mit bereits bestätigter Paketabgabe an Prof.
-   Eich, wodurch `_world_stage()` (ein reiner Ratchet) ab Step 0 immer
-   mindestens 5 zurückgibt — unabhängig vom tatsächlichen Standort. Der
-   Checkpoint-Code nutzte diesen Wert sowohl (a) als zu speichernde
-   Stufennummer als auch (b) als Baseline für `_saved_stage`
-   (Anti-Doppel-Speicher-Schutz). Beide Stellen verglichen ihn gegen den rein
-   standortbasierten `_stage_at_current_location()` (Route 1 = 2, Vertania =
-   3) — 5 ≠ 2/3 schlug immer fehl. Beide Stellen jetzt auf den
-   standortbasierten Wert umgestellt (`episode_best_stage`, das den
-   Depth-Reward vor genau demselben Exploit schützt, bewusst NICHT
-   angefasst).
-2. **Alabastia (Pallet Town) gab jede Episode automatisch +250.** Der
-   Spawnpunkt liegt in Eichs Labor, 1-2 Schritte vor Alabastia — da
-   Alabastia selbst ein `CITY_MAPS`-Eintrag ist und längst bekannt, feuerte
-   der Stadt-Wiederholungsbonus jede einzelne Episode automatisch, quasi nur
-   fürs Rauslaufen. Alabastia explizit von diesem Bonus ausgenommen (andere
-   Städte bleiben unverändert, da echte wiederholte Lauf-Leistung nötig).
-3. **`shared_tiles` verlor seinen Fortschritt bei jedem Trainer-Neustart**
-   (nicht nur bei einem vollen Reset) — anders als `shared_edges`/`shared_maps`/
-   `shared_transitions` wurde es nie aus der persistierten Kanten-Historie
-   neu geseedet. Jeder gezielte Trainer-Neustart öffnete dadurch kurzzeitig
-   wieder das +2-Kachel-Fenster für längst bekanntes Terrain. Jetzt beim
-   Start aus den Endpunkten der geladenen Kanten-Historie vorbefüllt
-   (identische Logik im isolierten Watcher-Eval-Env, das zusätzlich alle 5
-   Minuten automatisch nachlädt, ohne den Prozess neu zu starten).
-4. **Party-Wipe-Teleport konnte einen Warp-Bonus auslösen.** Der
-   Wipe-Cooldown schützte bisher nur Map-/Kachel-Rewards vor dem
-   automatischen Pokecenter-Teleport nach einem Total-K.O. — der
-   Warp-Reward-Block hatte nie eine solche Prüfung. Da die exakte
-   Kampf-Position beim Fainten praktisch nie zweimal gleich ist, war das ein
-   fast unerschöpflicher, immer "global neuer" Warp-Fund — jeder Wipe konnte
-   zusätzlich zur -100-Strafe einen +100-Bonus einbringen. Jetzt ebenfalls
-   während des Cooldowns unterdrückt (Buchführung/Claims laufen normal
-   weiter).
-
-**Frontier-Scout-System überarbeitet:** vorher wanderten alle
-`FRONTIER_SCOUT_SLOTS` Scouts sofort zur tiefsten Front, sobald diese einen
-Checkpoint bekam — die vorherige Front wurde komplett verwaist. Jetzt bekommt
-jede validierte Stage ihre eigenen Scout-Slots dazu (`_scout_assigned_stage()`),
-bestehende Paare bleiben stabil auf ihrer Stage. `FRONTIER_SCOUT_SLOTS` 2 → 5
-(realistisch validiert die Flotte ohnehin nur 2-3 Stages pro Nacht). Die
-Checkpoint-Haltezeit (`_hold_required`) von 25 auf 3 Lesezyklen gesenkt — die
-eigentliche Qualitätssicherung passiert beim Ersetzen selbst (nur bei
-höherem Episoden-Reward oder weiter nördlicher Position).
-
-**Betrieb:** kompletter Reset aller Explorations-/Curriculum-/
-Statistik-Daten (Backup in `runtime_reset_backup_*/`, nicht gelöscht) — das
-trainierte Brain (`runtime/checkpoints/`), Champion-Metadaten und die
-Web-Karten-Layout-Konstanten bleiben unangetastet. **Neue Standing-Regel:**
-lief der Watcher gerade live (z.B. Stream), NIE über `stop_all.sh`/
-`start_all.sh` mitneustarten — stattdessen den Trainer gezielt per PID
-(`kill -INT`) stoppen und `start_all.sh` erneut aufrufen; das Skript erkennt
-bereits laufende Prozesse (Watcher/Web/Status) automatisch und lässt sie in
-Ruhe.
-
-**V17.2 — Savestate-Start, Fleet-Rekorde, Artenvielfalt** (2026-09-05)
-
-Seit V17 beginnt jede Episode nicht mehr am kalten Spielanfang, sondern an
-einem festen, manuell erspielten Savestate (`StartGame.state`) kurz nach
-Intro, Namensvergabe und Starterwahl (PWhiddy-Stil). Das Nachspielen der
-~10-minütigen Introsequenz entfällt für jede der 60 parallelen Umgebungen bei
-jedem Reset — der gesamte Trainingshorizont geht in echte Weltexploration statt
-in wiederholtes Intro-Abspulen.
-
-### Was sich seit V16 geändert hat
-
-- **Savestate statt Kaltstart:** `env.load_state("StartGame", ...)` ersetzt den
-  Kaltboot-Snapshot in `pokemon_env.py` und `watch.py`. Intro-/Treppen-/
-  Hausausgangs- und Paket-Flags starten als bereits erledigt, damit kein
-  Reset mehr fälschlich am alten Intro-Timeout (1800 Schritte) abbricht.
-- **60 parallele Umgebungen** (`NUM_ENVS`), synchron mit `PPO_N_STEPS=512` →
-  30.720 Samples/Update. `ACTION_HOLD_FRAMES=9` / `ACTION_RELEASE_FRAMES=5`
-  (empirisch gegen 12/6 verifiziert: identische Bewegungszuverlässigkeit,
-  +7–13 % Steps/Sekunde).
-- **Persistenter, nicht farmbarer Kanten-Reward:** `NEW_EDGE_REWARD=1.0` für
-  jede fleet-weit erstmals gelaufene Kachel-Kante (`_claim_shared`, genau
-  einmal über alle Agenten und Episoden). Bereits bekannte Kanten geben dem
-  einzelnen Agenten höchstens einmal `+0.20` (Imitationssignal), nie erneut.
-- **Fleet-Rekord-Bonus (neu in V17.2):** `GLOBAL_STAGE_RECORD_REWARD=1000`.
-  Wer als Erster im gesamten Brain einen neuen `world_stage`-Tiefenrekord
-  erreicht (Route 2, Vertania-Wald, Marmoria, erster Orden), bekommt diesen
-  Bonus einmalig fleet-weit — zusätzlich zum bestehenden, pro Episode und
-  Agent wiederholbaren `NEW_GLOBAL_DEPTH_REWARD=1000 × Stufenanstieg`.
-- **Artenvielfalt-Fangbonus (neu in V17.2):** erste je Spezies fleet-weit
-  gefangene Pokémon geben `+1000` (`shared_species`, ebenfalls `_claim_shared`-
-  geschützt); jeder weitere Fang derselben Art kostet `-500`. Verhindert
-  Farmen häufiger Wildpokémon (Taubsi, Raupy) und belohnt seltene Funde wie
-  Pikachu im Vertania-Wald.
-- **Kampf-Rebalance:** `ENEMY_DAMAGE_REWARD_PER_HP=0.15`,
-  `ENEMY_FAINT_REWARD=10`, `BATTLE_WIN_REWARD=15` (von 0,5/30/50 gekürzt,
-  damit Dauerkämpfen im Wildgras Exploration nicht mehr strukturell schlägt).
-  `FLED_BATTLE_PENALTY=-25`, kompletter Party-K.O. `-100` und sofortiges
-  Episodenende (auch direkt beim Kampfende erkannt, nicht erst beim
-  nächsten HP-Sample — verhindert einen Exploit, bei dem der automatische
-  Pokémon-Center-Teleport nach einem Wipe als "neue Map" belohnt wurde).
-- **Reproduzierbarkeits-Schwelle:** `STAGE_RELIABILITY_FRACTION=0.12` — ein
-  neuer world_stage zählt für Champion-Aufstiege erst, wenn mindestens 12 %
-  aller vollständigen Läufe ihn erreichen. Verhindert Champion-Beförderungen
-  durch einen einzelnen glücklichen Ausreißer-Run.
-- **Watcher-Anti-Loop korrigiert:** die alten, für teure Kaltstart-Resets
-  gedachten Gnadenfristen (bis zu 8000 Schritte) ließen den sichtbaren
-  Watcher-Lauf nach dem Savestate-Umbau unbegrenzt weiterlaufen, ohne je zu
-  terminieren. Auf 900/1800 Schritte zurückgesetzt.
-- **Dashboard-Weltkarte repariert:** eine zu klein bemessene feste
-  `setMaxBounds`-Box zwang Leaflet, bis auf den Minimalzoom
-  herauszuzoomen, egal welches Seitenverhältnis der Browser hatte — die
-  Karte war dadurch faktisch unsichtbar ("links abgeschnitten"). Jetzt fester,
-  nicht veränderbarer Zoom (nur noch verschiebbar, nicht mehr zoombar) und
-  eine an die tatsächlich aufgedeckte Welt gekoppelte, automatisch
-  mitwachsende Grenze mit 200 Kacheln unsichtbarem Rand — die Karte lässt
-  sich dadurch nie mehr komplett aus dem Bild schieben.
-- **Rollierendes Reward-Event-Log:** ein Klick auf einen Agenten im
-  Dashboard zeigte bisher nur die Reward-Events des einen Schritts, in dem
-  zufällig die Instanzdatei geschrieben wurde (alle 80 Schritte) — fast immer
-  leer. Jetzt ein echtes Log der letzten ~40 tatsächlichen Ereignisse.
-- `LEARNING_RATE=7.5e-05` (ein Experiment mit `0.0005` wurde nach über 2 Mio.
-  Steps ohne Champion-Fortschritt als gescheitert bewertet und zurückgesetzt).
-
-### Vorheriges V16 — Clean Full-Brain Generations (2026-09-04)
-
-V16 beginnt nach einem vollständigen, gesicherten Reset aller alten Modelle,
-Statistiken, Karten- und Curriculum-Daten. Der Stand unmittelbar vor dem Reset
-wird als datiertes Backup erhalten. ROM, Quellcode und lokale Konfiguration
-werden niemals gelöscht.
-
-### Ziel und Grundprinzip
-
-- Es existiert genau **ein gemeinsames PPO-Brain**. Keine Skill-Modelle, keine
-  Progress-Agenten und keine gemischten Savestate-Starts.
-- Alle **50 Trainings-Clients** beginnen jede Episode am echten Spielanfang und
-  lernen die vollständige Kette Intro → Name → Haus → Labor → Schiggi → Welt.
-- Die Clients laufen headless und ungebremst. Sie werden nicht auf 60 FPS
-  reduziert und schreiben keine Screenshot-Karten.
-- Der Mapper bleibt vollständig ausgeschaltet. Ein visueller Mapper kann später
-  separat entworfen werden, beeinflusst aber weder Reward noch Champion.
-- PPO sammelt pro Client 512 zusammenhängende Entscheidungen. Das ergibt
-  25.600 Samples pro synchronem PPO-Update (`50 × 512`).
-- `gamma=0,995` und `gae_lambda=0,98` lassen einen Erfolg weiter auf die
-  vorherigen Entscheidungen zurückwirken als im alten 128er-Setup.
-- Eine Episode hat zunächst höchstens 12.000 **Weg-Schritte**. Eindeutiger
-  Stillstand beendet sie früher. Kampfentscheidungen werden separat gezählt:
-  Sie gehören weiterhin zum PPO-Lernen, verbrauchen aber weder Intro- noch
-  Routen-Horizont. Ein einzelner Kampf endet spätestens nach 2.000, alle Kämpfe
-  einer Episode zusammen nach 6.000 Kampfentscheidungen als Sicherheitsgrenze.
-- Stable-Retro erhält beim Erzeugen jedes Clients einen unveränderlichen
-  Kaltstart-Snapshot. Jeder Episodenreset stellt genau diesen Snapshot wieder
-  her. Damit können Party, Starter, Karte oder Story-RAM aus einem beendeten
-  Lauf niemals in die nächste Episode durchsickern.
-
-### V16 Reward-Vertrag
-
-Normale Bewegung, einzelne Tiles und Tür-/Warp-Wechsel geben keinen Reward.
-Alle positiven Ereignisse sind pro Episode oder projektweit einmalig geschützt.
-
-| Ereignis | Reward |
-| --- | ---: |
-| normaler Schritt / bekanntes Tile | 0 |
-| deutlich neuer Intro-/Dialogbildschirm | +2, insgesamt höchstens +20 |
-| Intro abgeschlossen | +100 |
-| Treppe erreicht | +150 |
-| Haus bestätigt verlassen | +300 |
-| bekannte Map erstmals in dieser Episode | +25 |
-| projektweit wirklich neue Map | +500 |
-| Warp / Tür / bekannte Transition | 0 |
-| neue Weltstufe in dieser Episode | +1000 je Stufe |
-| Schiggi gewählt | +1000 |
-| Bisasam oder Glumanda gewählt | -500 und sofortiges Episodenende |
-| Labor mit Schiggi verlassen | +500 |
-| Gegner verliert neue HP | +0,5 je HP |
-| Gegner K.O. | +30 |
-| Kampf gewonnen / Erfahrung erhalten | +50 |
-| Levelaufstieg | +25 je Level |
-| eigene HP verloren | -0,1 je HP |
-| Flucht aus einem begonnenen Kampf | -25 |
-| komplette Party besiegt | -100 und Episodenende |
-| Orden | +2500 |
-| Heilung / Pokémon-Center | 0 |
-
-Screenshot-Unterschiede geben außerhalb des Intros bewusst keinen Reward:
-Menüs, Kampfanimationen, NPCs und Bildschirmeffekte wären leicht farmbar. Maps,
-Positionen, Gegner-HP, Party und Story werden stattdessen aus bestätigten
-RAM-Daten gelesen. Begegnungen sollen Gegner, eigenes Pokémon, gewählte Attacke,
-Schaden, PP und Ergebnis als Telemetrie erfassen; proportionaler echter
-HP-Schaden lehrt die Policy wirksame Attacken, ohne eine Kampftabelle
-hartzukodieren.
-
-Die Paket-Story wird nicht aus einem einzelnen RAM-Wert abgeleitet. „Paket
-erhalten“ und „Paket abgegeben“ brauchen Schiggi, die jeweils richtige Karte,
-die richtige Reihenfolge und drei aufeinanderfolgende bestätigende RAM-Lesungen.
-Route 2, Wald, Marmoria und Orden dürfen die Weltstufe erst nach dieser
-bestätigten Paketkette erhöhen. So kann ein kurzzeitig falsch gelesener Wert den
-Webstatus und die Champion-Bewertung nicht mehr vorspulen.
-
-### Brain-Pflege und Generationen
-
-Alle Clients besitzen innerhalb eines Trainingsblocks dieselbe Policy. Ein
-einzelner Agent besitzt daher kein eigenes Brain, das kopiert werden könnte.
-Aus den synchron gesammelten Rollouts erzeugt PPO gemeinsam einen Candidate.
-
-1. Alle 50 Clients sammeln mit derselben Ausgangspolicy Rollouts.
-2. PPO aktualisiert daraus den Candidate in synchronen 25.600-Sample-Schritten.
-3. Nach einem festen Trainingsblock wird der Candidate eingefroren.
-4. Der Candidate wird in vollständigen Episoden vom Spielanfang ohne Lernen
-   bewertet.
-5. Vergleichsreihenfolge: Orden, Weltstufe, bestätigte Storykette, Schiggi plus
-   Laborausgang, Maps, Reproduzierbarkeit und erst danach Reward/Tempo.
-6. Nur ein nachweislich besserer Candidate wird neuer Champion und gemeinsame
-   Basis der nächsten Generation. Alte und neue Messwerte dürfen niemals zu
-   einer künstlichen Champion-Metrik vermischt werden.
-7. Eine neue Tiefe darf das Intro nicht verdecken. Bei einem etablierten
-   Champion muss der Candidate mindestens 85–90 % Intro-Retention halten.
-8. Ein nicht besserer, aber stabiler Candidate darf begrenzt weiterlernen; bei
-   klarer Regression wird wieder vom unveränderten Champion begonnen.
-
-PPO kann Vergessen nicht mathematisch ausschließen. V16 verhindert das praktisch
-durch wiederkehrende, gedeckelte Intro-Rewards, lange zusammenhängende Rollouts,
-Full-from-Beginning-Episoden und eine unabhängige Retention-Prüfung vor jeder
-Champion-Beförderung. Der Watcher zeigt ausschließlich den bestätigten
-vollständigen Champion und verwendet keinerlei Skill-Snapshot.
-
-### Vorheriger Stand
-
-**V15.3 — All-Full, radikal vereinfachter Reward, kein Champion-Gate**
-(2026-09-04). Aktueller Arbeitsstand und offene Punkte stehen in
-`docs/AI_STATUS.md` (zuerst lesen). Laufende Zahlen aus
-`python tools/pkmai_status.py`.
-
-V15.3 ist eine bewusste Kurskorrektur weg vom Spezialisten-Curriculum
-(intro/stairs/exit/starter-Bootcamp) hin zu einem einfacheren, PWhiddy-
-artigen Modell: **fast die gesamte Flotte spielt jede Episode ab Spielanfang**
-(inkl. Intro), der Reward ist auf Meilensteine + eine einzige un-farmbare
-Erkundungsspur eingedampft, und der Champion wird nicht mehr durch einen
-Schutzwall vor Verbesserung abgeschirmt.
-
-### Lernlogik
-
-- Eine gemeinsame PPO-Policy lernt alles; es gibt keine getrennten
-  Spezialisten-Gehirne. `FULL_ONLY_MODE` (in `pokemon_env.py`) lässt **alle
-  32 Trainings-Envs** die Rolle `full` spielen — jede Episode startet am
-  Spielanfang, spielt Intro → Treppe → Haus → Labor → Starter → Welt, bis
-  Blackout, falscher Starter oder ein Step-Cap.
-- Die Observation enthält vier aufeinanderfolgende 64×64-Bilder sowie 31
-  RAM-/Navigations-/Storywerte.
-- 32 unsichtbare Trainingsumgebungen × 128 zusammenhängende Schritte ergeben
-  4096 Samples pro PPO-Update. Nur der Watcher wird gerendert.
-- Jede Agenten-Aktion hält die Taste **12 Emulator-Frames** und lässt sie
-  dann 6 Frames los (`ACTION_HOLD_FRAMES` / `ACTION_RELEASE_FRAMES`,
-  identisch in `pokemon_env.py` und `watch.py`). Kürzere Drücke drehen die
-  Spielfigur in FireRed nur, statt eine Kachel zu laufen.
-- **Reward, deutlich eingedampft:** Meilenstein-Einmalboni (Intro +100,
-  Treppe +150, Haus +500, **Starter (Schiggy) +1000**, falscher Starter
-  (Bisasam/Glumanda) −500 + Episodenende, Orden +500), ein pro Lauf
-  eskalierender Tiefen-Bonus für jede neu erreichte Weltstufe
-  (`NEW_GLOBAL_DEPTH_REWARD × Stufe`, gilt für **jeden** Agenten, nicht nur
-  den Flotten-Ersten) und **eine einzige** Erkundungs-Spur: eine wirklich neue,
-  global nie zuvor gelaufene Kachel-Kante zahlt `+0.10`. Alles Farmbare ist
-  raus: die alten Korridor-/Nord-Richtungsreward, Routen-Imitation,
-  Intro-Novelty-Screens und das rollenabhängige Step-Cost-Tuning sind
-  deaktiviert. Eine winzige einheitliche Zeitgebühr (`-0.002`/Step) bleibt.
-- Kein Champion-Schutzwall mehr: ein neuer Champion wird veröffentlicht,
-  sobald ein Kandidat mit ≥4 abgeschlossenen Full-Läufen den aktuellen
-  Champion-Score erreicht oder schlägt (`_score` = Orden, Weltstufe, Level,
-  Maps, Tempo, Starter-Rate — reine Tiefe statt fragiler Endpositions-Raten).
-- Der Watcher läuft im **Brain-Modus**: er lädt immer das aktuell trainierte
-  Netz (`pokemon_model_resume.zip`) end-to-end, ohne Skill-Umschaltung, und
-  zeigt Learner-Steps + Nachlade-Zähler live an — kein eingefrorener
-  Skill-Snapshot mehr.
-
-### Echte Feuerrot-Fortschrittskette
-
-`world_stage` ist die einzige Fortschritts-Wahrheit:
-
-0. Spielanfang/innen
-1. Alabastia `(3,0)`
-2. Route 1 `(3,19)`
-3. Vertania City `(3,1)`
-4. Eichs Paket im Vertania-Markt `(5,3)` erhalten
-5. Paket bei Eich im Labor `(4,3)` abgegeben / Pokédex erhalten
-6. Route 2 `(3,20)`
-7. Vertania-Wald `(1,0)`
-8. Marmoria City `(3,2)`
-9. erster Orden
-
-Die Paket-Stufen kommen aus den echten FireRed-SaveBlock-Variablen. Sie sind
-nicht aus englischem Bildschirmtext abgeleitet und funktionieren daher auch
-mit der deutschen `BPRD`-ROM. Jeder Checkpoint enthält die aktuelle Map und die
-relevanten Storywerte als Sidecar; unpassende oder alte States werden ignoriert.
-
-### Rollen bei 32 Umgebungen (V15.3)
-
-Alle 32 Envs spielen `full` ab Spielanfang — keine Rollen-Aufteilung mehr.
-`_agent_role()` ist auf `FULL_ONLY_MODE` kurzgeschlossen; die alte
-sequentielle Bootcamp-Logik (intro → stairs → exit → starter →
-free-world-Phasen, siehe Git-Historie) bleibt im Code als deaktivierter
-Fallback erhalten, ist aber nicht aktiv. Ein Rest-Reservat für Deep-Resume-
-Agenten (früher 2 Slots, resumten aus einem gespeicherten `stage_N`-Savestate)
-wurde entfernt, weil der einzige verfügbare Checkpoint (Eichs Labor, ein
-kleiner Innenraum) ein Datenrest der alten Reward-Ära war und praktisch
-nichts beitrug.
-
-Die Stage-, Checkpoint- und Rollenlogik wird durch Unit-Tests abgesichert.
+PKMAI trains reinforcement-learning agents to play **Pokémon FireRed** through
+[Stable-Retro](https://github.com/Farama-Foundation/stable-retro). It uses a
+stacked game image, RAM-derived navigation features, a persistent exploration
+memory, curriculum savestates, a live visible watcher and a browser dashboard.
+
+> This repository contains **no Pokémon ROM and no proprietary game assets**.
+> You must supply your own legally obtained game data and a local Stable-Retro
+> integration under `local/custom_integrations/`.
+
+**Authoritative current behaviour:** [`docs/CURRENT_LOGIC.md`](docs/CURRENT_LOGIC.md).
+It supersedes any conflicting numbers in the historical notes / other docs.
 
 ---
 
-Die vorherige Architektur war **V10.25 — Skill Vault + Full Chain**
-(Spezialisten-Bootcamp je Story-Abschnitt, Champion-Schutzwall). Details und
-warum V15.3 davon abgerückt ist: `docs/AI_STATUS.md`.
+## Status (2026-09-08)
 
-## Architecture
+The **2×2 Navigation/Battle split is LIVE** — cut over on 2026-09-07 and
+training since, started with `scripts/start_2x2_visible.sh` (`PKMAI_TWOBY2_LIVE=1`,
+which flips the six `twoby2.FEATURES` live gates ON at runtime).
 
-- Stable-Baselines3 PPO with `MultiInputPolicy`
-- 32 parallel headless Stable-Retro environments
-- four stacked 64×64 grayscale observations
-- 31 RAM/navigation/story features
-- 7 actions: A, B, START, UP, DOWN, LEFT, RIGHT
-- identical action timing in training and watcher: 12 held frames + 6 release frames
-- shared curriculum checkpoints and confirmed story transitions
-- persistent exploration/navigation memory
-- unprotected champion (best-score-wins, no regression shield) + live "brain mode" watcher
-- browser dashboard with a clickable per-agent stats panel (Status and Watcher tabs)
-- eigener sichtbarer Mapper (ID 121) mit einem Karten-Schritt pro Sekunde,
-  separatem PPO-Modell und aus Screenshots zusammengesetzten 16×16-Tiles
+| Path | State |
+|---|---|
+| **2×2 system** (`src/twoby2/` + `battle_*` + gated hooks in the live modules) | **LIVE.** Migration executed (`runtime/model_manifest.json`); split stack running: `train.py` (40 FULL nav workers, one PPO) + `battle_train.py --workers 9` (separate PPO) + watcher + web + status. Canary PASSED. |
+| **Legacy single-PPO** (`train.py` *without* `PKMAI_TWOBY2_LIVE`, roles FULL/BRIDGE/FRONTIER/RETENTION/FIGHTER, 46 envs) | intact **rollback target**, not running |
 
-### Mapper und Laufwege
+Last reported (`tools/pkmai_status.py`, 2026-09-07 ~22:52): navigation learner
+≈ 2.72 M steps, champion **v5 @ 2.50 M**; battle ≈ 200 K steps, champion still the
+verified **rule fallback** (no PPO battle champion promoted yet). Details:
+[`docs/CURRENT_LOGIC.md`](docs/CURRENT_LOGIC.md) → "What is running now".
 
-`src/mapper.py` startet am tiefsten validierten Fortschritts-Checkpoint, lernt
-aber in `pokemon_mapper_latest.zip` getrennt vom Haupt-Learner und Champion.
-Er startet bevorzugt aus dem vorhandenen `battle_ready`-Savestate (Starter,
-gesund, draußen im Gras). Der Emulator läuft dabei kontinuierlich mit 60 echten
-Frames pro Sekunde. In der Welt wählt ein persistenter Frontier-Graph alle 1,5
-Sekunden systematisch eine noch ungeprüfte Richtung und findet über bekannte
-Kanten den kürzesten Rückweg zum nächsten offenen Feld. Das PPO-Modell wird nur
-noch als Fallback in Kämpfen und Menüs verwendet. Nach jeder Aktion folgen 750
-ms neutrale Beruhigungsframes; anschließend werden drei zeitlich versetzte,
-ruhige Bilder desselben RAM-Standpunkts ausgewertet.
-Jedes neue Feld der laufenden Episode gibt Reward;
-ein projektweit erstmals kartiertes Feld, neue sichtbare Kartentiles und neue
-Maps geben Extra-Reward. Dadurch bleibt der Übungsgradient erhalten, während
-echte Entdeckung deutlich wertvoller ist. Story-, Kampf-, Level- und sonstige
-Rewards des Haupttrainings werden vollständig verworfen. Sein 60-FPS-HD-Fenster zeigt zwischen den Entscheidungen ein ruhiges
-Bild; exakt einmal pro Sekunde wird gehandelt und danach ein Mapping-Screenshot
-ausgewertet. Während eines Kampfes werden weder Karten-Tiles noch Web-JPEGs
-gespeichert; im Dashboard bleibt das letzte saubere Weltbild stehen. Die erzeugten Einzelkarten und der Atlas liegen unter
-`runtime/mapper/` und bleiben über Neustarts erhalten.
+Rollback: stop the stack, unset `PKMAI_TWOBY2_LIVE`, restore from
+`brain_backups/pre_2x2_activation_20260907_200507/` (`RESTORE.md`), start
+`scripts/start_all.sh`.
 
-Im Web ist `Alex (Watcher)` immer der erste Agent und sein Laufweg wird
-standardmäßig angezeigt. Zusätzlich erscheinen nur Full-Journey-Agenten, deren
-Episode wirklich mit `beginning` begonnen hat; Savestate-/Curriculum-Wege und
-deren historische Navigationskanten sind standardmäßig aus. Linien werden ausschließlich zwischen zwei
-benachbarten Koordinaten derselben Map gezogen. Savestate-Sprünge, Teleports und
-Warps erscheinen deshalb nicht als Weg. Die Wege der übrigen Runner sind aus
-Performance- und Lesbarkeitsgründen zunächst aus und lassen sich über
-`👣 Weitere Wege` einblenden. Der Reiter `🧩 Mapper` zeigt Live-HD-Bild und den
-aus echten Screenshots zusammengesetzten Atlas.
+### Built and tested on 2026-09-08 — NOT yet live-activated
 
-Die einzelnen Screenshot-Karten des Mappers werden außerdem alle zwei Sekunden
-direkt als Bild-Overlays in der normalen `🗺️ Overworld Map` aktualisiert, sobald
-ihre Kameraausrichtung durch einen echten Scrollschritt kalibriert wurde. Bis
-dahin zeigt die Overworld eine exakte, animationsunabhängige RAM-Tilemap der vom
-Mapper wirklich betretenen Felder. So können Wasser, Blumen, NPCs oder ein
-geratener Kameraursprung den Watcher-Marker nicht mehr in Bäume verschieben.
+Four subsystems are code-complete and covered by the 827-test suite but are
+**gated off / not loaded by the running processes** and wait for an explicit
+operator go-live (stop trainer → apply → restart → live acceptance). Nothing
+below has changed a champion, a running model or a savestate.
 
-Der Mapper besitzt eine harte Schreibgrenze: Curriculum-Savestates,
-Story-Warps, Exit-/Journey-Routen und globale Weltstufe des Haupttrainings sind
-für ihn schreibgeschützt. Sein Navigationsgedächtnis, seine Statistik, sein
-PPO-Modell und sämtliche Bildkarten liegen ausschließlich unter
-`runtime/mapper/` beziehungsweise im separaten Mapper-Checkpoint. Er liest die
-validierten Trainings-Savestates nur für seinen Start und veröffentlicht außer
-seiner Web-Telemetrie nichts in die Daten des Haupt-Learners.
+| Subsystem | What it is | Gate / go-live |
+|---|---|---|
+| **Directed navigation graph** (`src/nav_graph.py`, `src/nav_shaping_state.py`, `src/loop_guard.py`) | The old movement graph was **undirected** and dropped ledge jumps, so a one-way Route-1 ledge read as a valid back-path → endless `right-up → ledge-down → right-up` loop. New `DirectedNavGraph` keys every edge on `(map, from_xy, action)` with a movement kind (walk / ledge / warp / blocked); `directed_bfs`; blocked directions need 3 temporally-independent confirmations and decay; `RegionLoopGuard` catches ledge/region loops. Obs schema `nav_obs_v3_directed`, `NAV_DIM 31→36`. | Needs a **fresh navigation brain** (obs width change), savestates kept — `tools/reset_navigation.py --fresh-obs-schema` (dry-run verified, not applied). |
+| **Route-1 progress-blocker fix** (`src/pokemon_env.py`, `src/train.py`, `tools/clean_nav_graph.py`) | Champion was stuck at `max_world_stage=2` despite 100 % Route-1 reach — **not** a training-time problem. Root causes: the strategic target `(10,0)` is a warp-trigger tile so `directed_bfs` could never confirm a route (`target_valid=false` → no gradient north); an `is_blocked` TTL bug walled off the south entry every episode; 4-frame position sampling stored continuous walking as ~1400 fake ledges; the `stage_advance 1→2` **+250 was paid per episode** (a "sprint to Route 1, then stop" magnet). Fix: symmetric potential-based **geometric approach shaping** toward a verified exit while the graph rebuilds (telescoping, clamped, gated), `stage_advance` deduped **run-wide** (survives reset/wipe/savestate-reload), `_score()` is the **sole** promotion authority (geographic only), bounded eval workers so champion eval can't starve. `tools/clean_nav_graph.py` backs up + removes only provably-wrong graph entries (dry-run: 1380 ledges → 0, ~2500 false statics → ~1050, Pallet→exit route coverage 0.4 % → 82 %). | Same fresh-brain reset + `clean_nav_graph.py --apply`, then live acceptance sampling of ≥10 Route-1 agents. |
+| **Catch-v2 Battle-PPO** (`src/battle_catch.py`, `src/catch_planner.py`, `src/battle_executor.py`) | Battle schema **v2** with a **CATCH** action: obs 116→140, actions 11→12, `battle_reward_v2_catch`. v1 (116/11) is untouched and stays the live combat fallback. Gen-III catch maths, `_do_catch` state machine, promotion gate `battle_catch_gate` (success-rate / ball-efficiency / no unrequested or trainer catch; reward is never a criterion). | **Live catch is fail-closed** — `twoby2.battle_ram_live.catch_ram_ready()` returns `(False, …)` because the bag / ball-pocket / dex / catch-result RAM is not verified for BPRD. Unblock: `tools/catch_ram_probe.py` (isolated emulator, operator) → verify → flip the flag → opt-in `battle_train.py --schema v2`. |
+| **Grass wild-encounter harvester + fail-closed shiny telemetry** (`src/shiny.py`, `src/twoby2/{wild_encounter_harvester,shiny_ram,shiny_counters}.py`) | Tile-aware corridor walker (±3 tiles from the scenario anchor, re-reads position every frame, aborts + restores on any anomaly) to grow real wild-battle scenario variety; per-bucket scenario dedup so one Rattata seed can't dominate. Shiny detection is **telemetry only** (`shiny_value = tid ^ sid ^ pid_hi ^ pid_lo < 8`); process-safe per-class counters (`fcntl.flock` around the whole RMW); one terminal outcome per encounter. Dashboard shows Seen/Caught/Lost/Unknown per Battle/FULL/Watcher. | **`SHINY_RAM_VERIFIED = False`** → shiny status is always `("unknown", "shiny_ram_unverified")`; the dashboard shows a red "SHINY-RAM NICHT VERIFIZIERT" banner. Unblock: `tools/shiny_ram_probe.py` verifies the player TID/SID offset for BPRD. |
 
-Current PPO settings in V17.2 (`src/train.py`):
+Design + rationale: [`docs/AI_STATUS.md`](docs/AI_STATUS.md) (2026-09-08),
+[`docs/BIG_CHANGES_TODO.md`](docs/BIG_CHANGES_TODO.md), plan
+`.claude/plans/goofy-strolling-cray.md`.
 
-| Setting | Value |
-| --- | ---: |
-| Learning rate | `7.5e-05` |
-| Environments | `60` |
-| Steps per environment | `512` |
-| Rollout size | `30720` |
-| Batch size | `256` |
-| Epochs | `4` |
-| Gamma | `0.995` |
-| GAE lambda | `0.98` |
-| Entropy coefficient | `0.02` |
+---
 
-> Ältere Abschnitte unten (Mapper-Beschreibung, „Adaptive agent roles" mit 120
-> Envs) stammen aus früheren Architekturversionen und sind teils veraltet —
-> maßgeblich sind immer der aktuelle Code und die Angaben oben.
+## The 2×2 architecture
 
-## Adaptive agent roles
+Four permanently separate model states, coupled only by
+`runtime/model_manifest.json`:
 
-The 120 environments change distribution automatically as the shared curriculum and Full Champion advance.
-
-| Role | Starter breakthrough | Chain repair | Forest push |
-| --- | ---: | ---: | ---: |
-| Intro | 4 | 4 | 4 |
-| Stairs | 12 | 20 | 10 |
-| Exit | 20 | 20 | 12 |
-| Starter | 52 | 18 | 12 |
-| Battle | 0 | 4 | 8 |
-| Level | 0 | 2 | 4 |
-| Progress | 8 | 16 | 34 |
-| Badge | 0 | 0 | 4 |
-| Full journey | 24 | 36 | 32 |
-
-All roles train the same Full-policy observation context. Their role only changes curriculum start, episode horizon and reward focus.
-
-The current migration normally enters **Chain repair** when a shared Starter state exists but the protected Full Champion has not yet reached the Starter from the beginning. Once that happens, training switches automatically to **Forest push**.
-
-## Checkpoints
-
-Generated checkpoints live below `runtime/checkpoints/` and are intentionally ignored by Git.
-
-| File | Purpose |
-| --- | --- |
-| `pokemon_model_resume.zip` | current learner, optimizer state and PPO step counter |
-| `pokemon_model_best.zip` | protected end-to-end Full Champion |
-| `pokemon_model_candidate.zip` | latest evaluated/final candidate |
-| `pokemon_skill_intro_best.zip` | protected Intro policy |
-| `pokemon_skill_stairs_best.zip` | protected stair policy |
-| `pokemon_skill_exit_best.zip` | protected house-exit policy |
-| `pokemon_skill_starter_best.zip` | protected Starter policy |
-| `pokemon_skill_progress_best.zip` | protected post-Starter progress policy |
-
-**V15.3 update:** the Skill Vault files above are historical — they were
-written by the old specialist bootcamp and are no longer read by the watcher.
-`WATCHER_BRAIN_MODE = True` in `watch.py` makes the watcher always load
-`pokemon_model_resume.zip` (the live, continuously-training network) end to
-end, with no per-stage skill switching. This is the honest "what you see is
-what's training" view; see `docs/AI_STATUS.md` for why the switch was made.
-
-## Repository layout
-
-```text
-src/        application, environment, training, watcher and web code
-scripts/    start/stop utilities
-tools/      development, RAM and map utilities
-assets/     distributable static assets
-docs/       architecture and AI handoff documentation
-runtime/    generated models, telemetry, maps and curriculum (gitignored)
-local/      private integration and game files (gitignored)
 ```
+runtime/navigation/checkpoints/   navigation_learner.zip   navigation_champion.zip
+runtime/battle/checkpoints/       battle_learner.zip       battle_champion.zip
+runtime/model_manifest.json       couples the two systems (schema model_manifest_v2)
+```
+
+At migration the battle champion starts as a **verified rule-controller marker**
+(`battle_champion.rule.json`, `battle_controller.py`) and is only replaced by a
+real `battle_champion.zip` once a Battle-PPO passes `twoby2.battle_promotion`.
+No fake checkpoint is ever written.
+
+**Workers (50 emulators total):**
+
+| Group | Count | Role |
+|---|---|---|
+| Navigation | 40 | **all FULL agents** — every one starts at the identical canonical post-parcel master (`StartGame.state`). **No BRIDGE/FRONTIER/RETENTION/FIGHTER split** under 2×2 (`_v20_mode()` forces `MODE_FULL`). One navigation PPO. Overworld only. |
+| Battle headless | 8 | isolated battle scenario emulators; train the one battle learner |
+| Battle mirror | 1 | worker 9 of the same battle learner; its frames are shown in a window (`tools/battle_mirror_watch.py`) — no own optimizer/model, no extra actions |
+| FULL watcher | 1 | inference-only; same wrapper / router / champions as a FULL worker, but never learns |
+
+**Out of battle:** the navigation brain acts; only navigation transitions enter
+the navigation rollout; only navigation reward reaches the navigation PPO.
+
+**In battle:** `NavigationBattleWrapper` hands the whole fight to the pinned
+**battle champion** driven by the real `EmulatorBattleDriver`; the wrapper steps
+the raw emulator directly, so `PokemonFireRedEnv.step` and its combat-reward
+pipeline never run during a battle — the navigation PPO **structurally** never
+sees damage / KO / win / level. Navigation only receives a coarse strategic
+summary (win/loss/wipe, HP/PP/items spent, turns, resulting world state).
+
+**Level / XP / KOs are never navigation progress** and never gate a navigation
+champion promotion (`src/twoby2/nav_progress.py`). They remain in the *battle*
+observation because the battle brain needs them.
+
+**PPO update timing:** navigation `PPO_N_STEPS = 512` — a rollout is processed
+every 512 real navigation decisions **regardless of the episode horizon**
+(2 000 → 163 840). A chunk boundary is neither `terminated` nor `truncated`; the
+env is not reset; only a real terminal zeroes the value bootstrap
+(`src/twoby2/nav_chunk_rollout.py`). The battle rollout size is separate.
+
+Full design: [`docs/BATTLE_ARCHITECTURE.md`](docs/BATTLE_ARCHITECTURE.md).
+
+### Verified BPRD battle RAM (2026-09-07)
+
+From 20 labelled dumps in `runtime/ram_probe/20260907_184350` (wild + trainer
+fight, every cursor position, a switch, an out-of-battle negative context).
+Stable-Retro RAM-view offsets; GBA address = `0x02000000 + offset`:
+
+| Field | Offset | Notes |
+|---|---|---|
+| `gBattlerPartyIndexes` | `0x23BCE` | `u16[4]`; player index changes after a switch |
+| `gBattleMons` | `0x23BE4` | 4 × `0x58` `struct BattlePokemon` |
+| `gActionSelectionCursor` | `0x23FF8` | 0/1/2/3 = FIGHT/BAG/POKEMON/RUN |
+| `gMoveSelectionCursor` | `0x23FFC` | 0..3 |
+| `battle_menu_state` | `0x22BC4` | 18/20/22 = CHOOSEACTION/CHOOSEMOVE/CHOOSEPOKEMON |
+| `gBattleWeather` | `0x23F1C` | optional, not a blocker |
+
+`gMain.inBattle` (`battle_state.MainBattleReader`) is the only trusted
+battle-active latch; the pulsing byte at `0x23BC8` is not.
+
+**Live SWITCH is still masked** — the party-list cursor is not yet RAM-verified,
+so live switching is deliberately fail-closed.
+
+---
+
+## Protected assets (never modified)
+
+`src/twoby2/protected_assets.py` registers, with symlink/`..`/alias-resistant
+paths, files that no reset / migration / normalize / cleanup path may write:
+
+| Logical id | File(s) | sha256 (state) |
+|---|---|---|
+| `canonical_post_parcel_master` | `local/custom_integrations/PokemonFireRed-Gba/StartGame.state` | `0c0e26d9…683d0` |
+| `route1_manual_battle_seed` | `brain_backups/healthy_frontier_20260906_214032/stage_frontier_2.*` | `4244fa04…0b48` |
+| `protected_ram_probe_route1_seed` | `brain_backups/ram_probe_route1_seed/stage_frontier_2.*` | `4c22f65e…2563` |
+| `protected_live_route1_frontier_anchor` | `runtime/curriculum_shared/stage_frontier_2.*` | `4c22f65e…2563` |
+
+The verified dump set `runtime/ram_probe/20260907_184350/`, exploration memory
+and curriculum/route savestates are also preserved by every reset.
+
+---
 
 ## Setup
 
-Create a Python environment and install the project dependencies. Then create the local configuration:
+```bash
+# Python 3.11 env (Apple Silicon / miniforge shown; adjust PKMAI_PYTHON otherwise)
+conda create -n pokemon-ai python=3.11
+conda activate pokemon-ai
+pip install stable-retro stable-baselines3 torch gymnasium numpy opencv-python
+
+# provide your own ROM + integration under:
+#   local/custom_integrations/PokemonFireRed-Gba/{rom.gba,data.json,metadata.json,StartGame.state}
+```
+
+Expected ROM: German FireRed **BPRD** rev 0, md5 `6648a0484a56097ca75d6af87ebce225`,
+sha256 `eed4fb02…b970507`.
+
+---
+
+## Running
+
+### 2×2 split stack (live)
 
 ```bash
-cp .env.example .env
+bash scripts/start_2x2_visible.sh   # sets PKMAI_TWOBY2_LIVE=1, opens visible Terminal windows
+bash scripts/stop_all.sh
+#   -> NAVIGATION 40 · BATTLE 9 · BATTLE mirror · FULL watcher · WEB · STATUS
 ```
 
-If ngrok is already configured globally, no token is required in `.env`.
+`src/train.py` under `PKMAI_TWOBY2_LIVE` uses `runtime/navigation/checkpoints/`
+and resumes `navigation_learner.zip`; `src/battle_train.py --workers 9` uses
+`runtime/battle/`. Never restart the watcher mid-stream.
 
-Start all project processes:
+### Legacy single-PPO (rollback target, not running)
 
 ```bash
-./start_all.sh
+bash scripts/start_all.sh     # trainer + watcher + web + status, PKMAI_TWOBY2_LIVE unset
 ```
 
-Stop all project processes:
+`train.py` without the env var runs `NUM_ENVS = 46` with the
+FULL/BRIDGE/FRONTIER/RETENTION/FIGHTER curriculum and resumes
+`runtime/checkpoints/pokemon_model_resume.zip`. (`scripts/start_all_legacy.sh` is
+an older osascript variant that predates the `src/` + `runtime/` layout — kept
+for reference only.)
+
+### Dashboard
+
+`src/web_stream.py` serves the dashboard on **http://localhost:8001** (http
+only — https shows "can't connect"). The start scripts launch it.
+
+---
+
+## How the 2×2 cutover was done (2026-09-07)
 
 ```bash
-./stop_all.sh
+PYTHONPATH=src python tools/twoby2_preflight.py                                   # ACTIVATION-READY
+PYTHONPATH=src python tools/migrate_to_2x2.py --execute --i-understand-this-rewires-runtime
+PYTHONPATH=src python tools/reset_navigation.py --apply
+PYTHONPATH=src python tools/reset_battle.py --apply
+bash scripts/start_2x2_visible.sh
 ```
 
-During source-only or documentation changes, the trainer, watcher, webserver and ngrok do not need to be stopped. Changes to `train.py`, `pokemon_env.py` or `watch.py` require a controlled process restart before they become active.
+Migration copied the single-PPO champion → `navigation_champion.zip` and
+resume → `navigation_learner.zip`, wrote `runtime/model_manifest.json`
+(`migration_state: executed`), and set the battle champion to the
+`battle_champion.rule.json` rule marker. Originals were archived, not deleted.
 
-## Runtime status
+**Rollback:** stop the stack, unset `PKMAI_TWOBY2_LIVE`, follow
+`brain_backups/pre_2x2_activation_20260907_200507/RESTORE.md` (restore models,
+start `scripts/start_all.sh`). Protected assets are never in a backup and never
+touched.
 
-Useful local status files:
+### Pre-flight — six honest readiness levels
 
-```text
-runtime/trainer_status.json
-runtime/champion_score.json
-runtime/skill_vault_scores.json
-runtime/instances_data/
-```
+`tools/twoby2_preflight.py` distinguishes:
 
-Quick inspection:
+1. `component_prepared` — modules import + unit-testable
+2. `production_wired` — `train.py` / `watcher_runtime.py` / `watch.py` /
+   `pokemon_env.py` / `battle_train.py` / `battle_watch.py` really call the seam
+   (call-site scan, not file existence)
+3. `unit_tests_passed` — recorded full-suite result is green **and not stale**
+4. `real_canary_passed` — a current, valid `live_battle_canary` report
+   (`overall == PASS`, matching ROM + seed + addresses)
+5. `migration_ready` — 1–4 hold and no protected file is a write target
+6. `activation_ready` — 1–5 hold
+
+### Real battle canary
 
 ```bash
-cat runtime/trainer_status.json
-echo
-cat runtime/champion_score.json
-echo
-cat runtime/skill_vault_scores.json
+PYTHONPATH=src python tools/live_battle_canary.py
 ```
 
-## Development safety
+Isolated emulator, read-only working copy of the probe seed (hash checked before
+and after). You walk into grass / a trainer; the tool detects the battle via the
+verified latch, then the **real `EmulatorBattleDriver`** runs the checks (reader
+plausible, action mask, real MOVE macro + observed HP/PP/turn change, switch +
+`gBattlerPartyIndexes`/`gBattleMons` cross-check, wild RUN, trainer-RUN masked,
+stable OUT_OF_BATTLE). Report:
+`runtime/live_battle_canary/<ts>/canary_report.json`. Guide:
+[`docs/RAM_PROBE_GUIDE.md`](docs/RAM_PROBE_GUIDE.md).
 
-- Never commit ROMs, private Stable-Retro integrations, `.env`, ngrok credentials, model checkpoints, runtime data or savestates.
-- Do not reset `pokemon_model_resume.zip` merely because the Full Champion is older. The learner and champion intentionally advance on separate tracks.
-- Do not reintroduce automatic hard rollback. It previously erased later-stage learning repeatedly.
-- Keep watcher and training observation construction and action timing identical.
-- Count only completed Full-from-beginning episodes for same-depth champion evaluation.
-- Long Full probes must remain exempt from early house/stage caps; otherwise they terminate near 1,800 steps instead of their 32,768-step horizon.
-- Avoid hard-coded map coordinates. Navigation should use RAM positions, discovered edges and confirmed transitions.
+Last PASS: `runtime/live_battle_canary/20260907_194636/`.
 
-**Current work log: [docs/AI_STATUS.md](docs/AI_STATUS.md)** — read this first. It tracks
-what changed, why, what is running, and what the next step is. Update it every session.
+---
 
-See [docs/AI_HANDOFF.md](docs/AI_HANDOFF.md) for the deeper technical background, invariants and tests.
+## Tests
 
-Live runtime numbers: `python tools/pkmai_status.py`.
+```bash
+PYTHONPATH=src:tests /opt/homebrew/Caskroom/miniforge/base/envs/pokemon-ai/bin/python -m unittest discover -s tests
+```
 
-## Legal
+827 tests. After changing any `src/` code, re-run and re-record
+`runtime/twoby2_test_result.json` (the pre-flight rejects a stale result).
 
-No Pokémon ROM or proprietary game assets are included in this repository. Users must provide their own legally obtained game data and local Stable-Retro integration.
+---
 
-## Security
+## Layout
 
-Never commit `.env`, ROMs, model checkpoints, save states, runtime data, backups or ngrok credentials. Review staged files with `git diff --cached` before every push.
+```
+src/
+  pokemon_env.py        legacy single-PPO env (gated 2x2 seam + directed-nav + geometric approach)
+  train.py  watch.py    legacy trainer / visible watcher (gated 2x2 seam)
+  watcher_runtime.py    isolated evaluation env (FULL-watcher parity wrap)
+  web_stream.py         dashboard :8001
+  nav_graph.py nav_shaping_state.py loop_guard.py   directed movement graph + persistent shaping state + loop guard
+  curriculum_v20.py frontier_v20.py nav_transitions_v20.py   legacy curriculum
+  battle_engine.py battle_types.py battle_ram.py battle_controller.py
+  battle_executor.py battle_env.py battle_train.py battle_watch.py   battle system
+  battle_catch.py catch_planner.py shiny.py         catch-v2 maths / objective planner / Gen-3 shiny value
+  battle_state.py firered_ram.py pokedb.py pokedb/                    RAM + Gen-III DB
+  twoby2/              2x2 state machines, router, wrapper, drivers, live_integration,
+                       protected_assets, nav_progress, nav_chunk_rollout, preflight logic,
+                       wild_encounter_harvester, shiny_ram, shiny_counters, scenario_pool
+tools/
+  twoby2_preflight.py            6-level readiness
+  live_battle_canary.py          interactive real canary
+  battle_dump_collect.py battle_dump_score.py   RAM-address probe kit
+  catch_ram_probe.py shiny_ram_probe.py          fail-closed RAM verification (operator-run)
+  clean_nav_graph.py             back up + remove provably-wrong movement-graph entries
+  migrate_to_2x2.py  reset_navigation.py  reset_battle.py  reset_full.py  reset_component.py
+  battle_mirror_watch.py  pkmai_status.py
+scripts/
+  start_2x2_visible.sh  start_all.sh (legacy)  stop_all.sh
+docs/
+  CURRENT_LOGIC.md              authoritative current behaviour
+  BATTLE_ARCHITECTURE.md        full 2x2 design + per-module status
+  BIG_CHANGES_TODO.md           forward-looking big tasks
+  STATUS_TODO.md  AI_STATUS.md  AI_HANDOFF.md   history / running log
+runtime/    (git-ignored)  checkpoints, curriculum, exploration memory, ram_probe, canary
+brain_backups/  (git-ignored)  timestamped safety copies incl. protected seeds
+```
+
+---
+
+## Conventions
+
+- Git commits: end with `Code by AlexnoTabi` + `https://www.youtube.com/@AlexnoTabi`.
+- Never restart the watcher without the operator present.
+- `scripts/start_2x2_visible.sh` launches each service in its own visible
+  Terminal window (osascript), never `nohup`.
+- Secrets are local-only; `.env` is git-ignored.
+
+Historical release notes: `git log` and the dated sections of
+`docs/STATUS_TODO.md` / `docs/AI_STATUS.md`.

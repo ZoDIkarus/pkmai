@@ -105,24 +105,46 @@ BOTTOM_H = 74
 # ================================================================
 # INTERNAL PATHS - normalerweise nicht aendern
 # ================================================================
-MODEL_DIR = os.path.join(RUNTIME_DIR, "checkpoints")
-LATEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_latest.zip")
-BEST_MODEL = os.path.join(MODEL_DIR, "pokemon_model_champion.zip")
-RESUME_MODEL = os.path.join(MODEL_DIR, "pokemon_model_resume.zip")
-VERSION_FILE = os.path.join(RUNTIME_DIR, "model_version.json")
-CHAMPION_FILE = os.path.join(RUNTIME_DIR, "champion_score.json")
-TRAINER_STATUS_FILE = os.path.join(RUNTIME_DIR, "trainer_status.json")
+_TWOBY2_LIVE = os.environ.get("PKMAI_TWOBY2_LIVE") == "1"
+MODEL_DIR = os.path.join(RUNTIME_DIR, "navigation", "checkpoints") if _TWOBY2_LIVE else os.path.join(RUNTIME_DIR, "checkpoints")
+LATEST_MODEL = os.path.join(MODEL_DIR, "navigation_latest.zip" if _TWOBY2_LIVE else "pokemon_model_latest.zip")
+BEST_MODEL = os.path.join(MODEL_DIR, "navigation_champion.zip" if _TWOBY2_LIVE else "pokemon_model_champion.zip")
+RESUME_MODEL = os.path.join(MODEL_DIR, "navigation_learner.zip" if _TWOBY2_LIVE else "pokemon_model_resume.zip")
+_NAV_STATUS_DIR = os.path.join(RUNTIME_DIR, "navigation") if _TWOBY2_LIVE else RUNTIME_DIR
+VERSION_FILE = os.path.join(_NAV_STATUS_DIR, "model_version.json")
+CHAMPION_FILE = os.path.join(_NAV_STATUS_DIR, "champion_score.json")
+TRAINER_STATUS_FILE = os.path.join(_NAV_STATUS_DIR, "trainer_status.json")
+BATTLE_STATS_FILE = os.path.join(RUNTIME_DIR, "battle", "battle_stats.json")
 
 
 def get_trainer_progress():
-    """(learner_steps, champion_version) for the header - lets viewers see
-    the brain keep learning even while the watcher itself only infers."""
+    """(learner_steps, champion_version, champion_steps) for the header - lets
+    viewers see the navigation brain keep learning even while the watcher itself
+    only infers."""
     try:
         with open(TRAINER_STATUS_FILE, "r") as f:
             d = json.load(f)
-        return int(d.get("learner_steps", 0) or 0), int(d.get("champion_version", 0) or 0)
+        return (int(d.get("learner_steps", 0) or 0),
+                int(d.get("champion_version", 0) or 0),
+                int(d.get("champion_steps", 0) or 0))
     except Exception:
-        return 0, 0
+        return 0, 0, 0
+
+
+def get_battle_progress():
+    """Separate battle learner progress for the watcher header/overview:
+    {fights, champion_version, learner_version}. Zeroes when the 2x2 battle
+    stack isn't running."""
+    try:
+        with open(BATTLE_STATS_FILE, "r") as f:
+            d = json.load(f)
+        return {
+            "fights": int((d.get("counters") or {}).get("episodes", 0) or 0),
+            "champion_version": int(d.get("champion_version", 0) or 0),
+            "learner_version": int(d.get("learner_version", 0) or 0),
+        }
+    except Exception:
+        return {"fights": 0, "champion_version": 0, "learner_version": 0}
 SKILL_MODELS = {
     "intro": os.path.join(MODEL_DIR, "pokemon_skill_intro_best.zip"),
     "stairs": os.path.join(MODEL_DIR, "pokemon_skill_stairs_best.zip"),
@@ -358,6 +380,31 @@ def watcher_nav_target(
         frontiers,
         key=lambda p: abs(p[0] - x) + abs(p[1] - y)
     )
+
+
+# 2x2 live seam for the visible FULL-watcher: consult the SAME router as a FULL
+# worker to pick the in-battle policy (battle champion / verified rule fallback,
+# never a learner). No-op while twoby2.FEATURES['battle_router_live'] is OFF.
+try:
+    from twoby2.router import BattlePolicyRouter as _TwoBy2Router, WATCHER as _TWOBY2_WATCHER
+    from twoby2.live_integration import integration_status as _twoby2_integration_status  # noqa: F401
+except Exception:  # pragma: no cover
+    _TwoBy2Router = None
+    _TWOBY2_WATCHER = "watcher"
+
+
+def watcher_battle_policy_choice(*, battle_champion_valid, battle_champion_source,
+                                 pinned_battle_champion, rule_controller_ready=True):
+    """Which in-battle policy the visible watcher uses (same rule as a FULL
+    worker). Returns a route dict; the watcher never loads a learner."""
+    if _TwoBy2Router is None:
+        return {"policy": "rule_controller", "loads_battle_learner": False}
+    r = _TwoBy2Router(consumer_mode=_TWOBY2_WATCHER,
+                      pinned_battle_champion=pinned_battle_champion,
+                      battle_champion_valid=battle_champion_valid,
+                      battle_champion_source=battle_champion_source,
+                      rule_controller_ready=rule_controller_ready)
+    return r.route(in_battle=True, execution_check=(False, ["watcher: inference only"]))
 
 
 def watcher_objective(loc, info):

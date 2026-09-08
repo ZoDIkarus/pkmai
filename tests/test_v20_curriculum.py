@@ -13,9 +13,12 @@ from curriculum_v20 import (
     MODE_FULL, MODE_BRIDGE, MODE_FRONTIER, MODE_RETENTION,
     FULL_CHAIN_CONFIRMATIONS,
 )
+from unittest.mock import patch
+
 from nav_transitions_v20 import KnownTransitions, KNOWN, UNKNOWN
 from target_shaper_v20 import TargetShaper
 from loop_guard import ShortCycleGuard
+import pokemon_env
 from pokemon_env import PokemonFireRedEnv
 
 
@@ -256,6 +259,82 @@ class Test9_LongFullProbeHorizon(unittest.TestCase):
         env = self._limit(training_objective="watcher", is_watcher=True)
         self.assertEqual(env._episode_step_limit(),
                          PokemonFireRedEnv.LONG_FULL_PROBE_STEPS)
+
+
+# --------------------------------------------------------------------------
+class Test9b_AdaptiveHorizonRamp(unittest.TestCase):
+    """Once twoby2.horizon advances a rung, the per-worker episode length
+    follows it - the frozen 32768 'long_full_32k' cut no longer strands the
+    _is_long_full_probe ranks below the raised horizon."""
+
+    def setUp(self):
+        import twoby2
+        self._twoby2 = twoby2
+        self._prev = twoby2.FEATURES.get("adaptive_nav_horizon", False)
+        twoby2.FEATURES["adaptive_nav_horizon"] = True
+        self.dir = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.dir, "navigation"))
+        self._patch = patch.object(pokemon_env, "RUNTIME_DIR", self.dir)
+        self._patch.start()
+
+    def tearDown(self):
+        self._twoby2.FEATURES["adaptive_nav_horizon"] = self._prev
+        self._patch.stop()
+
+    def _write_rung(self, index):
+        from twoby2.horizon import NavHorizonState
+        NavHorizonState(index).save_atomic(
+            os.path.join(self.dir, "navigation", "nav_horizon.json"))
+
+    def _env(self, rank, **kw):
+        base = dict(n_envs=40, rank=rank, training_objective="full",
+                    episode_start="beginning", shared_progress={},
+                    V20_CURRICULUM=True, FULL_ONLY_MODE=True)
+        base.update(kw)
+        return _bare_env(**base)
+
+    def test_floor_is_the_champion_horizon_before_any_advance(self):
+        # no nav_horizon.json -> champion floor rung (32768); ~20% probe 49152.
+        # eval carve-out only applies once the majority rung > NAV_EVAL_HORIZON.
+        self.assertEqual(self._env(20)._episode_step_limit(), 32768)
+        self.assertEqual(self._env(0)._episode_step_limit(), 49152)
+
+    def test_after_one_advance_no_rank_is_left_at_32768(self):
+        # rung 6 (49152) is BELOW NAV_EVAL_HORIZON -> the eval carve-out is
+        # inactive, the ramp is unchanged.
+        self._write_rung(6)   # NAV_EPISODE_HORIZONS[6] == 49152, next == 65536
+        limits = {r: self._env(r)._episode_step_limit() for r in range(40)}
+        self.assertNotIn(32768, limits.values())
+        self.assertEqual(set(limits.values()), {49152, 65536})
+        self.assertEqual(sum(1 for v in limits.values() if v == 65536), 8)
+
+    def test_fixed_eval_workers_bound_the_majority_rung_without_stealing_a_probe(self):
+        from pokemon_env import PokemonFireRedEnv as _E
+        self._write_rung(9)   # NAV_EPISODE_HORIZONS[9] is well above the eval cap
+        limits = {r: self._env(r)._episode_step_limit() for r in range(40)}
+        eval_ranks = range(_E.NAV_EVAL_FIRST_RANK,
+                           _E.NAV_EVAL_FIRST_RANK + _E.NAV_EVAL_WORKERS)
+        for r in eval_ranks:
+            self.assertEqual(limits[r], _E.NAV_EVAL_HORIZON)
+        # probe ranks (0-7) keep the full probe horizon
+        probe_h = max(limits.values())
+        self.assertEqual(sum(1 for v in limits.values() if v == probe_h), 8)
+        # a mid-fleet majority worker still runs the large ramp horizon
+        self.assertGreater(limits[25], _E.NAV_EVAL_HORIZON)
+
+    def test_is_long_full_probe_rank_follows_the_ramp_not_the_frozen_cut(self):
+        self._write_rung(6)
+        layout = curriculum_v20.allocate_modes(40)
+        full_ranks = [i for i, m in enumerate(layout) if m == MODE_FULL]
+        stranded_rank = full_ranks[len(full_ranks) // 2:][0]   # back-half, non-probe
+        env = self._env(stranded_rank)
+        self.assertTrue(env._is_long_full_probe())
+        self.assertEqual(env._episode_step_limit(), 49152)
+
+    def test_watcher_runs_the_majority_horizon_not_the_probe(self):
+        self._write_rung(6)
+        w = self._env(0, training_objective="watcher", is_watcher=True)
+        self.assertEqual(w._episode_step_limit(), 49152)   # current rung, not 65536
 
 
 # --------------------------------------------------------------------------

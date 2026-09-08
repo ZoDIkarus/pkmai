@@ -77,6 +77,7 @@ venv/
 .fresh_ai_reset_done_v3
 .v5_brain_mapping_reset_done
 .v20_clean_reset_done
+.brain_reset_keep_savestates_done
 
 # ---- PKMAI hard safety ----
 scripts/start_all_legacy.sh
@@ -93,3 +94,6 @@ assets/maps/extracted_firered_maps/
 assets/maps/Route1.png
 assets/maps/pallettown.png
 assets/maps/kanto_map.png.disabled
+
+# Local trainer sprite-sheet references (not distributed with source, unused by code)
+assets/sprites/trainer/

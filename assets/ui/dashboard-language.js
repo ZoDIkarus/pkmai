@@ -37,7 +37,7 @@ const translations = [
  ['Hausausgang','Leaving home'],['abgeschlossen','completed'],['gesamte','total'],
  ['gesamt','total'],['Läufe','Runs'],['Lauf','Run'],
  ['Episoden','Episodes'],['Ø Ep-Steps','Average episode steps'],
- ['Erfolgsrate','Success rate'],['Tiefe','Depth'],['Rolle','Role'],['Rollen','Roles'],
+ ['Erfolgsrate','Success rate'],['Tiefe','Depth'],
 
  ['Ø Episode-Reward über echte PPO-Trainingsschritte.','Average episode reward across actual PPO training steps.'],
  ['Nur vollständige Runs vom echten Spielanfang: Intro, Treppe, Hausausgang, Schiggi und Orden.','Complete runs: intro, stairs, leaving home, starter and badges.'],
@@ -55,7 +55,7 @@ const translations = [
  ['Noch kein Pokémon / keine Party-Telemetrie','No Pokémon / no team data yet'],
  ['Noch keine Daten','No data yet'], ['Agenten – antippen für Live-Stats','Agents – select for live stats'],
  ['End-to-End-Screenshot + Live-Stats jedes Agenten','Live game view and agent statistics'],
- ['Alle Rollen','All roles'],['Alle Maps','All locations'],['Alle Stages','All stages'],
+ ['Alle Maps','All locations'],['Alle Stages','All stages'],
  ['Starter egal','Any starter'],['hat Starter','Has starter'],['kein Starter','No starter'],
  ['Sortierung: Standard','Sort: default'],['Weitester Fortschritt','Furthest progress'],
  ['Meiste Maps','Most locations'],['Höchstes Level','Highest level'],['Höchster Reward','Highest reward'],
@@ -120,12 +120,10 @@ const translations = [
  ['Vulkanorden','Volcano Badge'],['Erdorden','Earth Badge']
 ];
 const englishToGerman = [
- ['Overworld Map','Weltkarte'],['Indoor Mapping','Gebäudekarten'],['Graphs','Diagramme'],
+ ['Overview','Übersicht'],['Graphs','Diagramme'],
  ['LIVE WATCHER','LIVE WATCHER'],['TRAINER · LIVE','TRAINER · LIVE'],
- ['FRONTIER CHAMPION','FORTSCHRITTS-CHAMPION'],['GLOBAL AI','GEMEINSAME KI'],
  ['Selected Agent Team','Team des gewählten Agenten'],['Episode Reward','Episoden-Reward'],
- ['Known Edges','Bekannte Wege'],['Known Maps','Bekannte Orte'],['Transitions','Übergänge'],
- ['Finished','Beendet'],['Learning','Lernen'],['Maps','Orte'],['Steps','Schritte'],
+ ['Learning','Lernen'],['Steps','Schritte'],
  ['Battles','Kämpfe'],['Battle','Kampf'],['Reward history','Reward-Verlauf']
 ];
 const originals = new WeakMap();
@@ -167,7 +165,8 @@ function translatePage() {
  }
  document.documentElement.lang=uiLanguage;
  const tgl=document.getElementById('language-toggle');
- const tglText=uiLanguage==='en' ? 'EN / DE' : 'DE / EN';
+ // Show the language the button switches TO, not the currently active one.
+ const tglText=uiLanguage==='en' ? 'DE' : 'EN';
  if(tgl && tgl.textContent!==tglText) tgl.textContent=tglText;
  observer.observe(document.body,{subtree:true,childList:true,characterData:true});
 }
@@ -248,11 +247,10 @@ function fleetMatches(agent, filter) {
 }
 window.addEventListener('DOMContentLoaded',()=>{
  if(typeof renderStatusDashboard!=='function') return;
- const filter={role:'',health:'',query:''};
+ const filter={health:'',query:''};
  let lastState=null;
- const labels={full:'Full',bridge:'Bridge',frontier:'Frontier',retention:'Retention',fighter:'Fighter',watcher:'Watcher',scout:'Scout (Legacy)'};
+ const labels={full:'FULL Navigation',watcher:'Watcher'};
  Object.assign(FLEET_ROLE_LABELS,labels);
- Object.assign(STATUS_ROLE_ICONS,{bridge:'🌉',frontier:'🔭',retention:'🔁',fighter:'⚔️'});
  const displayAgent=i=>({...i,training_objective:fleetRole(i)});
  const oldStatus=renderStatusDashboard, oldChips=agentChipsHtml, oldDetail=renderAgentDetail;
  const esc=statusEsc;
@@ -263,20 +261,17 @@ window.addEventListener('DOMContentLoaded',()=>{
   if(lastState) renderStatusDashboard(lastState);
   renderWatcherTab();
   document.querySelectorAll('.fleet-tools').forEach(bar=>{
-   bar.querySelector('[data-key="role"]').value=filter.role;
-   bar.querySelector('[data-key="health"]').value=filter.health;
+   const health=bar.querySelector('[data-key="health"]');if(health)health.value=filter.health;
    const input=bar.querySelector('input');if(input!==document.activeElement)input.value=filter.query;
   });
  }
  for(const [anchorId,scope] of [['status-agent-detail','status'],['wt-grid','watcher']]){
   const anchor=document.getElementById(anchorId);if(!anchor)continue;
   const bar=document.createElement('div');bar.className='fleet-tools';bar.id=scope+'-fleet-filters';
-  bar.innerHTML='<input aria-label="Agent suchen" placeholder="ID, Name, Map oder Startpunkt" data-key="query">'
-   +'<select aria-label="Rolle filtern" data-key="role"><option value="">Alle Rollen</option>'
-   +Object.entries(labels).filter(([r])=>r!=='scout').map(([r,n])=>`<option value="${r}">${n}</option>`).join('')+'</select>'
-   +'<select aria-label="Zustand filtern" data-key="health"><option value="">Alle Zustände</option><option value="critical">Team angeschlagen</option><option value="battle">Im Kampf</option><option value="checkpoint">Ab Savestate</option></select><button type="button">Zurücksetzen</button>';
+  bar.innerHTML='<input aria-label="Agent suchen" placeholder="ID, Name oder Ort" data-key="query">'
+   +'<select aria-label="Zustand filtern" data-key="health"><option value="">Alle Zustände</option><option value="critical">Team angeschlagen</option><option value="battle">Im Kampf</option></select><button type="button">Zurücksetzen</button>';
   bar.addEventListener('input',event=>{if(event.target.dataset.key){filter[event.target.dataset.key]=event.target.value;refresh();}});
-  bar.querySelector('button').onclick=()=>{Object.assign(filter,{role:'',health:'',query:''});refresh();};
+  bar.querySelector('button').onclick=()=>{Object.assign(filter,{health:'',query:''});refresh();};
   anchor.before(bar);
   const count=document.createElement('div');count.id=scope+'-fleet-results';count.className='fleet-results';anchor.before(count);
  }
@@ -296,8 +291,6 @@ window.addEventListener('DOMContentLoaded',()=>{
    card.insertAdjacentHTML('beforeend',healthHtml(row));
   });
   const count=document.getElementById('status-fleet-results');if(count)count.textContent=`${visible} / ${rows.length} Agenten`;
-  const cards=document.querySelectorAll('#status-role-grid .status-role');
-  cards.forEach(card=>{const text=card.textContent.toLowerCase();const role=Object.keys(labels).find(r=>text.includes(labels[r].toLowerCase()));if(role){card.style.cursor='pointer';card.onclick=()=>{filter.role=role;refresh();};}});
  };
  agentChipsHtml=function(list){return oldChips(list.filter(i=>fleetMatches(i,filter)).map(displayAgent));};
  renderAgentDetail=function(id){
@@ -311,10 +304,5 @@ window.addEventListener('DOMContentLoaded',()=>{
  renderWatcherTab=function(){oldWatcher();const rows=latestInstances||[];const text=`${rows.filter(i=>fleetMatches(i,filter)).length} / ${rows.length} Agenten`;for(const id of ['wt-count','watcher-fleet-results']){const el=document.getElementById(id);if(el)el.textContent=text;}};
  const oldPass=agentPassesFilter;
  agentPassesFilter=i=>oldPass(displayAgent(i));
- const roleSelect=document.getElementById('af-role');
- if(roleSelect){const value=roleSelect.value;roleSelect.innerHTML='<option value="">Alle Rollen</option>'+Object.entries(labels).map(([r,n])=>`<option value="${r}">${n}</option>`).join('');roleSelect.value=value;}
- const help=document.createElement('div');help.className='fleet-role-help';
- help.textContent='Full: Gesamtweg · Bridge: unsicheren Übergang üben · Frontier: neue Wege entdecken · Retention: gelernte Übergänge erhalten · Fighter: Kämpfe üben. Alle Rollen trainieren dasselbe Netz.';
- document.getElementById('status-role-grid').before(help);
  if(typeof updateDashboard==='function')updateDashboard();
 });

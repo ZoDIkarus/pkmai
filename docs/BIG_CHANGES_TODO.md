@@ -1,245 +1,191 @@
 # PKMAI — BIG CHANGES TODO
 
-Current implemented behavior: [CURRENT_LOGIC.md](CURRENT_LOGIC.md). Fighter now uses combat-only rewards on the shared network; a separate FighterBrain remains a future proposal.
-
-
-Größere Umbauten, die eine eigene fokussierte Session + sauberen Neustart
-brauchen (nicht mal eben zwischendurch). Kleinteiliges Reward-/Doku-Zeug
-steht weiterhin in `docs/STATUS_TODO.md`.
-
-> **2026-09-06 — erledigt: V20 CURRICULUM MODES.** Die „Architektur, die
-> irgendwann das ganze Spiel lernen kann" ist gebaut: `FULL` / `BRIDGE` /
-> `FRONTIER` / `RETENTION` auf einem PPO-Netz, `discovered_stage` vs
-> `mastered_stage`, dynamischer `current_bottleneck`, generische
-> `Objective`-Repräsentation für den Rest der Story. Details: `README.md` +
-> `docs/STATUS_TODO.md`. Clean-Reset-Script: `tools/v20_reset.sh`
-> (löst `tools/v11_reset.sh` ab).
+Larger rebuilds that need their own focused session + a clean restart (not a
+quick in-between change). Small reward/doc tuning stays in
+[`docs/STATUS_TODO.md`](STATUS_TODO.md). Current implemented behaviour:
+[`docs/CURRENT_LOGIC.md`](CURRENT_LOGIC.md). Full 2×2 design + per-module status:
+[`docs/BATTLE_ARCHITECTURE.md`](BATTLE_ARCHITECTURE.md).
 
 ---
 
-## 0. MOVEMENT-REDESIGN + FRONTIER-KONSOLIDIERUNG  ← NAECHSTE grosse Session (geplant 2026-09-07 nachts)
+## 0. THE 2×2 LIVE CUTOVER  ← DONE (2026-09-07)
 
-**Braucht:** einen Brain-Reset (Action-Space ändert sich). Savestates BEHALTEN
-(`curriculum_shared/*` + `curriculum_states/agent_*/`), wie beim Reset vom
-2026-09-07 00:15. Script-Vorlage: `scratchpad/brain_reset_keep_savestates.sh`
-bzw. `tools/v20_reset.sh` (Letzteres löscht Savestates — anpassen).
+The cutover ran and the split stack is **training now** (see
+[`CURRENT_LOGIC.md`](CURRENT_LOGIC.md) → "What is running now"):
 
-### Diagnose (Stand 2026-09-07 ~02:00, frisches Netz seit 00:15)
+- `tools/migrate_to_2x2.py --execute` → `runtime/model_manifest.json`
+  (`migration_state: executed`); champion → `navigation_champion.zip`, resume →
+  `navigation_learner.zip`, battle champion = `battle_champion.rule.json` marker,
+  originals archived.
+- `reset_navigation.py --apply` + `reset_battle.py --apply` (learners/stats only).
+- `scripts/start_2x2_visible.sh` → NAVIGATION 40 (all FULL) · BATTLE 9 · mirror ·
+  FULL watcher · web · status, `PKMAI_TWOBY2_LIVE=1`.
+- Pre-cutover backup: `brain_backups/pre_2x2_activation_20260907_200507/`
+  (`RESTORE.md` + `MANIFEST.sha256`).
 
-- `known_transitions`: 1→2 **KNOWN**, **2→3 (Route 1→Vertania) NICHT KNOWN**
-  (7 obs, Top-Variante 1), 3→4 KNOWN.
-- Curriculum: `discovered_stage 5`, `mastered_stage 2`, `bottleneck 2`.
-- Übergang 2: **281 Versuche, 1 Erfolg, 0 % Fensterrate** — DAS ist die Wand.
-- Die 12 FRONTIER-Agenten starten alle bei `stage_frontier_4` (Route 2) und
-  erkunden Gebiet, das das frische Netz **nie erarbeitet hat** — die tiefen
-  Savestates (`stage_3/4`, `stage_frontier_3/4`) stammen aus der Zeit VOR dem
-  Reset und wurden behalten. FRONTIER „entdeckt" also geerbt, nicht verdient.
-- FULL/BRIDGE hängen zwischen Alabastia und Route 1, mit nur einem verrauschten
-  1-Beobachtungs-Ziel Richtung Vertania.
-- Rückkopplung, die es festhält: `frontier_stage() = max(mastered, min(discovered,
-  mastered+2))` = 4. FRONTIER meldet am Episodenende `record_discovery(4)` →
-  `discovered` bleibt ≥4 → FRONTIER startet wieder bei 4. Reines Datei-Re-Baseline
-  von `discovered_stage` hält NICHT.
+**Open follow-ups on the live 2×2 system:**
 
-### Änderungen (in einem Rutsch, ein Reset)
+- **Battle win rate is 0** (1699 episodes, 37 KOs, no win, no promoted PPO
+  champion — still the rule fallback). The battle learner needs attention:
+  reward shaping / scenario variety / eval gate. Currently only 1 validated
+  scenario (route1).
+- **Live Pokémon SWITCH is still masked** — needs the party-list cursor RAM
+  address verified for BPRD (`docs/RAM_PROBE_GUIDE.md` method), then unmask in
+  `src/twoby2/emulator_battle_driver.py::legal_macros`.
+- **Legacy-stack cleanup** — with 2×2 live, the FIGHTER role and single-brain
+  assumptions in `pokemon_env.py` / `curriculum_v20.py` / `watcher_runtime.py`
+  are inert but still present (rollback path). Formal removal is its own session,
+  only once the rollback path is no longer wanted.
+- `src/twoby2/__init__.py` docstring still says "Nothing here is imported by
+  pokemon_env.py / …" — stale; editing it re-times the preflight staleness check,
+  so do it alongside a test re-record.
 
-**1. Movement: variable Schrittweite, Policy wählt sie.**
-   - Action-Space `7 → 15`: `A / B / START` + `↑ ↓ ← →` × Längen `{1, 2, 4}`.
-     (Nicht `{1,2,3,4}` = 19 — die vielen fast-Duplikate bremsen das Lernen;
-     `{1,2,4}` deckt fein / mittel / Sprint ab.)
-   - `step()`-Umbau: ein N-Kachel-Zug läuft als **N interne 1-Kachel-Schritte**
-     (Bewegung + Positionslesung + Tile-/Edge-/Blue-Line-Reward **pro Kachel**),
-     dann EIN return. Sonst zählt nur der Endpunkt → `seen_coords`,
-     `manhattan == 1`-Edge-Block, ShortCycleGuard, `route_approach` alle kaputt.
-   - `A / B / START` bleiben 1× kurz (`ACTION_HOLD_FRAMES = 9`), sonst Menüs/Kämpfe
-     brechen.
-   - `src/watch.py` `ACTION_HOLD_FRAMES`/`ACTION_RELEASE_FRAMES` (Zeile 44-45)
-     mitziehen / als Legacy markieren (Watcher fährt eh `env.step`).
-   - **Warum:** ein Policy-Step = 1 Kachel → Labyrinthe mit Random-Walk fast
-     unmöglich zu queren, fixe Schrittweite oszilliert weiter. Variabel +
-     policy-gewählt: „offener Korridor ↑×4, Abzweig ↑×1".
+**Standing constraints:** the 2×2 + nav-blocker + catch-v2 + grass/shiny work was
+committed and pushed to `origin/main` on 2026-09-08 at the operator's request
+(one "major update" commit); commit only when asked. Never modify the protected
+master / Route-1 seeds / Frontier anchor; no `SimulatedBattleDriver` in the live
+path; reuse `twoby2` modules; nothing is "done" as a stub/sim/fake; start scripts
+use visible `osascript` windows, never `nohup`; never restart the watcher without
+the operator present.
 
-**2. Start-Logik: BRIDGE bei Prof. Eich, FRONTIER eine Stufe voraus — via *bekannt* vs *gemeistert*.**
-
-   Zwei getrennte Schwellen sauber trennen:
-   | | Bedeutung | Rolle |
-   |---|---|---|
-   | **KNOWN** (`known_transitions.navigation_state`) | Übergang ≥2× sauber beobachtet | ab hier rückt **FRONTIER** eine Stufe weiter |
-   | **MASTERED** (`current_bottleneck`) | Fenster-Erfolgsrate ≥ 0.8 | **BRIDGE** bleibt hier bis es sitzt |
-
-   - **BRIDGE-Start** = `stage_(current_bottleneck)` — der erste NICHT-gemeisterte
-     Übergang. Nach Reset (mastered=1) → `stage_1` = **Prof. Eich / Alabastia**.
-     Job: den Weg nach Route 1 bombenfest machen.
-   - **FRONTIER-Start** = Stufe des ersten NICHT-**bekannten** Übergangs. Sobald
-     Übergang 1 KNOWN wird (BRIDGE quert ihn ein paar Mal) → **FRONTIER rückt auf
-     `stage_2` = Route-1-Savegame** und pusht in den Wald. BRIDGE bleibt in
-     Alabastia bis Übergang 1 die 80 % packt.
-   - FRONTIER darf physisch bis Vertania City / Route 2 laufen — **aber `stage_3`
-     wird erst gespeichert, wenn Übergang 2 ≥ 0.8 ist** (siehe 3). „Laufen ja,
-     Savegame aktivieren nein."
-   - `mastered_stage`-Zähler bricht ohnehin beim ersten nicht-gemeisterten
-     Übergang ab → Übergang 3 kann nie „vor" 2 als gemeistert gelten.
-   - Effekt: solange 2→3 bei 0 % ist, arbeiten ~12 FRONTIER auf Stufe 2 +
-     ~8 BRIDGE auf Stufe 1/2 → **~20 Agenten auf der Kette statt ~8** (≈ 2,5×).
-   - `frontier_stage()` in `curriculum_v20.py` bzw. der FRONTIER-Zweig in
-     `_v20_choose_episode_start` entsprechend umschreiben. `discovered+2`-Racing raus.
-
-**3. NUR FRONTIER erstellt/besitzt die Savegames — BRIDGE schreibt NIE.**  ← WICHTIG (User)
-
-   Grund: FRONTIER hat die **größere, stärkere Party** (grindet auf der Stufe).
-   Startet BRIDGE aus einem Savegame mit schwacher Party, kommt es durch Route 1s
-   Wild-Encounter nicht durch. Und: wenn BRIDGE nach dem 80 %-Knacken selbst den
-   nächsten Checkpoint schreiben dürfte, würde die starke FRONTIER-Party durch
-   eine schwache BRIDGE-Party **überschrieben**.
-
-   - **`stage_N` (entry) UND `stage_frontier_N` dürfen nur von
-     `training_mode == "FRONTIER"` geschrieben werden.** Aktuell: `stage_N` wird
-     von jedem `_route_roller` erstellt (`training_objective in WORLD_ROLES`, und
-     `"scout"` ist drin → **BRIDGE erstellt aktuell entry-Checkpoints!**). Das
-     abstellen: Bedingung bei `pokemon_env.py:~5796` auf FRONTIER einschränken.
-   - `stage_N` bleibt **immutable** wenn einmal von FRONTIER gesetzt (BRIDGE-Start
-     bleibt konstant am Stufen-Anfang). `stage_frontier_N` advanced weiter nur via
-     `may_replace_frontier` (FRONTIER-only, schon so).
-   - **Party-Gate auch für entry:** `_save_stage_checkpoint(kind="entry")` bekommt
-     denselben `party_ready`-Check wie `kind="frontier"` (aktuell nur frontier/fighter,
-     `pokemon_env.py:2091`).
-   - **`stage_(N+1)` (egal ob entry oder frontier) nur speichern, wenn
-     Übergang N Fenster-Rate ≥ 0.8.** Guard am Aufruf. Kein Checkpoint in der
-     neuen Map, bevor der Weg dahin solide ist.
-   - Feinheit: FRONTIER zählt aktuell nur ERFOLGE in die Übergangsstatistik
-     (`_v20_record_episode_outcome`) — auch Fehlversuche zählen lassen (FRONTIER
-     startet Stufe N, `reached == N` → `record_transition_attempt(N, success=False)`),
-     sonst ist die 80 %-Rate geschönt.
-
-**3b. Tiefe geerbte Savestates löschen.** `stage_3`, `stage_4`, `stage_frontier_3`,
-   `stage_frontier_4` (+ evtl. `stage_5+`) im Reset **mit-löschen** — sie sind vom
-   alten Netz, haben eine Party die das frische Netz nicht erarbeitet hat, und
-   verleiten FRONTIER zum Vorpreschen. BEHALTEN: `stage_1`, `stage_2`,
-   `stage_frontier_2`, `progress_*`, `squirtle_*`, `stage_fighter_2`.
-   → Reset-Script anpassen: `curriculum_shared/` selektiv statt komplett behalten,
-   `curriculum_states/agent_*/` ebenso (die haben je `stage_frontier_2..4`).
-
-**4. `discovered_stage` nach dem Reset frisch** (`curriculum_v20/` wird eh geleert)
-   → startet bei 1/2. Mit 2+3 hält es diesmal (FRONTIER inflatiert es nicht mehr).
-
-**5. (optional) `FRONTIER_PROGRESS_REWARD` 0.15 → 0.25** — der nicht-farmbare
-   „geh tiefer"-Anreiz (strikt High-Watermark auf BFS-Graph-Tiefe). Wird erst
-   nützlich, wenn FRONTIER durch Änderung 2 auf der richtigen Stufe steht.
-   Gilt NUR für FRONTIER (`training_mode == "FRONTIER"`, [pokemon_env.py:5946]),
-   nicht FULL/BRIDGE/Watcher.
-
-**6. Post-Wipe: neue Route / neue Stadt wieder erhaltbar, mit Anti-Farm-Decay.**  ← User 2026-09-07
-   - Aktuell (V19, `_record_party_wipe:1906`): `visited_maps`/`seen_coords` werden
-     bei einem Wipe BEWUSST NICHT geleert — Recovery-Modus (Graph-Distanz zur
-     alten Front + Wildkampf ×0.05). Genau, damit „absichtlich sterben" kein
-     Farm-Trick wird (siehe POST_WIPE +300-Exploit in [[pkmai-v18-reward-model]]).
-   - Neu gewünscht: nach einem Wipe sollen `CITY_EPISODE_REWARD` /
-     `EPISODE_NEW_MAP_REWARD` **wieder erhaltbar** sein (Rückweg zur Stadt zahlt
-     echt), ABER **ab dem 4. Wipe der Episode auf 1 %** (`× 0.01`) — damit
-     Sterben→Stadt-neu-abholen→Sterben kein Loop wird.
-   - Umsetzung: per-Episode-Wipe-Zähler (`self.episode_party_wipes`, reset in
-     `reset()`; hoch in `_record_party_wipe`). Bei einem Wipe die Städte/Routen
-     ab `pre_wipe_best_stage` aus `visited_maps` + Replay-Flags entfernen
-     (NICHT `seen_coords` — Tile-Farm bleibt zu). Beim Auszahlen von
-     `new_map_episode` / `replay_map_once`: wenn `episode_party_wipes >= 4`
-     → `_map_reward *= 0.01`.
-   - Interaktion mit `post_wipe_recovery` / `POST_WIPE_TARGET_PROGRESS_REWARD`
-     prüfen — ggf. das Distanz-zur-Front-Shaping abschwächen, wenn die Stadt-
-     Rewards das jetzt übernehmen (sonst Doppel-Anreiz). NICHT den Wipe-Cooldown
-     (`POST_WIPE_REWARD_COOLDOWN_STEPS = 40`) anfassen — der verhindert nur, dass
-     der Pokecenter-Teleport selbst als „neue Map" zählt.
-   - **Reward-only, kein Reset.** Kann Teil A ODER separat.
-
-**NICHT gemacht (bewusst):** Edge-Reward wieder an. Diskutiert, aber: Farm-Risiko
-(A↔B / A→B→C→A-Loops), das das Projekt schon 2× gebissen hat. Erst 1-5 ausreizen.
-Falls FULL/BRIDGE auf Route 1 dann noch zu wenig rumlaufen: `FULL_FRONTIER_TILE_
-REWARD` 0.3 → 0.5 (trifft alle Navi-Rollen auf unbewiesenen Stufen) ODER
-gecapptes Edge-Reward (~0.02 + harter Cap 40/Map, Cap MUSS auch auf unbewiesenen
-Stufen aktiv bleiben).
-
-### Ausgangslage für die Session (Stand 2026-09-07 nachts)
-
-7 **lokale, ungepushte** Commits aus der Nacht (Details: `NIGHTFEHLER_KORREKTUR.md`):
-`cd2b1b1` route_approach · `2a174ae` Split+Level · `33cd17d` Watcher-Revert ·
-`17371ad` 46-Env-Fleet · `2234075` Champion-Gate 32→8 · `b0bc2ab` Dashboard-Extremwerte ·
-`5264232` FIGHTER-Uncut. Vor der Session: `git diff origin/main` prüfen, pushen.
-
-Fleet aktuell: 46 Envs — FULL 18 / BRIDGE 8 / FRONTIER 12 / RETENTION 4 / FIGHTER 4.
-`NUM_ENVS = 46` in `src/train.py`. Movement aktuell: `ACTION_HOLD_FRAMES = 9` +
-`ACTION_RELEASE_FRAMES = 5`, 7 Aktionen, Discrete.
+**Rollback:** stop the stack, unset `PKMAI_TWOBY2_LIVE`, follow
+`brain_backups/pre_2x2_activation_20260907_200507/RESTORE.md`, start
+`scripts/start_all.sh`.
 
 ---
 
-## 1. FighterBrain — eigenes Kampf-Hirn neben dem ChampionBrain
+## 0b. NAVIGATION BLOCKER FIX + CATCH-v2 + GRASS/SHINY — BUILT 2026-09-08, awaiting go-live
 
-**Stand:** 2026-09-06 — als **erster, leichter Schritt** wurde stattdessen eine
-`FIGHTER`-Rolle auf dem GETEILTEN PPO-Netz gebaut (kein zweites Netz):
-`curriculum_v20.MODE_FIGHTER`, 4 Ränge, resumen den FRONTIER-Route-1-Anker,
-400-Step-Leash außerhalb Kampf, vom Wild-Decay + Post-Wipe-×0.05 ausgenommen.
-Dazu `BATTLE_WIN_REWARD 0→10`, `LEVEL_GAIN_REWARD 15→10`, Billig-Flucht bei
-HP ≤ 10 %. Siehe `README.md` + `docs/STATUS_TODO.md`. **Erst beobachten**, ob die
-flottenweite Kampf-Sieg-Quote (aktuell ~33 %) damit steigt. Wenn nicht → der
-volle FighterBrain unten (separates Netz, eigener Champion-Loop).
+Code-complete, 827 tests green, **committed but not live-activated**. Full write-up:
+[`AI_STATUS.md`](AI_STATUS.md) (2026-09-08). Plan: `.claude/plans/goofy-strolling-cray.md`.
 
-**Ziel:** Eine zweite, dauerhaft eigenständige PPO-Policy, die nur für Kämpfe
-optimiert wird — unabhängig vom Fortschritts-Hirn und **nicht** von einem
-Full-Reset betroffen.
+**Navigation directed graph + Route-1 blocker fix** (`src/nav_graph.py`,
+`src/nav_shaping_state.py`, `src/loop_guard.py`, `src/pokemon_env.py`,
+`src/train.py`, `tools/clean_nav_graph.py`). Root cause of the
+`max_world_stage = 2` ceiling: `target_valid = false` on Route 1 (the target
+`(10,0)` is a warp-trigger tile that `directed_bfs` can never confirm) + an
+`is_blocked` per-episode TTL bug + ~1380 sampling-artefact ledges + a per-episode
+`stage_advance 1→2` +250 magnet. Fix: symmetric geometric approach shaping toward
+a verified exit, run-wide `stage_advance` dedup, `_score()` as the sole geographic
+promotion authority, bounded eval workers, `nav_obs_v3_directed` (`NAV_DIM 36`).
 
-### Architektur
-- Eigene Modell-Dateien (`fighter_model_latest.zip`, `fighter_model_champion.zip`,
-  `fighter_champion_score.json`, eigene `fighter_model_version.json`), abgelegt
-  unter `runtime/fighter/` — dieser Ordner wird vom Reset-Script
-  (`tools/v20_reset.sh`) **explizit ausgenommen**.
-- Paralleler Promotion-Loop neben `ChampionManager` in `src/train.py`
-  (eigener `FighterManager` o. Ä.).
+- [ ] **Operator go-live** (needs a fresh nav brain — obs width changed, savestates kept):
+  1. stop the nav trainer;
+  2. `PYTHONPATH=src python tools/reset_navigation.py --fresh-obs-schema --apply`;
+  3. `PYTHONPATH=src python tools/clean_nav_graph.py --apply` (backs up first);
+  4. restart the nav trainer on the new code;
+  5. sample `inst_*` after ~20–30 min — Route-1 reach must not regress > 5 pp,
+     `target_valid` honest, blocked-direction count down, ledge counter ~0,
+     ≥ 1 agent reaches Stage 3 in a live canary.
+- [ ] Reproduce Stage 3 in multiple beginning runs before trusting the change.
 
-### Reward-Modus „nur Kampf"
-Für FighterBrain-Envs zählen ausschließlich:
-- `enemy_damage`, `enemy_faint`, `battle_win` / EP-Anstieg im Kampf
-- `team_level_up`
-- `healed_partial` + Pokécenter-Heilung
-- `party_wiped`-Strafe
+**Catch-v2 Battle-PPO** (`src/battle_catch.py`, `src/catch_planner.py`,
+`src/battle_executor.py`, `src/battle_train.py`). Schema v2 (obs 140, actions 12,
++CATCH). v1 untouched. Live catch **fail-closed** — `catch_ram_ready()` is False.
 
-Explizit **0**: `new_tile`, `new_map`/`replay_map_once`, `city`, `world_depth`/
-`global_stage_record`, `new_warp`, `species_caught`/Pikachu, `starter_*`,
-`pokecenter_enter`/`advance_heal`, `pokemart_*`. Orden: offen (ist das
-Kampf-Ziel — vermutlich behalten).
+- [ ] `PYTHONPATH=src python tools/catch_ram_probe.py` (isolated emulator, operator
+  present) → verify bag / ball-pocket / dex-owned / catch-result RAM for BPRD over
+  ≥ 2 distinct encounters → flip `twoby2.battle_ram_live.catch_ram_ready`.
+- [ ] Then opt-in `battle_train.py --schema v2` (fresh MaskablePPO 140/12); promote
+  only through `battle_catch_gate`. No v2 champion until then.
 
-### Upgrade-Kriterium (`fighter_champion_score.json`), in dieser Reihenfolge
-1. mehr **abgeschlossene Kämpfe** pro Lauf → besser
-2. bei Gleichstand: **weniger Kampf-Steps** → besser (schneller)
-3. bei Gleichstand: höherer **Kampf-Reward-Total** → besser
+**Grass harvester + shiny telemetry** (`src/shiny.py`,
+`src/twoby2/{wild_encounter_harvester,shiny_ram,shiny_counters,scenario_pool}.py`).
+Harvester grows wild-scenario variety; shiny is **telemetry only** and
+`SHINY_RAM_VERIFIED = False`.
 
-Beispiele aus der Besprechung: 10 Kämpfe/1000 Steps → dann kommt einer mit
-11 Kämpfen = upgrade. Oder 10 Kämpfe/800 Steps (schneller) = upgrade. Oder
-10 Kämpfe/1000 Steps aber doppelter Reward = upgrade.
+- [ ] Capture real harvest scenarios: `PYTHONPATH=src python tools/capture_battle_scenario.py …`
+  (no `harvest:true` entry exists yet — do not invent one).
+- [ ] `PYTHONPATH=src python tools/shiny_ram_probe.py` → verify the player TID/SID
+  (SaveBlock2 `playerTrainerId`) offset for BPRD (cross-check vs own-mon `otId`,
+  PID stability over ≥ 2 encounters) → set `SHINY_RAM_VERIFIED = True`.
+- [ ] Phase 2 (shiny-catch priority, catch-v2 training/promotion) is a separate
+  approval after both probes pass.
 
-### Web (`src/web_stream.py`)
-- Eigene Karte **„FIGHTER BRAIN"** neben „FRONTIER CHAMPION": Version + beste
-  (Kämpfe / Kampf-Steps / Kampf-Reward).
-- Anzeige-Reihenfolge: ChampionBrain → FighterBrain → **dann** erst der Learner.
-- Als Upgrade-Metrik im Web „Kampf-Steps + Battles" zeigen.
+### Optional — variable step size (needs a nav brain reset)
 
-### Offene Entscheidungen (vor dem Bau vom Nutzer holen)
-1. Welche Agenten trainieren es? Fester Flotten-Anteil (z. B. 16/96 immer
-   Rolle „battle") **oder** die bestehende dynamische `battle`-Rollenverteilung?
-2. Startgewichte: frisch aus einem Skill **oder** Kopie des aktuellen Champions?
-3. Eigene Savestate-Spawns mitten auf der Route (gesunde Party, sofort Kämpfe)
-   **oder** komplette Läufe ab Alabastia?
+Not done. Would need a navigation learner reset, so it belongs in a dedicated
+session or the next reset.
+
+**Variable step size, policy-chosen.** Action space `7 → 15`:
+`A / B / START` + `↑ ↓ ← →` × lengths `{1, 2, 4}`. `step()` runs an N-tile move
+as **N internal 1-tile steps** (movement + position read + tile/edge/blue-line
+reward per tile), then one `return` — otherwise `seen_coords`, the
+`manhattan == 1` edge block, `ShortCycleGuard` and `route_approach` all break.
+`A / B / START` stay one short press (`ACTION_HOLD_FRAMES = 9`), or menus/battles
+break. Mirror `ACTION_HOLD_FRAMES` / `ACTION_RELEASE_FRAMES` in `src/watch.py`.
+Rationale: one policy step = one tile makes corridors/mazes near-impossible to
+cross with a random walk; a fixed larger stride just oscillates. Not `{1,2,3,4}`
+(= 19 actions) — the near-duplicates slow learning; `{1,2,4}` covers
+fine / medium / sprint. **Needs a nav brain reset**, so it only belongs in a
+cutover or a dedicated session.
 
 ---
 
-## 2. „Haus nach dem Vertania-Wald" — Sonderbehandlung
+## Superseded / done
 
-Braucht zuerst die **Bank/Map-ID** dieses Hauses (aktuell unbekannt; ein Scout
-muss es erreichen, oder im Watcher-Status ablesen, wenn ein Agent drinsteht).
+- **2026-09-06 — V20 CURRICULUM MODES.** `FULL` / `BRIDGE` / `FRONTIER` /
+  `RETENTION` / `FIGHTER` on one PPO. This is the **legacy single-PPO** stack —
+  now the inactive rollback target. The live 2×2 navigation stack replaces the
+  role split with 40 identical canonical-start FULL workers.
+- **2026-09-07 — Navigation/Battle 2×2, built AND cut over.** Phase 1
+  (type/damage engine, Gen-III DB, verified battle RAM, rule controller) +
+  Phases 2–5 (macro executor, `BattleEnv` / `battle_train.py`, router +
+  `NavigationBattleWrapper` in the live env, watcher/web/reset split, migration
+  tool) implemented, tested (592), and **live** — see section 0.
+- **FighterBrain — a second, permanently independent combat PPO.** Built as the
+  **Battle Learner / Battle Champion** of the 2×2 system: own PPO / optimizer /
+  rollout buffer / step counters / eval suite / checkpoints
+  (`runtime/battle/checkpoints/`), its own promotion loop in `src/battle_train.py`
+  (`BATTLE_PPO_N_STEPS = 256`), combat-only anti-farming reward in
+  `src/battle_env.py` (no navigation/tile/map/stage/story term), untouched by a
+  navigation full-reset. The earlier lightweight `FIGHTER` role on the shared net
+  stays in the legacy stack only.
 
-Dann:
-- Erstmals betreten pro Lauf: **+100** (wie eine neue Map)
-- Allererster Fund fleet-weit: **+250 global einmalig** (wirklich nur der Erste)
-- Innenraum-Kacheln dieses Hauses: **+5** pro neue Kachel/Lauf (statt des
-  normalen Bank-Innenraumwerts), damit der Agent das Haus nicht als „schlechter
-  als der Wald" wertet und zurückläuft.
+---
 
-Implementierung analog zu `POKECENTER_MAPS` / `POKEMART_MAPS` +
-`INTERIOR_TILE_REWARD_BY_BANK`-Sonderfall.
+## 1. "House after Viridian Forest" — special handling  *(still open)*
+
+Independent of the 2×2 cutover; applies to the navigation reward model.
+
+Needs the **bank/map id** of that house first (currently unknown; a scout must
+reach it, or read it from the watcher status while an agent stands inside).
+
+Then:
+- First entry per run: **+100** (like a new map).
+- First fleet-wide discovery: **+250 global, once** (really only the first).
+- Interior tiles of this house: **+5** per new tile/run (instead of the normal
+  bank-interior value), so the agent doesn't rate the house as "worse than the
+  forest" and walk back out.
+
+Implement analogous to `POKECENTER_MAPS` / `POKEMART_MAPS` +
+`INTERIOR_TILE_REWARD_BY_BANK` special case.
+
+---
+
+## 2. Post-wipe: new route / new city re-earnable, with anti-farm decay  *(still open, reward-only)*
+
+User request 2026-09-07. Legacy-stack reward change; check whether it still
+matters once navigation runs under the 2×2 split.
+
+- Today (`_record_party_wipe`): `visited_maps` / `seen_coords` are deliberately
+  **not** cleared on a wipe — recovery mode (graph distance to the old front +
+  wild battle ×0.05), so "die on purpose" is not a farm trick.
+- Wanted: after a wipe, `CITY_EPISODE_REWARD` / `EPISODE_NEW_MAP_REWARD` become
+  **re-earnable** (the walk back to town pays), BUT **×0.01 from the 4th wipe of
+  the episode** so die→collect-town-again→die is not a loop.
+- Implementation: per-episode wipe counter (`self.episode_party_wipes`, reset in
+  `reset()`, incremented in `_record_party_wipe`). On a wipe, remove cities/routes
+  from `pre_wipe_best_stage` onward from `visited_maps` + replay flags (NOT
+  `seen_coords`). When paying `new_map_episode` / `replay_map_once`: if
+  `episode_party_wipes >= 4` → `_map_reward *= 0.01`.
+- Check the interaction with `post_wipe_recovery` /
+  `POST_WIPE_TARGET_PROGRESS_REWARD` — soften the distance-to-front shaping if the
+  town rewards now cover it (avoid a double incentive). Do **not** touch the wipe
+  cooldown (`POST_WIPE_REWARD_COOLDOWN_STEPS = 40`).
+
+**Deliberately NOT done:** re-enabling edge reward. Discussed, but the farm risk
+(A↔B / A→B→C→A loops) has bitten this project twice. If FULL/BRIDGE still walk
+Route 1 too little after 1–2 above: `FULL_FRONTIER_TILE_REWARD` 0.3 → 0.5, or a
+capped edge reward (~0.02 + a hard 40/map cap that stays active on unproven
+stages too).

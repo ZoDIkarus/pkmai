@@ -12,7 +12,10 @@ from collections import deque
 import random
 from battle_state import BattleState, MainBattleReader
 from reward_state import claim_event
-from loop_guard import LocalLoopGuard, ShortCycleGuard
+from loop_guard import LocalLoopGuard, ShortCycleGuard, RegionLoopGuard
+import nav_graph
+from nav_graph import DirectedNavGraph
+from nav_shaping_state import NavGlobalState, NavAgentState, objective_key
 from trainer_rewards import TrainerRewards
 from checkpoint_health import party_health, may_replace_frontier
 import curriculum_v20
@@ -54,6 +57,13 @@ V20_KNOWN_TRANSITIONS_FILE = os.path.join(
     V20_CURRICULUM_DIR, "known_transitions.json"
 )
 os.makedirs(V20_CURRICULUM_DIR, exist_ok=True)
+
+# Directed movement graph + persistent shaping state (nav_graph / nav_shaping_state).
+NAV_DIR = os.path.join(RUNTIME_DIR, "navigation")
+MOVEMENT_GRAPH_FILE = os.path.join(NAV_DIR, "movement_graph_v1.json")
+NAV_GLOBAL_FILE = os.path.join(NAV_DIR, "nav_global.json")
+NAV_AGENT_DIR = os.path.join(NAV_DIR, "shaping")
+os.makedirs(NAV_DIR, exist_ok=True)
 
 os.makedirs(INSTANCES_DIR, exist_ok=True)
 os.makedirs(CURRICULUM_DIR, exist_ok=True)
@@ -128,6 +138,21 @@ class PokemonFireRedEnv(gym.Env):
     FULL_EXIT_STAGE_CAP = 18000
 
     LONG_FULL_PROBE_STEPS = 32768
+    # 2026-09-08 (spec point 6): a fixed subset of FULL workers ALWAYS run a
+    # bounded "beginning" episode so champion evaluation never starves when the
+    # adaptive horizon grows large (recent_full_done stuck at 0 at horizon
+    # 98304). These are the reproducible eval runs - they complete on a fixed
+    # budget, keep feeding _metrics()/recent_full, and do NOT change the
+    # horizon-probe distribution for the rest of the fleet. Long episodes still
+    # allow exploration on the other ~85% of workers.
+    # ranks [NAV_EVAL_FIRST_RANK, NAV_EVAL_FIRST_RANK + NAV_EVAL_WORKERS) are
+    # the bounded eval workers - chosen ABOVE the probe band (ranks 0-7) so the
+    # horizon-ramp probe sample is never shrunk.
+    NAV_EVAL_FIRST_RANK = 8
+    NAV_EVAL_WORKERS = 6
+    # only kicks in once the majority rung exceeds this (rung 7 = 65536 and up)
+    # - exactly where champion eval was starving. Rungs <= 49152 are untouched.
+    NAV_EVAL_HORIZON = 55000
 
     # V10.29 NORD-SCHUB: Die Welt haengt global bei 5 Episoden-Maps
     # (Route 1) fest - niemand schafft die Route-1-Durchquerung nach
@@ -312,12 +337,14 @@ class PokemonFireRedEnv(gym.Env):
     # bessere Wahl bleibt) plus ein levelskalierter Aufschlag: bei gleicher
     # Art lohnt sich das staerkere Exemplar, ohne dass Grinden in tiefem Gras
     # sinnvoll wird (Cap bei Level 20).
-    # V19: 120 -> 50 / Level-Bonus 4 -> 2. Fangen soll bis Brock kein
-    # ernsthafter Anreiz gegen den Story-Vorstoss sein.
-    SPECIES_CAUGHT_FIRST_REWARD = 50.0
-    SPECIES_CAUGHT_LEVEL_BONUS = 2.0
-    SPECIES_CAUGHT_LEVEL_BONUS_CAP = 20
-    SPECIES_CAUGHT_DUPLICATE_PENALTY = 0.0
+    # 2026-09-08 (review item 1): catch dedup is PERSISTENT per training run
+    # (NavAgentState.caught_species), so the same species never re-pays over
+    # episode resets / wipes. Flat small one-off, NO level bonus (a level bonus
+    # rewards grinding high-level catches). Well below any geographic checkpoint.
+    SPECIES_CAUGHT_FIRST_REWARD = 0.5
+    SPECIES_CAUGHT_LEVEL_BONUS = 0.0
+    SPECIES_CAUGHT_LEVEL_BONUS_CAP = 0
+    SPECIES_CAUGHT_DUPLICATE_PENALTY = -0.2
     # Pikachu ist im Vertania-Wald selten und nicht der reguelaere Weg
     # vorwaerts - ein eigener, deutlich groesserer Bonus obendrauf, nur fuer
     # genau diese Art an genau diesem Ort. Auch dieser ist pro Run (nicht
@@ -547,6 +574,38 @@ class PokemonFireRedEnv(gym.Env):
     TARGET_APPROACH_REWARD = 0.03
     EARLY_STORY_STEP_REWARD = 0.0
 
+    # --- directed-graph navigation (nav_graph.py) -----------------------------
+    # Obs schema version. A checkpoint whose "nav" Box width != NAV_DIM is
+    # refused fail-closed (train aborts with a message, watcher warns + keeps
+    # running) - never a silent wrong-shape load.
+    NAV_OBS_SCHEMA = "nav_obs_v3_directed"
+    # class-level mirror of the per-instance ``self.NAV_DIM`` so the train.py /
+    # watch.py obs-schema preflight can read it WITHOUT constructing an env.
+    NAV_DIM = 36
+    # tiered movement reward (E): known correct next-hop pays a tiny amount at
+    # most once per directed edge per objective_generation; a new directed
+    # distance highwater pays the real progress reward.
+    NEXT_HOP_REWARD = 0.02
+    DIRECTED_PROGRESS_REWARD = 0.08
+    # Geometric potential-based fallback (spec point 3): when the strategic
+    # target is VERIFIED (known_transition_s*) but no fully-confirmed directed
+    # route exists yet, shape on Manhattan distance to that target. Symmetric:
+    # one tile closer +GEO_APPROACH_REWARD, one tile farther the same negative;
+    # a round trip telescopes to 0 (before step cost -> net negative). Clamped
+    # to plausible real tile motion (the location is sampled every few steps).
+    # Smaller than the confirmed DIRECTED_APPROACH so a real directed route,
+    # once it exists, is always the stronger and authoritative signal.
+    GEO_APPROACH_REWARD = 0.02
+    GEO_APPROACH_MAX_DELTA = 3
+    # region / ledge loop (RegionLoopGuard) escalating cost is applied on top.
+    # progress deadlines (G) - navigation-only clock, battles/menus excluded.
+    PALLET_EXIT_TIMEOUT_STEPS = 1000
+    PALLET_EXIT_TIMEOUT_PENALTY = -1.0
+    ROUTE1_NO_PROGRESS_STEPS = 1500
+    ROUTE1_NO_PROGRESS_PENALTY = -0.75
+    RECOVERY_NO_PROGRESS_STEPS = 1200      # recovery isn't unbounded (item 9)
+    # blocked-direction confirmation is delegated to nav_graph (distinct visits).
+
     # V20 FRONTIER REDESIGN (frontier_v20.py). Frontier progress = real
     # topological extension of the known walkable graph, NOT tile count.
     #   * Only FRONTIER-mode agents explore. FULL/BRIDGE/RETENTION exploit
@@ -563,6 +622,10 @@ class PokemonFireRedEnv(gym.Env):
     # a city wall with only the backtrack penalty for company. Still ~0.8 max
     # for a whole town vs +25 proven exit / +300 city - they do not "explore".
     FULL_NEW_TILE_REWARD = 0.02
+    # review item 6: a FULL agent's fleet-first tile on an ALREADY-PROVEN stage
+    # is a one-off topology reward - small (it is not a way forward), never
+    # cap-scaled, never re-payable (the shared claim is permanent).
+    TOPOLOGY_FIRST_REWARD = 0.05
     # Unknown forward transition: uncapped once-per-episode tiles for every
     # navigation role. Fleet-first discovery adds GLOBAL_NEW_TILE_BONUS.
     FULL_FRONTIER_TILE_REWARD = 0.3
@@ -571,6 +634,11 @@ class PokemonFireRedEnv(gym.Env):
     PROVEN_PROGRESS_EDGE_REWARD = 40.0
     PROVEN_EXIT_REWARD = 25.0
     FRONTIER_METRIC_VERSION = 2
+    # 2026-09-07: every Nth FRONTIER rank resumes the fixed per-stage healthy
+    # safe fallback (stage_frontier_safe_<n>) instead of the main anchor, when
+    # the main anchor has degraded to a merely-viable (hurt) state - so a
+    # practically-worse main anchor cannot pin the whole FRONTIER fleet.
+    FRONTIER_SAFE_FALLBACK_EVERY = 3
     # FIGHTER role: dedicated ranks that resume a grass checkpoint and just
     # fight. In-battle steps are unlimited; 400 steps OUTSIDE a battle -> reset.
     FRONTIER_BACKTRACK_STEPS = 120
@@ -794,6 +862,7 @@ class PokemonFireRedEnv(gym.Env):
         self._frontier_map_origin = {}
         self._recent_map_transitions = deque(maxlen=8)
         self._map_change_count = 0
+        self._last_map_change_step = -999
         self.episode_new_frontier_highwaters = 0
         self.episode_warp_loops = 0
         self.episode_local_loops = 0
@@ -802,6 +871,37 @@ class PokemonFireRedEnv(gym.Env):
         self._proven_exit_rewarded = False
         self.short_cycle_guard = ShortCycleGuard()
         self._short_cycle_last = None
+        # directed movement graph + persistent shaping state (nav_graph.py).
+        # Loaded lazily on the first reset from the shared runtime files; the
+        # graph is updated in step() and flushed on the shared-state cadence.
+        self._nav_graph = None
+        self._nav_graph_dirty = False
+        self._nav_graph_mtime = 0.0
+        self._nav_global = None
+        self._nav_agent = None                 # NavAgentState (private to this rank)
+        self._nav_flush_at = 0.0
+        self.region_loop_guard = RegionLoopGuard()
+        self._region_loop_last = None
+        # per-episode navigation bookkeeping
+        self._nav_objective_cache = None       # (cache_key, dict)
+        self._nav_objective_cache_step = -10**9
+        self._nav_obj_key = None               # current objective key (item 4)
+        self._nav_best_directed_distance = None
+        self._nav_steps_since_improve = 0
+        self._nav_clock = 0                    # nav-only route steps (no battle/menu)
+        self._recovery_clock = 0              # separate recovery no-progress clock (item 9)
+        self._recovery_best_distance = None
+        self._pallet_outdoor_steps = 0
+        self._route1_no_progress_steps = 0
+        self._tile_arrival_count = {}          # (bank,map,x,y) -> distinct arrivals this run
+        self._last_nav_tile = None
+        self._dir_move_from = None             # (bank,map,x,y) the next step starts at
+        self._nav_obj = None
+        self._prev_nav_obj = None              # objective at the step's START tile (item 7)
+        self._nav_shaping_frozen = False
+        self.episode_ledge_jumps = 0
+        self.episode_region_loops = 0
+        self.recovery_mode = False
         self._v20_state_cache = None
         self._v20_state_cache_step = -10 ** 9
         self._v20_known_cache = None
@@ -922,7 +1022,12 @@ class PokemonFireRedEnv(gym.Env):
         self._image_frames = []
         # Policy sieht Bildfolge + kompakten RAM/Navigationszustand.
         # Channel-first verhindert automatische Transpose-Magie in SB3.
-        self.NAV_DIM = 31
+        # 2026-09-08: nav_obs_v3_directed - the flat target block
+        # [valid, dx/32, dy/32, manhattan/64] (4) is replaced by the directed
+        # graph block (9): target_valid, target_dx/32, target_dy/32,
+        # directed_graph_distance/64, next_hop_valid, next_hop_dx, next_hop_dy,
+        # next_hop_action/4, steps_since_distance_improvement/512. 31 -> 36.
+        self.NAV_DIM = 36
         self.observation_space = spaces.Dict({
             "image": spaces.Box(
                 low=0,
@@ -1290,9 +1395,16 @@ class PokemonFireRedEnv(gym.Env):
         # but they all train the exact Full-Journey policy context used by
         # the Watcher. This prevents stairs/exit/starter skills from being
         # trapped behind different objective one-hot inputs.
+        # 2026-09-07: "scout" (used by BRIDGE / FRONTIER / RETENTION / FIGHTER)
+        # is normalised to "full" too. Without it "scout" produced an all-zero
+        # objective one-hot instead of the FULL policy context, blocking direct
+        # transfer of what the navigators learn into the champion-measured FULL
+        # policy. Reward selection and episode-start logic still branch on the
+        # real training_objective / training_mode, so this only changes the
+        # policy INPUT, not behaviour. Observation shape is unchanged.
         if self.training_objective in (
             "intro", "stairs", "exit", "starter", "battle",
-            "level", "progress", "badge", "full"
+            "level", "progress", "badge", "full", "scout"
         ):
             return "full"
         return self.training_objective
@@ -1693,6 +1805,333 @@ class PokemonFireRedEnv(gym.Env):
         self._nav_target_cache_step = self.total_steps
         return target
 
+    # ------------------------------------------------------------------
+    # directed-graph navigation objective  (single source of truth)
+    # ------------------------------------------------------------------
+    def _load_nav_graph(self):
+        if self._nav_graph is None:
+            self._nav_graph = DirectedNavGraph.load(MOVEMENT_GRAPH_FILE)
+            try:
+                self._nav_graph_mtime = os.path.getmtime(MOVEMENT_GRAPH_FILE)
+            except OSError:
+                self._nav_graph_mtime = 0.0
+            # seed once from the legacy undirected edges (display + weak
+            # fallback only; a real observation upgrades a direction to walk)
+            try:
+                self._nav_graph.import_legacy_edges(
+                    list(self.persistent_known_edges)[:20000])
+            except Exception:
+                pass
+        return self._nav_graph
+
+    def _nav_run_id(self):
+        # tiny file; re-read at most every ~256 steps so a fresh run started by
+        # train.py is noticed within an episode without hammering the disk.
+        step = int(getattr(self, "total_steps", 0))
+        if (self._nav_global is None
+                or step - getattr(self, "_nav_run_id_step", -10**9) > 256):
+            self._nav_global = NavGlobalState(NAV_GLOBAL_FILE).load()
+            self._nav_run_id_step = step
+        return int(self._nav_global.training_run_id)
+
+    def _load_nav_agent(self):
+        """Per-rank private shaping state (no lock: only this worker writes it).
+        A ``training_run_id`` change starts it clean."""
+        rid = self._nav_run_id()
+        if self._nav_agent is None or int(self._nav_agent.run_id) != int(rid):
+            path = os.path.join(NAV_AGENT_DIR,
+                                f"agent_{int(getattr(self, 'rank', 0)):02d}.json")
+            self._nav_agent = NavAgentState.load(path, run_id=rid)
+        return self._nav_agent
+
+    def _flush_nav_state(self, *, force=False):
+        """Persist the directed graph (shared: locked read-merge-write of the
+        CURRENT disk version - no cached full copy is written over another
+        worker's changes) and this worker's PRIVATE agent state (no lock)."""
+        import time as _t
+        # 1) private per-agent file - small, unlocked, written eagerly so a
+        #    crash loses at most one episode of catch / highwater progress
+        try:
+            if self._nav_agent is not None:
+                self._nav_agent.save_if_dirty()
+        except Exception:
+            pass
+        # 2) shared movement graph - throttled (40 workers must not re-merge
+        #    ~450 KB every reset) + locked read-merge-write
+        now = _t.time()
+        _iv = 45.0 if int(getattr(self, "rank", 0)) == 0 else 90.0
+        if not force and now - getattr(self, "_nav_flush_at", 0.0) < _iv:
+            return
+        self._nav_flush_at = now
+        if self._nav_graph is None or not self._nav_graph_dirty:
+            return
+        lock = self.shared_lock if self.shared_lock is not None else nullcontext()
+        try:
+            with lock:
+                disk = DirectedNavGraph.load(MOVEMENT_GRAPH_FILE)   # current disk
+                for (b, m), emap in self._nav_graph._edges.items():
+                    dst = disk._edges.setdefault((b, m), {})
+                    for k, e in emap.items():
+                        cur = dst.get(k)
+                        # our real observation wins over disk's older / legacy
+                        if (cur is None or e.last_seen_step >= cur.last_seen_step
+                                or (cur.legacy and not e.legacy)):
+                            dst[k] = e
+                for (b, m), bmap in self._nav_graph._blocks.items():
+                    dst = disk._blocks.setdefault((b, m), {})
+                    demap = disk._edges.get((b, m), {})
+                    for k, blk in bmap.items():
+                        # our own successful walk on (tile, action) invalidates
+                        # any disk block there - never let a stale wall win over
+                        # a fresh confirmed move.
+                        _e = demap.get(k)
+                        if _e is not None and _e.kind == nav_graph.WALK and not _e.legacy:
+                            dst.pop(k, None)
+                            continue
+                        cur = dst.get(k)
+                        if cur is None:
+                            dst[k] = blk
+                            cur = blk
+                        else:
+                            cur.visit_ids |= blk.visit_ids
+                            cur.last_confirmed_step = max(
+                                cur.last_confirmed_step, blk.last_confirmed_step)
+                        # recompute static/dynamic from the MERGED distinct
+                        # (rank-prefixed) visit count - not "any worker said
+                        # static once".
+                        cur.kind = (nav_graph.BLOCKED_STATIC
+                                    if len(cur.visit_ids)
+                                    >= nav_graph.BLOCKED_CONFIRM_DISTINCT_VISITS
+                                    else nav_graph.BLOCKED_DYNAMIC)
+                disk.save(MOVEMENT_GRAPH_FILE)
+                self._nav_graph = disk           # adopt the merged authority
+                self._nav_graph_dirty = False
+        except Exception:
+            pass
+
+    def _objective_targets(self, bank, map_id, x, y):
+        """The confirmed checkpoint target(s) for this map - one decision tree,
+        used identically by the observation and by the reward. During
+        post_wipe_recovery the checkpoint stays the same (the recovery guidance
+        is handled by the shaping freeze, not by a different target)."""
+        b, m = int(bank), int(map_id)
+        if self.left_house_rewarded and (b, m) == self.STAGE_PALLET:
+            return list(self._pallet_route1_target()), "pallet_exit_edge"
+        if (self._v20_active() and self.left_house_rewarded
+                and self._current_world_stage(b, m) > 0):
+            t = list(self._v20_world_targets(b, m))
+            if t:
+                return t, f"known_transition_s{self._current_world_stage(b, m)}"
+        t = list(self._target_coords_for_stage(b, m) or [])
+        if not t and self.left_house_rewarded and self.training_objective in (
+                "progress", "full", "scout"):
+            t = list(self._progress_targets_for_map(b, m, x, y) or [])
+        if not t and self.left_house_rewarded:
+            t = list(self._v19_forward_targets(b, m) or [])
+        return t, ("progress_target" if t else "none")
+
+    def _nav_objective(self, bank, map_id, x, y):
+        """Everything the obs, the reward and the web need about "where next".
+
+        ``valid`` (== reward/timeout-relevant) is set ONLY when a route made
+        entirely of REAL confirmed directed edges reaches the checkpoint. A
+        legacy-fallback route is exposed as ``display_reachable`` for the map /
+        obs vector, never as ``valid``. ``key`` is the stable objective key
+        (item 4): highwater / recovery are stored per key, so distance 0 at the
+        old exit never blocks the next objective."""
+        b, m, xi, yi = int(bank), int(map_id), int(x), int(y)
+        ck = (self.navigation_revision, self.training_objective, b, m, xi, yi)
+        cached = self._nav_objective_cache
+        if (cached is not None and cached[0] == ck
+                and self.total_steps - self._nav_objective_cache_step < 4):
+            return cached[1]
+
+        targets, source = self._objective_targets(b, m, xi, yi)
+        ws = self._current_world_stage(b, m)
+        # a VERIFIED strategic target: a confirmed world-stage transition exit.
+        # Only such a target may drive the geometric fallback (spec point 3) -
+        # a plain progress_target / frontier target never does.
+        _verified = bool(source) and (
+            source.startswith("known_transition") or source == "pallet_exit_edge")
+        out = {
+            "targets": targets, "source": source, "world_stage": int(ws),
+            "key": objective_key(self._nav_run_id(), ws, source, targets),
+            "target": None, "target_dxy": (0, 0), "target_manhattan": None,
+            "target_verified": _verified,
+            "approach_mode": "none",            # directed | legacy | geometric | none
+            "valid": False, "display_reachable": False, "confirmed": False,
+            "graph_distance": None, "display_distance": None,
+            "next_hop_action": None, "next_hop_dxy": (0, 0),
+            "next_hop_valid": False, "directed": False,
+        }
+        if targets:
+            nearest = min(targets, key=lambda p: abs(p[0] - xi) + abs(p[1] - yi))
+            out["target"] = (int(nearest[0]), int(nearest[1]))
+            dxy = (out["target"][0] - xi, out["target"][1] - yi)
+            out["target_dxy"] = dxy
+            out["target_manhattan"] = abs(dxy[0]) + abs(dxy[1])
+            g = self._load_nav_graph()
+            res = g.directed_bfs((b, m), (xi, yi), targets,
+                                 now_step=int(self.total_steps))
+            if res is not None and res.get("confirmed"):
+                out.update(valid=True, directed=True, confirmed=True,
+                           display_reachable=True, approach_mode="directed",
+                           graph_distance=int(res["distance"]),
+                           display_distance=int(res["distance"]),
+                           next_hop_action=res["next_action"],
+                           next_hop_dxy=res["next_dxy"],
+                           next_hop_valid=res["next_action"] is not None)
+            elif res is not None:
+                # legacy-only route: obs/map hint only, NOT reward/timeout
+                out.update(display_reachable=True, directed=True,
+                           approach_mode="legacy",
+                           display_distance=int(res["distance"]),
+                           next_hop_action=res["next_action"],
+                           next_hop_dxy=res["next_dxy"])
+            else:
+                d = self._graph_distance(b, m, (xi, yi), targets)
+                if d is not None:
+                    out["display_distance"] = int(d)
+                    out["approach_mode"] = "legacy"
+            # spec point 3: no confirmed route -> honest geometric fallback
+            # toward the VERIFIED exit. Target + dx/dy stay in the observation;
+            # display_distance falls back to the Manhattan distance; the
+            # next-hop hint becomes the dominant axis toward the target.
+            if _verified and not out["valid"]:
+                out["approach_mode"] = "geometric"
+                if out["display_distance"] is None:
+                    out["display_distance"] = int(out["target_manhattan"])
+                if out["next_hop_action"] is None and out["target_manhattan"]:
+                    ax, ay = dxy
+                    if abs(ax) >= abs(ay) and ax != 0:
+                        nh = nav_graph.RIGHT if ax > 0 else nav_graph.LEFT
+                    elif ay != 0:
+                        nh = nav_graph.DOWN if ay > 0 else nav_graph.UP
+                    else:
+                        nh = None
+                    if nh is not None:
+                        out["next_hop_action"] = nh
+                        out["next_hop_dxy"] = nav_graph.DELTA.get(nh, (0, 0))
+        self._nav_objective_cache = (ck, out)
+        self._nav_objective_cache_step = self.total_steps
+        return out
+
+    @classmethod
+    def _directed_approach_component(cls, prev_obj, obj, *, moved_tiles,
+                                     recovery_frozen=False):
+        """Dense, telescoping reward on a confirmed directed route.
+
+        This deliberately pays the distance *difference*, not a visit or an
+        edge. Therefore A->B->A sums to zero before the ordinary step costs,
+        while following an already-known route still provides a learning
+        signal. Objective changes, warps/RAM jumps, legacy-only routes and
+        post-wipe recovery are neutral.
+        """
+        if recovery_frozen or not (0 < int(moved_tiles) <= 4):
+            return 0.0
+        if not isinstance(prev_obj, dict) or not isinstance(obj, dict):
+            return 0.0
+        if not prev_obj.get("valid") or not obj.get("valid"):
+            return 0.0
+        if prev_obj.get("key") != obj.get("key"):
+            return 0.0
+        prev_dist = prev_obj.get("graph_distance")
+        curr_dist = obj.get("graph_distance")
+        if prev_dist is None or curr_dist is None:
+            return 0.0
+        delta = int(prev_dist) - int(curr_dist)
+        if not (0 < abs(delta) <= 4):
+            return 0.0
+        return float(delta) * cls.TARGET_APPROACH_REWARD
+
+    @classmethod
+    def _geometric_approach_component(cls, prev_obj, obj, *, moved_tiles,
+                                     recovery_frozen=False):
+        """Spec point 3: symmetric potential-based shaping on the MANHATTAN
+        distance to a VERIFIED strategic exit, used ONLY while no confirmed
+        directed route exists (``approach_mode == "geometric"``). One tile
+        closer pays ``+GEO_APPROACH_REWARD``, one tile farther the exact
+        negative -> a round trip telescopes to 0 before the step cost. Never
+        pays during recovery, an objective change, or a warp / RAM jump."""
+        if recovery_frozen or not (0 < int(moved_tiles) <= cls.GEO_APPROACH_MAX_DELTA):
+            return 0.0
+        if not isinstance(prev_obj, dict) or not isinstance(obj, dict):
+            return 0.0
+        if obj.get("approach_mode") != "geometric":
+            return 0.0
+        if not prev_obj.get("target_verified") or not obj.get("target_verified"):
+            return 0.0
+        if prev_obj.get("key") != obj.get("key"):
+            return 0.0
+        pm = prev_obj.get("target_manhattan")
+        cm = obj.get("target_manhattan")
+        if pm is None or cm is None:
+            return 0.0
+        delta = int(pm) - int(cm)
+        if not (0 < abs(delta) <= cls.GEO_APPROACH_MAX_DELTA):
+            return 0.0
+        return float(delta) * cls.GEO_APPROACH_REWARD
+
+    def _nav_telemetry(self, bank, map_id, x, y):
+        """Per-agent navigation state for inst_XX.json + the web (plan L)."""
+        obj = self._nav_obj or {}
+        rl = self._region_loop_last or {}
+        g = self._nav_graph
+        nha = obj.get("next_hop_action")
+        blocked = []
+        try:
+            if g is not None:
+                blocked = [nav_graph.action_name(a) for a in
+                           g.blocked_actions((bank, map_id), (x, y),
+                                             now_step=int(self.total_steps))]
+        except Exception:
+            pass
+        reach = None
+        try:
+            with open(os.path.join(NAV_DIR, "nav_horizon.json")) as f:
+                reach = (json.load(f).get("transition_rates") or {}).get("1")
+        except Exception:
+            pass
+        ag = self._nav_agent
+        return {
+            "target": list(obj.get("target") or ()),
+            "target_source": obj.get("source", "none"),
+            "target_valid": bool(obj.get("valid")),        # confirmed route only
+            "target_verified": bool(obj.get("target_verified")),
+            "approach_mode": obj.get("approach_mode", "none"),
+            "target_manhattan": obj.get("target_manhattan"),
+            "display_reachable": bool(obj.get("display_reachable")),
+            "directed": bool(obj.get("directed")),
+            "graph_distance": obj.get("graph_distance"),
+            "display_distance": obj.get("display_distance"),
+            "best_graph_distance": self._nav_best_directed_distance,
+            "steps_since_improve": int(self._nav_steps_since_improve),
+            "next_hop_action": nav_graph.action_name(nha) if nha is not None else None,
+            "next_hop_dxy": list(obj.get("next_hop_dxy") or (0, 0)),
+            "blocked_directions": blocked,
+            "ledge_jumps": int(self.episode_ledge_jumps),
+            "region_loops": int(self.episode_region_loops),
+            "loop_kind": rl.get("kind"),
+            "timeout_reason": (self.last_stage_timeout
+                               if self.last_stage_timeout in (
+                                   "pallet_exit_timeout",
+                                   "route1_no_progress_timeout",
+                                   "route1_ledge_loop", "region_loop",
+                                   "recovery_no_progress_timeout") else None),
+            "recovery_mode": bool(self.recovery_mode),
+            "shaping_frozen": bool(self._nav_shaping_frozen),
+            "objective_key": self._nav_obj_key,
+            "training_run_id": int(getattr(ag, "run_id", 0)),
+            "caught_species": len(getattr(ag, "caught_species", ()) or ()),
+            "nav_clock": int(self._nav_clock),
+            "recovery_clock": int(self._recovery_clock),
+            "pallet_outdoor_steps": int(self._pallet_outdoor_steps),
+            "episode_new_tiles": int(len(self.seen_coords)),
+            "global_new_tiles": int(getattr(self, "episode_global_new_tiles", 0)),
+            "movement_graph_edges": int(g.edge_count() if g is not None else 0),
+            "route1_reach_rate": reach,
+        }
+
     def _build_nav_vector(
         self,
         bank,
@@ -1724,22 +2163,27 @@ class PokemonFireRedEnv(gym.Env):
         else:
             vec.extend([0.0, 0.0, 0.0, 0.0])
 
-        target = (
-            self._nav_target(bank, map_id, x, y)
-            if gameplay_ready else None
-        )
-
-        if target is None:
-            vec.extend([0.0, 0.0, 0.0, 0.0])
+        # nav_obs_v3_directed: the directed-graph objective block (9 floats).
+        # Reward, observation and web all read this same struct.
+        obj = (self._nav_objective(bank, map_id, x, y)
+               if gameplay_ready else None)
+        if not obj or not obj.get("valid"):
+            vec.extend([0.0] * 9)
         else:
-            dx = int(target[0]) - int(x)
-            dy = int(target[1]) - int(y)
-            dist = abs(dx) + abs(dy)
+            tdx, tdy = obj["target_dxy"]
+            gd = obj.get("graph_distance")
+            nhx, nhy = obj["next_hop_dxy"]
+            nha = obj.get("next_hop_action")
             vec.extend([
                 1.0,
-                float(np.clip(dx / 32.0, -1.0, 1.0)),
-                float(np.clip(dy / 32.0, -1.0, 1.0)),
-                float(np.clip(dist / 64.0, 0.0, 1.0)),
+                float(np.clip(tdx / 32.0, -1.0, 1.0)),
+                float(np.clip(tdy / 32.0, -1.0, 1.0)),
+                float(np.clip((gd if gd is not None else 64) / 64.0, 0.0, 1.0)),
+                1.0 if obj.get("next_hop_valid") else 0.0,
+                float(np.clip(nhx, -1.0, 1.0)),
+                float(np.clip(nhy, -1.0, 1.0)),
+                float(np.clip(((nha - 3) if nha is not None else 0) / 3.0, 0.0, 1.0)),
+                float(np.clip(self._nav_steps_since_improve / 512.0, 0.0, 1.0)),
             ])
 
         vec.extend([
@@ -1910,6 +2354,17 @@ class PokemonFireRedEnv(gym.Env):
         # erreicht ist, sind Wildkaempfe fast wertlos und der Rueckweg zur
         # Storyfront stark belohnt.
         self.post_wipe_recovery = True
+        # directed-shaping: freeze positive nav shaping until the agent gets
+        # strictly past the directed-distance highwater it had before the wipe.
+        # The wipe penalty is never repaid by the walk back.
+        self.recovery_mode = True
+        self._recovery_clock = 0
+        self._recovery_best_distance = None
+        try:
+            if self._nav_obj_key is not None:
+                self._load_nav_agent().on_wipe(self._nav_obj_key)
+        except Exception:
+            pass
         self.pre_wipe_best_stage = int(getattr(self, "episode_best_stage", 0))
         self.pre_wipe_best_center_stage = int(getattr(self, "best_pokecenter_heal_stage", 0))
         self.pre_wipe_badges = int(getattr(self, "last_badges", 0))
@@ -2088,12 +2543,18 @@ class PokemonFireRedEnv(gym.Env):
         ) != (int(bank), int(map_id), int(x), int(y)):
             return False
         is_frontier = (kind == "frontier")
-        # 2026-09-07: entry checkpoints now also require a battle-ready party -
-        # they are FRONTIER-created and BRIDGE resumes them, so a weak party
-        # here strands every BRIDGE agent on the route.
+        # 2026-09-07: health gate is now split.
+        #   entry / fighter -> STRICT party_ready (>= 80% HP all, no status, PP).
+        #     BRIDGE/RETENTION resume entry checkpoints; a weak party strands them.
+        #   frontier        -> frontier_viable (>= 2 alive, >= 50% total HP,
+        #     can still take a turn). Lets an agent that fought its way deeper
+        #     into a no-heal route actually SAVE that spatial progress instead
+        #     of losing it on the next wipe. Strict party_ready still qualifies.
         health = (party_health(read_player_party(self.env))
                   if kind in ("entry", "frontier", "fighter") else {})
-        if kind in ("entry", "frontier", "fighter") and not health.get('party_ready', False):
+        if kind in ("entry", "fighter") and not health.get('party_ready', False):
+            return False
+        if kind == "frontier" and not health.get('frontier_viable', False):
             return False
         name = {
             "frontier": f"stage_frontier_{int(stage)}",
@@ -2140,6 +2601,13 @@ class PokemonFireRedEnv(gym.Env):
                 if not may_replace_frontier(existing, float(frontier_score or 0),
                                             health, self.FRONTIER_METRIC_VERSION):
                     return False
+                if (kind == "frontier"
+                        and bool(existing.get("party_ready", False))
+                        and not health.get("party_ready", False)):
+                    # First time a healthy frontier anchor is downgraded to a
+                    # merely-viable one: snapshot the healthy state into the
+                    # single fixed per-stage safe fallback before overwriting.
+                    self._capture_frontier_safe_fallback(stage, name)
 
             # Auch beim Verbessern atomar ersetzen. So bleibt bei einem
             # Abbruch entweder der alte oder der neue vollstaendige State.
@@ -2234,6 +2702,7 @@ class PokemonFireRedEnv(gym.Env):
                         if milestone_name not in (
                             f"stage_{stage}",
                             f"stage_frontier_{stage}",
+                            f"stage_frontier_safe_{stage}",
                             f"stage_fighter_{stage}",
                         ):
                             raise ValueError("Invalid stage checkpoint name")
@@ -2246,8 +2715,22 @@ class PokemonFireRedEnv(gym.Env):
                         ):
                             self.env.em.set_state(original)
                             continue
-                    if milestone_name.startswith(("stage_frontier_", "stage_fighter_")):
+                    # Explicit ordering - the safe fallback is checked BEFORE the
+                    # general stage_frontier_ prefix so it can never be loaded on
+                    # a merely-viable party.
+                    if milestone_name.startswith("stage_fighter_"):
                         if not party_health(read_player_party(self.env))['party_ready']:
+                            self.env.em.set_state(original)
+                            continue
+                    elif milestone_name.startswith("stage_frontier_safe_"):
+                        # Healthy safe fallback: strict party_ready at load time.
+                        if not party_health(read_player_party(self.env))['party_ready']:
+                            self.env.em.set_state(original)
+                            continue
+                    elif milestone_name.startswith("stage_frontier_"):
+                        # Main frontier anchor: a deliberate hurt-but-viable state
+                        # loads if the restored party is startable.
+                        if not party_health(read_player_party(self.env))['frontier_viable']:
                             self.env.em.set_state(original)
                             continue
                     return True
@@ -2953,7 +3436,7 @@ class PokemonFireRedEnv(gym.Env):
             mode = self._v20_mode()
             self.training_mode = mode
             if mode == curriculum_v20.MODE_FULL:
-                return "full", f"V20 FULL {slot + 1:03d}"
+                return "full", f"Full {slot + 1:02d}"
             obj = "full" if mode == curriculum_v20.MODE_FULL else "scout"
             return obj, f"V20 {mode} {slot + 1:03d}"
 
@@ -3069,23 +3552,87 @@ class PokemonFireRedEnv(gym.Env):
 
     def _v20_stage_checkpoint_name(self, stage, kind="entry"):
         """Return a validated 'stage_<n>' / 'stage_frontier_<n>' /
-        'stage_fighter_<n>' milestone name for this stage, or None. Never falls
-        back to a fake coordinate."""
+        'stage_frontier_safe_<n>' / 'stage_fighter_<n>' milestone name for this
+        stage, or None. Never falls back to a fake coordinate."""
         want = {
             "frontier": f"stage_frontier_{int(stage)}",
+            "frontier_safe": f"stage_frontier_safe_{int(stage)}",
             "fighter": f"stage_fighter_{int(stage)}",
         }.get(kind, f"stage_{int(stage)}")
         if want not in set(getattr(self, "saved_milestones", ()) or ()):
             return None
         meta = self._read_stage_meta(want)
-        if kind in ("frontier", "fighter") and meta.get("party_ready") is False:
+        if kind == "fighter" and meta.get("party_ready") is False:
             return None
+        if kind == "frontier_safe" and meta.get("party_ready") is not True:
+            # The safe fallback is strict-only: a missing or non-True
+            # party_ready field is rejected outright.
+            return None
+        if kind == "frontier":
+            # Accept a strict-ready anchor, an OLD meta that predates the health
+            # fields (party_ready missing -> not rejected), OR a deliberate
+            # hurt-but-viable anchor (frontier_viable written since 2026-09-07).
+            if (meta.get("party_ready") is False
+                    and not meta.get("frontier_viable", False)):
+                return None
         if (meta.get("state_validation") == 1
                 and int(meta.get("stage", -1)) == int(stage)
                 and bool(meta.get("has_starter"))
                 and self._meta_checkpoint_stage(meta) == int(stage)):
             return want
         return None
+
+    def _frontier_anchor_is_hurt(self, stage):
+        """True when the main stage_frontier_<n> anchor exists but is a
+        deliberate hurt (frontier_viable, not party_ready) state."""
+        meta = self._read_stage_meta(f"stage_frontier_{int(stage)}")
+        return (meta.get("state_validation") == 1
+                and meta.get("party_ready") is False
+                and bool(meta.get("frontier_viable", False)))
+
+    def _capture_frontier_safe_fallback(self, stage, frontier_name):
+        """Preserve the current HEALTHY frontier anchor as the single fixed
+        per-stage safe fallback, right before it is first downgraded to a
+        merely-viable (hurt) state.
+
+        Exactly one file pair per stage (shared dir only), never overwritten by
+        a weak state, no history. Updated later only from a strictly deeper
+        healthy anchor (never regresses the fallback's spatial score)."""
+        safe_name = f"stage_frontier_safe_{int(stage)}"
+        src_state = self._shared_state_path(frontier_name)
+        src_meta_path = self._stage_meta_path(frontier_name, shared=True)
+        if not (os.path.exists(src_state) and os.path.exists(src_meta_path)):
+            return
+        try:
+            with open(src_meta_path) as f:
+                cur_meta = json.load(f) or {}
+        except Exception:
+            return
+        if not cur_meta.get("party_ready", False):
+            return
+        existing_safe = self._read_stage_meta(safe_name)
+        if (existing_safe.get("state_validation") == 1
+                and float(cur_meta.get("frontier_score", 0.0))
+                < float(existing_safe.get("frontier_score", 0.0))):
+            return
+        try:
+            with open(src_state, "rb") as f:
+                data = f.read()
+            dst_state = self._shared_state_path(safe_name)
+            dst_meta = self._stage_meta_path(safe_name, shared=True)
+            tmp_s = dst_state + f".tmp.{os.getpid()}.{self.rank}"
+            with open(tmp_s, "wb") as f:
+                f.write(data)
+            os.replace(tmp_s, dst_state)
+            safe_meta = dict(cur_meta)
+            safe_meta["kind"] = "frontier_safe"
+            tmp_m = dst_meta + f".tmp.{os.getpid()}.{self.rank}"
+            with open(tmp_m, "w") as f:
+                json.dump(safe_meta, f)
+            os.replace(tmp_m, dst_meta)
+            self.saved_milestones = self._discover_saved_milestones()
+        except Exception:
+            pass
 
     def _v20_choose_episode_start(self, mode):
         """Episode start for a V20 mode (brief section 3).
@@ -3109,9 +3656,17 @@ class PokemonFireRedEnv(gym.Env):
             # create those). It REUSES the FRONTIER Route 1 anchor - which
             # sits in the encounter zone - or the stage_2 entry, and the
             # 400-step out-of-battle leash keeps it in the fight loop.
+            # 2026-09-07: FIGHTER must NEVER start from a hurt main anchor.
+            # If stage_frontier_2 is a deliberate hurt state, it prefers the
+            # healthy safe fallback, then the strict stage_2 entry.
             self.training_objective = "scout"
-            for nm in (self._v20_stage_checkpoint_name(2, "frontier"),
-                       self._v20_stage_checkpoint_name(2, "entry")):
+            if self._frontier_anchor_is_hurt(2):
+                _fighter_order = (self._v20_stage_checkpoint_name(2, "frontier_safe"),
+                                  self._v20_stage_checkpoint_name(2, "entry"))
+            else:
+                _fighter_order = (self._v20_stage_checkpoint_name(2, "frontier"),
+                                  self._v20_stage_checkpoint_name(2, "entry"))
+            for nm in _fighter_order:
                 if nm:
                     return nm
             if entry_cps:
@@ -3144,11 +3699,22 @@ class PokemonFireRedEnv(gym.Env):
             # keeps every FRONTIER agent on the current wall instead of racing
             # to an inherited deep savestate. No more frontier_stage()/+2 race.
             for n in range(curriculum_v20.MAX_KNOWN_STAGE, 0, -1):
-                nm = (self._v20_stage_checkpoint_name(n, "frontier")
-                      or self._v20_stage_checkpoint_name(n, "entry"))
-                if nm:
-                    self.training_objective = "scout"
-                    return nm
+                _fr = self._v20_stage_checkpoint_name(n, "frontier")
+                nm = _fr or self._v20_stage_checkpoint_name(n, "entry")
+                if not nm:
+                    continue
+                self.training_objective = "scout"
+                # Every Nth FRONTIER rank falls back to the fixed healthy
+                # safe anchor when the main frontier anchor has degraded to a
+                # merely-viable (hurt) state - deterministic, so a practically
+                # worse main anchor can never pin the entire FRONTIER fleet.
+                if (_fr
+                        and self.rank % self.FRONTIER_SAFE_FALLBACK_EVERY == 0
+                        and self._frontier_anchor_is_hurt(n)):
+                    _safe = self._v20_stage_checkpoint_name(n, "frontier_safe")
+                    if _safe:
+                        return _safe
+                return nm
             self.training_objective = "full"
             return "beginning"
 
@@ -3321,6 +3887,12 @@ class PokemonFireRedEnv(gym.Env):
 
     def _v20_mode(self):
         """FULL / BRIDGE / FRONTIER / RETENTION for this rank (static)."""
+        try:
+            from twoby2 import feature_enabled
+            if feature_enabled("nav_battle_wrapper"):
+                return curriculum_v20.MODE_FULL
+        except Exception:
+            pass
         return curriculum_v20.mode_for_rank(self.rank, self.n_envs)
 
     # Re-reading the two small JSON files every step across 60 workers is
@@ -3388,6 +3960,55 @@ class PokemonFireRedEnv(gym.Env):
         """
         # 2026-09-07 (user): watcher back on the normal budget - the "watcher"
         # objective falls through to LONG_FULL_PROBE_STEPS (~32k) like a full run.
+        try:
+            from twoby2 import feature_enabled
+            if feature_enabled("adaptive_nav_horizon"):
+                from twoby2.horizon import (NavHorizonState,
+                                             NAV_EPISODE_HORIZONS)
+                hp = os.path.join(RUNTIME_DIR, "navigation", "nav_horizon.json")
+                # _episode_step_limit() runs every step - only re-read the
+                # horizon file when its mtime changed (the nav trainer rewrites
+                # it at most once per champion eval).
+                try:
+                    mtime = os.stat(hp).st_mtime_ns
+                except OSError:
+                    mtime = 0
+                cached = getattr(self, "_nav_horizon_cache", None)
+                if cached is None or cached[0] != mtime:
+                    try:
+                        st = NavHorizonState.load_or_new(
+                            hp, champion_metrics={
+                                "confirmed": True,
+                                "effective_live_horizon": self.LONG_FULL_PROBE_STEPS,
+                            })
+                    except Exception:
+                        st = NavHorizonState(
+                            NAV_EPISODE_HORIZONS.index(self.LONG_FULL_PROBE_STEPS))
+                    roles = st.assign_worker_horizons(self.n_envs)
+                    if getattr(self, "is_watcher", False):
+                        # The watcher demonstrates the champion on the horizon
+                        # the *majority* of the fleet runs, not the 20% probe
+                        # rung - otherwise it always runs longer than 80% of
+                        # the runners (it is rank 0, always a probe slot).
+                        horizon = int(st.current_horizon)
+                    else:
+                        horizon = int(roles[self.rank % len(roles)]["horizon"])
+                        # spec point 6: a fixed set of low-rank FULL workers on
+                        # the MAJORITY rung run a bounded "beginning" episode so
+                        # champion eval never starves. Never steal a probe slot
+                        # (that would shrink the horizon-ramp sample), never
+                        # shorten the majority rung itself.
+                        _rk = int(getattr(self, "rank", 0))
+                        if (self.training_objective == "full"
+                                and self.NAV_EVAL_FIRST_RANK <= _rk
+                                < self.NAV_EVAL_FIRST_RANK + self.NAV_EVAL_WORKERS
+                                and horizon == int(st.current_horizon)
+                                and horizon > self.NAV_EVAL_HORIZON):
+                            horizon = self.NAV_EVAL_HORIZON
+                    self._nav_horizon_cache = (mtime, horizon)
+                return self._nav_horizon_cache[1]
+        except Exception:
+            pass
         obj = self.training_objective
         if obj == "scout":
             return self.SCOUT_EPISODE_STEPS
@@ -3736,6 +4357,7 @@ class PokemonFireRedEnv(gym.Env):
         self._stored_frontier_score_cache = {}
         self._recent_map_transitions.clear()
         self._map_change_count = 0
+        self._last_map_change_step = -999
         self.episode_new_frontier_highwaters = 0
         self.episode_warp_loops = 0
         self.episode_local_loops = 0
@@ -3868,6 +4490,33 @@ class PokemonFireRedEnv(gym.Env):
         self.local_loop_guard = LocalLoopGuard()
         self.short_cycle_guard = ShortCycleGuard()
         self._short_cycle_last = None
+        # per-episode directed-nav bookkeeping. The persistent per-agent shaping
+        # file (per-objective-key highwater, run-wide rewarded edges, wild-win /
+        # catch counters) and the shared movement graph deliberately survive.
+        self.region_loop_guard = RegionLoopGuard()
+        self._region_loop_last = None
+        self._nav_objective_cache = None
+        self._nav_objective_cache_step = -10**9
+        self._nav_obj_key = None
+        self._nav_best_directed_distance = None
+        self._nav_steps_since_improve = 0
+        self._nav_clock = 0
+        self._recovery_clock = 0
+        self._recovery_best_distance = None
+        self._pallet_outdoor_steps = 0
+        self._route1_no_progress_steps = 0
+        self._dir_move_from = None
+        self._nav_obj = None
+        self._prev_nav_obj = None
+        self._nav_shaping_frozen = False
+        self.episode_ledge_jumps = 0
+        self.episode_region_loops = 0
+        self.episode_global_new_tiles = 0
+        # a fresh training run wipes the per-agent shaping file
+        if (self._nav_agent is not None
+                and self._nav_agent.run_id != self._nav_run_id()):
+            self._nav_agent = None
+        self._flush_nav_state()
         self.target_shaper.reset()
         self.trainer_rewards.reset()
         self._target_pot_key = None
@@ -4150,6 +4799,20 @@ class PokemonFireRedEnv(gym.Env):
         info["in_battle"] = in_battle
         info["battle_detection"] = self.battle_state.reason
         info["battle_type_flags"] = self.battle_state.raw_flags
+        # 2x2 live seam (telemetry). When twoby2.FEATURES['nav_battle_wrapper']
+        # is ON, NavigationBattleWrapper (wired in train.py / watcher_runtime.py)
+        # takes over the whole fight via EmulatorBattleDriver by stepping the
+        # raw emulator directly, so PokemonFireRedEnv.step — and its entire
+        # combat-reward pipeline — is NOT executed during a battle: the
+        # navigation PPO structurally never sees damage/KO/win/level. No-op
+        # while the gate is OFF.
+        try:
+            from twoby2 import feature_enabled as _twoby2_gate
+            self._twoby2_split_active = bool(_twoby2_gate("nav_battle_wrapper"))
+        except Exception:
+            self._twoby2_split_active = False
+        info["twoby2_battle_active"] = bool(in_battle) and self._twoby2_split_active
+        info["twoby2_split"] = self._twoby2_split_active
         if in_battle:
             self.battle_steps += 1
             self.current_battle_steps += 1
@@ -4159,6 +4822,53 @@ class PokemonFireRedEnv(gym.Env):
         reward = 0.0
         reward_events = []
         combat_rewards = []  # (event, exact value); never parse rounded UI strings.
+
+        # --- directed navigation objective: one source of truth for the obs,
+        #     the reward shaping and the web. Computed once per step. ---------
+        self._prev_nav_obj = self._nav_obj      # objective at last step's tile
+        self._nav_obj = None
+        self._nav_shaping_frozen = False
+        if (loc.get("trusted") and not in_battle
+                and self.training_objective in (
+                    "full", "watcher", "progress", "scout", "badge")):
+            self._nav_obj = self._nav_objective(bank, map_id, x, y)
+            _obj = self._nav_obj
+            _key = _obj["key"]
+            _gd = _obj.get("graph_distance")     # confirmed-route distance only
+            _sh = self._load_nav_agent()
+            # a real objective change (item 4): reset the per-episode trackers,
+            # NOT the persistent per-key highwater / the run-wide rewarded edges
+            if _key != self._nav_obj_key:
+                self._nav_obj_key = _key
+                self._nav_best_directed_distance = _sh.best_distance(_key)
+                self._nav_steps_since_improve = 0
+                self.region_loop_guard.progress_event()
+                self._recovery_best_distance = None
+                self._recovery_clock = 0
+            if _gd is not None:
+                # NOTE: the persistent per-key highwater is recorded + paid in
+                # the route-shaping block below (once), not here.
+                if (self._nav_best_directed_distance is None
+                        or _gd < self._nav_best_directed_distance):
+                    self._nav_best_directed_distance = _gd
+                    self._nav_steps_since_improve = 0
+                    self.region_loop_guard.progress_event()
+                else:
+                    self._nav_steps_since_improve += 1
+                # recovery no-progress clock (item 9): advances unless the
+                # directed distance keeps falling
+                if (self._recovery_best_distance is None
+                        or _gd < self._recovery_best_distance):
+                    self._recovery_best_distance = _gd
+                    self._recovery_clock = 0
+            _pw = _sh.pre_wipe_highwater(_key)
+            if _pw is not None and _gd is not None:
+                if _gd >= _pw:
+                    self._nav_shaping_frozen = True
+                else:
+                    _sh.clear_pre_wipe(_key)      # strictly past the old best
+                    self.recovery_mode = False
+                    self._recovery_clock = 0
         if in_battle:
             combat_rewards.append(("battle_step", self.GAMEPLAY_STEP_COST))
         truncated = False
@@ -4424,33 +5134,46 @@ class PokemonFireRedEnv(gym.Env):
                 )
                 if new_species > 0:
                     self.battle_caught = True
-                    if new_species not in self.episode_caught_species:
-                        self.episode_caught_species.add(new_species)
-                        _caught_level = min(
-                            int(valid_party[-1].get("level", 0) or 0),
-                            self.SPECIES_CAUGHT_LEVEL_BONUS_CAP,
-                        )
-                        _catch_reward = (
-                            self.SPECIES_CAUGHT_FIRST_REWARD
-                            + max(_caught_level, 0) * self.SPECIES_CAUGHT_LEVEL_BONUS
-                        )
-                        # V19: waehrend Post-Wipe-Recovery kein generischer
-                        # Fang-Reward - der Rueckweg zur Front soll die klar
-                        # beste Wahl sein. Der Pikachu-Wald-Bonus unten ist ein
-                        # eigener if und bleibt (wichtiger einmaliger Storyfang).
-                        if getattr(self, "post_wipe_recovery", False):
-                            _catch_reward = 0.0
+                    # Catch dedup is now PERSISTENT per training run (review
+                    # item 1): NavAgentState.caught_species survives episode
+                    # resets + wipes, so the three Route-1 Rattata can no longer
+                    # re-farm +54/+56/+58 every episode. The reward is a small
+                    # flat species-diversity one-off (no level bonus - a level
+                    # bonus rewards grinding high-level catches).
+                    self.episode_caught_species.add(new_species)
+                    try:
+                        _first_ever = self._load_nav_agent().mark_caught(new_species)
+                    except Exception:
+                        _first_ever = new_species not in self.episode_caught_species
+                    # Catch-v2 (spec §3, accepted): the +0.5 is paid ONLY when
+                    # the strategic catch planner ASKED for this catch and the
+                    # battle system RAM-confirmed it (a validated battle summary:
+                    # catch_requested + catch_success + caught_species matches
+                    # the target). A raw / random / RULE-fallback catch gets no
+                    # positive navigation reward.
+                    _cs = getattr(self, "_last_nav_battle", None) or {}
+                    _catch_requested_ok = bool(
+                        _cs.get("catch_requested") and _cs.get("catch_success")
+                        and int(_cs.get("caught_species_id", 0) or 0) == new_species
+                        and int(_cs.get("target_species_id", 0) or 0) == new_species)
+                    _recovery = getattr(self, "post_wipe_recovery", False)
+                    if _first_ever and not _recovery and _catch_requested_ok:
+                        _catch_reward = self.SPECIES_CAUGHT_FIRST_REWARD
                         reward += _catch_reward
                         reward_events.append(
-                            f"species_caught_first:{new_species}:L{_caught_level}:"
-                            f"+{_catch_reward:.0f}"
-                        )
-                    elif self.SPECIES_CAUGHT_DUPLICATE_PENALTY:
-                        reward += self.SPECIES_CAUGHT_DUPLICATE_PENALTY
+                            f"species_caught_first:{new_species}:+{_catch_reward:.2f}")
+                    elif _first_ever and not _recovery:
+                        reward_events.append(
+                            f"species_caught_unrequested:{new_species}:+0")
+                    elif _first_ever:
+                        reward_events.append(
+                            f"species_caught_recovery:{new_species}:+0")
+                    else:
+                        if self.SPECIES_CAUGHT_DUPLICATE_PENALTY:
+                            reward += self.SPECIES_CAUGHT_DUPLICATE_PENALTY
                         reward_events.append(
                             f"species_caught_dup:{new_species}:"
-                            f"{self.SPECIES_CAUGHT_DUPLICATE_PENALTY:.0f}"
-                        )
+                            f"{self.SPECIES_CAUGHT_DUPLICATE_PENALTY:.1f}")
                     # V17.4: Pikachu ist im Vertania-Wald selten und kein
                     # Fortschrittsweg - eigener, viel groesserer Bonus obendrauf,
                     # unabhaengig vom generischen Fang-Reward oben. Pro Run
@@ -5729,12 +6452,35 @@ class PokemonFireRedEnv(gym.Env):
             _old_stage = int(getattr(self, "episode_best_stage", 0))
             if self.has_starter and _stage > _old_stage:
                 stage_gain = _stage - _old_stage
-                if self.STAGE_ADVANCE_REWARD:
-                    stage_reward = self.STAGE_ADVANCE_REWARD * stage_gain
-                    reward += stage_reward
+                # 2026-09-08 (user): the big one-off world-stage bonus is a
+                # learning MAGNET. episode_best_stage resets every episode, so
+                # paying it per episode taught "sprint to Route 1" and NOT
+                # "then push north" (~5000 approach steps == one +250). It is
+                # now RUN-WIDE deduplicated per (from->to) transition: paid at
+                # most once per training run, and the dedup set survives
+                # episode reset / wipe / savestate reload (NavAgentState keys
+                # on run_id). Repeated Pallet<->Route1 pendeln pays 0; the
+                # continuous guidance is the symmetric geometric approach term.
+                _sh_stage = None
+                _stage_paid = 0.0
+                try:
+                    _sh_stage = self._load_nav_agent()
+                except Exception:
+                    _sh_stage = None
+                for _s in range(_old_stage, _stage):
+                    _already = (_sh_stage is not None
+                                and _sh_stage.stage_advance_already_paid(_s, _s + 1))
+                    if self.STAGE_ADVANCE_REWARD and not _already:
+                        _stage_paid += self.STAGE_ADVANCE_REWARD
+                        if _sh_stage is not None:
+                            _sh_stage.mark_stage_advance_paid(_s, _s + 1)
+                if _stage_paid:
+                    reward += _stage_paid
                     reward_events.append(
-                        f"stage_advance:{_old_stage}->{_stage}:+{stage_reward:.0f}"
-                    )
+                        f"stage_advance:{_old_stage}->{_stage}:+{_stage_paid:.0f}")
+                elif self.STAGE_ADVANCE_REWARD:
+                    reward_events.append(
+                        f"stage_advance_already_paid:{_old_stage}->{_stage}:+0")
                 self.episode_best_stage = _stage
                 self.last_progress_advance_step = self.route_steps
 
@@ -5919,6 +6665,9 @@ class PokemonFireRedEnv(gym.Env):
                     _tile_global_first = self._claim_shared(
                         self.shared_tiles, coord_key
                     )
+                    if _tile_global_first:
+                        self.episode_global_new_tiles = int(getattr(
+                            self, "episode_global_new_tiles", 0)) + 1
                     _cap = (
                         self.TILE_REWARD_CAP_PER_MAP if _tile_stage > 0
                         else self.INTERIOR_TILE_CAP_PER_MAP
@@ -5936,29 +6685,43 @@ class PokemonFireRedEnv(gym.Env):
                     if _scout_backtrack:
                         reward_events.append("new_tile_scout_backtrack:+0")
                     elif not _is_frontier_scout:
-                        # Proven stage -> tiny anti-wall trickle. Unproven
-                        # (frontier) stage -> a real push so FULL/BRIDGE help
-                        # find the way onward instead of drifting back to town.
-                        _tr = (
-                            self.FULL_FRONTIER_TILE_REWARD if _fwd_unknown
-                            else self.FULL_NEW_TILE_REWARD
-                        )
-                        if _capped:
-                            _tr *= self.TILE_REWARD_AFTER_CAP_FACTOR
-                        if _fwd_unknown and _tile_global_first:
-                            _tr += self.GLOBAL_NEW_TILE_BONUS
+                        # Tiered movement reward (plan E + review item 6):
+                        #   * fleet-KNOWN tile -> 0 ALWAYS (cap-independent). The
+                        #     old FULL_NEW_TILE_REWARD on the first ~30 tiles of
+                        #     every episode was the permanent Pallet/Route farm.
+                        #   * fleet-first tile -> ONE small topology reward.
+                        #   * frontier (fleet-unknown forward stage) -> real push,
+                        #     trickle after the map cap.
+                        #   * recovery freeze -> 0.
+                        _frozen_now = bool(getattr(self, "_nav_shaping_frozen", False))
+                        if _frozen_now:
+                            _tr, _tag = 0.0, ":recovery_frozen"
+                        elif _fwd_unknown:
+                            _tr = self.FULL_FRONTIER_TILE_REWARD
+                            _tag = ":frontier"
+                            if _capped:
+                                _tr *= self.TILE_REWARD_AFTER_CAP_FACTOR
+                                _tag += ":capped"
+                            if _tile_global_first:
+                                _tr += self.GLOBAL_NEW_TILE_BONUS
+                        elif _tile_global_first:
+                            _tr = self.TOPOLOGY_FIRST_REWARD
+                            _tag = ":global_first"
+                        else:
+                            _tr, _tag = 0.0, ":known"
                         if _tr:
                             reward += _tr
-                        reward_events.append(
-                            f"new_tile_full"
-                            f"{':frontier' if _fwd_unknown else ''}"
-                            f"{':capped' if _capped else ''}:+{_tr:.3f}"
-                        )
+                        reward_events.append(f"new_tile_full{_tag}:+{_tr:.3f}")
                     else:
                         _tile_reward = (self.FULL_FRONTIER_TILE_REWARD if _fwd_unknown
                                         else self.SCOUT_NEW_TILE_REWARD)
+                        _known0 = False
                         if _capped:
-                            _tile_reward *= self.TILE_REWARD_AFTER_CAP_FACTOR
+                            if _tile_global_first or _fwd_unknown:
+                                _tile_reward *= self.TILE_REWARD_AFTER_CAP_FACTOR
+                            else:
+                                _tile_reward = 0.0
+                                _known0 = True
                         _tile_global = (
                             self.GLOBAL_NEW_TILE_BONUS
                             if _tile_global_first else 0.0
@@ -5968,7 +6731,8 @@ class PokemonFireRedEnv(gym.Env):
                         reward_events.append(
                             f"new_tile_scout:s{_tile_stage}"
                             f"{'+g' if _tile_global else ''}"
-                            f"{':capped' if _capped else ''}:+{_tile_reward:.2f}"
+                            f"{':known' if _known0 else (':capped' if _capped else '')}"
+                            f":+{_tile_reward:.2f}"
                         )
 
             # -----------------------------------------------------
@@ -6012,7 +6776,59 @@ class PokemonFireRedEnv(gym.Env):
                     )
 
             # -----------------------------------------------------
-            # PERSISTENTE BLUE-LINE / EDGE EXPLORATION
+            # DIRECTED MOVEMENT GRAPH (nav_graph.py)
+            # -----------------------------------------------------
+            # A move / block is recorded ONLY from a clean navigation context:
+            #   * position trusted, out of battle, not the step a battle ended;
+            #   * not a menu step (START) and the input was not remapped;
+            #   * not inside the map-change / warp settle window (the warp fade
+            #     freezes the coord for a few steps -> a false "blocked" wall,
+            #     and the post-warp coord vs a stale _dir_move_from -> a false
+            #     multi-tile "ledge"). This is what polluted the graph with
+            #     ~1400 fake ledges and ~2500 fake blocks.
+            _warp_settle = (int(self.total_steps)
+                            - int(getattr(self, "_last_map_change_step", -999))
+                            <= 3 * int(self.LOCATION_READ_EVERY))
+            _clean_nav_ctx = (
+                loc.get("trusted") and not in_battle and not battle_just_ended
+                and not _warp_settle and requested_action != 2
+                and effective_action == requested_action
+                and effective_action in nav_graph.MOVE_ACTIONS)
+            _mv_from = getattr(self, "_dir_move_from", None)
+            if (_clean_nav_ctx and _mv_from is not None
+                    and _mv_from[:2] == (bank, map_id)):
+                _pfx = (int(_mv_from[2]), int(_mv_from[3]))
+                _to = (int(x), int(y))
+                _g = self._load_nav_graph()
+                if _to != _pfx:
+                    _kind = _g.observe_move((bank, map_id), _pfx, effective_action,
+                                            _to, step=int(self.total_steps))
+                    if _kind == nav_graph.WALK:
+                        self._nav_graph_dirty = True
+                    # a multi-tile / diagonal delta records NOTHING (sampled
+                    # walking is not a ledge); it no longer bumps ledge_jumps.
+                elif not _wipe_cooldown_active:
+                    # no position change in a clean nav context -> candidate
+                    # block. The visit_id is rank-prefixed so a fleet union of
+                    # one mid-frame sample per worker cannot forge a wall - a
+                    # real static block needs distinct (agent, encounter) pairs.
+                    _vid = (int(getattr(self, "rank", 0)) * 1_000_000
+                            + int(self._tile_arrival_count.get(
+                                (bank, map_id, x, y), 0)))
+                    _g.observe_block((bank, map_id), _pfx, effective_action,
+                                     step=int(self.total_steps), visit_id=_vid)
+                    self._nav_graph_dirty = True
+            # remember where the NEXT step starts from (this trusted position)
+            if loc.get("trusted"):
+                self._dir_move_from = (bank, map_id, int(x), int(y))
+                _tk = (bank, map_id, int(x), int(y))
+                if _tk != self._last_nav_tile:
+                    self._tile_arrival_count[_tk] = (
+                        int(self._tile_arrival_count.get(_tk, 0)) + 1)
+                    self._last_nav_tile = _tk
+
+            # -----------------------------------------------------
+            # PERSISTENTE BLUE-LINE / EDGE EXPLORATION (legacy undirected)
             # -----------------------------------------------------
             # Ein "blauer Strich" ist eine echte Bewegung um genau ein Tile auf
             # derselben Map. Nur ein noch nie bekannter Linienabschnitt gibt Reward.
@@ -6028,11 +6844,17 @@ class PokemonFireRedEnv(gym.Env):
                             bank, map_id, px, py, x, y
                         )
 
+                        # FULL / watcher: re-walking a known edge every episode
+                        # was a farm (learning_seen_edges resets each episode).
+                        # Known-route reward for FULL now comes ONLY from the
+                        # run-wide directed next-hop (once per physical edge).
+                        _full_nav = self.training_objective in ("full", "watcher")
                         if edge_key not in self.learning_seen_edges:
                             self.learning_seen_edges.add(edge_key)
                             if (
                                 edge_key in self.persistent_known_edges
                                 and self.EPISODE_EDGE_REWARD
+                                and not _full_nav
                             ):
                                 reward += self.EPISODE_EDGE_REWARD
                                 reward_events.append(f"replay_edge:+{self.EPISODE_EDGE_REWARD:.2f}")
@@ -6065,11 +6887,10 @@ class PokemonFireRedEnv(gym.Env):
                                         "new_edge_global:"
                                         f"+{self.NEW_EDGE_REWARD:.2f}"
                                     )
-                            else:
-                                # V10.2:
-                                # Edge ist global bekannt, aber fuer diesen
-                                # Agent erstmals gelaufen. Positives Imitations-
-                                # signal statt den richtigen Weg neutral zu machen.
+                            elif not _full_nav:
+                                # global-known edge, first for THIS agent. FULL
+                                # gets 0 (see the run-wide next-hop reward);
+                                # other roles keep the imitation signal.
                                 local_edge_reward = self.EPISODE_EDGE_REWARD
                                 if local_edge_reward:
                                     reward += local_edge_reward
@@ -6112,136 +6933,132 @@ class PokemonFireRedEnv(gym.Env):
                                     f"{repeat_penalty:.2f}"
                                 )
 
-                        # Wiederholbarer, nicht farmbarer Ziel-Fortschritt:
-                        # naeher und weiter sind symmetrisch.
-                        if (self._v20_active() and self.left_house_rewarded
-                                and self._current_world_stage(bank, map_id) > 0
-                                and not self.post_wipe_recovery):
-                            targets = self._v20_world_targets(bank, map_id)
-                        elif (
-                            (int(bank), int(map_id)) == self.STAGE_PALLET
-                            and self.left_house_rewarded
-                        ):
-                            # V19.1: Alabastia = KEIN Erkundungsgebiet. Genau
-                            # ein Ziel - der echte Uebergang nach Route 1.
-                            # Kein _target_coords_for_stage / _progress_targets /
-                            # _v19_forward_targets, keine Frontier-Fallbacks.
-                            targets = self._pallet_route1_target()
-                        else:
-                            targets = self._target_coords_for_stage(
-                                bank, map_id
-                            )
-                            if (
-                                not targets
-                                and self.left_house_rewarded
-                                and self.training_objective
-                                    in ("progress", "full", "scout")
-                            ):
-                                targets = self._progress_targets_for_map(
-                                    bank, map_id, x, y
-                                )
-                            # V19: fuer die Welt-Rollen auf einer Aussenmap
-                            # liefern die beiden oben bewusst nichts (generische
-                            # Ziele bevorzugten Haeuser/Sackgassen). Stattdessen
-                            # exakt die Transition Richtung naechster Stufe /
-                            # Center / Arena.
-                            if not targets and self.left_house_rewarded:
-                                targets = self._v19_forward_targets(bank, map_id)
-                        if targets:
-                            new_d = self._graph_distance(
-                                bank, map_id, (x, y), targets
-                            )
+                        # -------------------------------------------------
+                        # DIRECTED-GRAPH ROUTE SHAPING (replaces the old
+                        # undirected route_approach / target_shaper drip).
+                        # One source of truth: self._nav_obj (== the obs).
+                        #   * next-hop reward (item 7): the action executed FROM
+                        #     (px,py) must match the PREVIOUS objective's
+                        #     next_hop_action; RUN-WIDE dedup (item 5) - a
+                        #     physical edge that already paid never pays again
+                        #     (stage/wipe/reset/recovery included);
+                        #   * progress reward: only on a strict NEW per-
+                        #     objective-key directed distance highwater;
+                        #   * legacy-only route -> NO reward (item 8: obj.valid
+                        #     is confirmed-route-only);
+                        #   * during recovery: 0 positive until strictly past
+                        #     the pre-wipe highwater;
+                        #   * region / ledge loop: 0 positive + escalating cost.
+                        # -------------------------------------------------
+                        obj = self._nav_obj
+                        prev = self._prev_nav_obj
+                        _obj_geo = (obj is not None and not obj.get("valid")
+                                    and obj.get("approach_mode") == "geometric"
+                                    and self.left_house_rewarded
+                                    and bool(loc.get("trusted"))
+                                    and not in_battle)
+                        if (obj is not None and obj.get("valid")
+                                and self.left_house_rewarded):
+                            sh = self._load_nav_agent()
+                            _key = obj["key"]
+                            gd = obj.get("graph_distance")
+                            _rl = self.region_loop_guard.update(
+                                (int(x), int(y)), effective_action, gd,
+                                active=bool(loc.get("trusted")))
+                            self._region_loop_last = _rl
+                            if _rl.get("loop"):
+                                self.episode_region_loops += 1
+                            _short = (getattr(self, "_short_cycle_last", None)
+                                      or {}).get("suppress_shaping")
+                            _frozen = (self._nav_shaping_frozen
+                                       or _rl.get("suppress_shaping") or _short)
 
-                            # V20 section 6/22: positive shaping ONLY on a new
-                            # episode-best distance to this exact target;
-                            # A<->B oscillation can never repeatedly pay. This
-                            # is the ONLY distance shaping now - the old dense
-                            # per-step +/-0.20 closer/farther signal is gone.
-                            # Post-wipe recovery uses the same high-watermark,
-                            # just scaled up.
-                            if getattr(self, "V20_CURRICULUM", False):
-                                # Returning to a map must not repay the same
-                                # approach; the shaper retains each objective's
-                                # best distance until episode reset.
-                                _obj_key = (
-                                    self.training_objective,
-                                    "recovery" if getattr(
-                                        self, "post_wipe_recovery", False
-                                    ) else "route",
-                                    int(bank), int(map_id),
-                                    tuple(sorted({
-                                        (int(t[0]), int(t[1])) for t in targets
-                                    })),
-                                )
-                                _loop = getattr(self, "_short_cycle_last", None) or {}
-                                _sr, _sev = self.target_shaper.update(
-                                    _obj_key, new_d
-                                )
-                                if getattr(self, "post_wipe_recovery", False) and _sr:
-                                    _sr *= (
-                                        self.POST_WIPE_TARGET_PROGRESS_REWARD
-                                        / max(self.TARGET_PROGRESS_REWARD, 1e-6)
-                                    )
-                                if _loop.get("suppress_shaping"):
-                                    if _sev == "route_progress_best":
-                                        reward_events.append(
-                                            "route_progress_loop_suppressed:+0"
-                                        )
-                                elif _sev == "route_progress_best" and _sr > 0:
-                                    reward += _sr
-                                    reward_events.append(
-                                        f"route_progress_best:+{_sr:.3f}"
-                                    )
-                                elif _sev == "route_backtrack":
-                                    # spec section 6: no permanent per-step
-                                    # +/- signal. The backtrack half of the
-                                    # shaper is logged for visibility only -
-                                    # the actual penalty is 0. Moving away from
-                                    # the exit costs the GAMEPLAY_STEP_COST and
-                                    # (on a real loop) the ShortCycleGuard /
-                                    # WARP_LOOP_PENALTY, not a dense drip that
-                                    # pinned whole modes against a town wall.
-                                    if self.TARGET_BACKTRACK_PENALTY:
-                                        reward += self.TARGET_BACKTRACK_PENALTY
-                                    reward_events.append(
-                                        "route_backtrack:"
-                                        f"{self.TARGET_BACKTRACK_PENALTY:+.3f}"
-                                    )
+                            # Dense signal on an ALREADY-KNOWN confirmed route.
+                            # Unlike nav_next_hop / directed_progress_best this
+                            # is intentionally repeatable, but it is a potential
+                            # difference: one tile closer pays +0.03 and the
+                            # same tile back pays -0.03. Together with the
+                            # normal -0.005/step, every round trip is negative.
+                            # Recovery stays neutral until the pre-wipe
+                            # highwater is strictly exceeded.
+                            _approach = self._directed_approach_component(
+                                prev, obj, moved_tiles=manhattan,
+                                recovery_frozen=self._nav_shaping_frozen,
+                            )
+                            if _approach:
+                                reward += _approach
+                                reward_events.append(
+                                    f"directed_approach:{_approach:+.3f}")
 
-                                # Potential-based approach gradient ON TOP of the
-                                # high-watermark: +TARGET_APPROACH_REWARD per tile
-                                # closer to the proven exit, -that per tile away.
-                                # Keyed to the same objective so a target/map
-                                # change rebaselines (no jump payout); abs(delta)
-                                # <= 4 filters warp/RAM spikes. Telescoping -> any
-                                # round trip nets exactly 0 (not farmable, no
-                                # wall-pin when standing still); a real approach
-                                # accumulates positive. Positive half is
-                                # suppressed inside a detected short-cycle loop.
-                                if _obj_key != self._target_pot_key:
-                                    self._target_pot_key = _obj_key
-                                    self._target_pot_dist = new_d
-                                else:
-                                    _prev_pd = self._target_pot_dist
-                                    self._target_pot_dist = new_d
-                                    if _prev_pd is not None:
-                                        _delta = int(_prev_pd) - int(new_d)
-                                        if 0 < abs(_delta) <= 4:
-                                            _appr = _delta * self.TARGET_APPROACH_REWARD
-                                            if getattr(self, "post_wipe_recovery", False):
-                                                _appr *= (
-                                                    self.POST_WIPE_TARGET_PROGRESS_REWARD
-                                                    / max(self.TARGET_PROGRESS_REWARD, 1e-6)
-                                                )
-                                            if _appr > 0 and _loop.get("suppress_shaping"):
-                                                reward_events.append(
-                                                    "route_approach_loop_suppressed:+0"
-                                                )
-                                            elif _appr:
-                                                reward += _appr
-                                                reward_events.append(
-                                                    f"route_approach:{_appr:+.3f}"
-                                                )
+                            # item 7: the executed edge is (px,py)-effective_action;
+                            # compare to the objective evaluated AT (px,py)
+                            _prev_nh = (prev.get("next_hop_action")
+                                        if prev is not None and prev.get("valid")
+                                        else None)
+                            if (_prev_nh is not None
+                                    and effective_action == _prev_nh
+                                    and not _frozen
+                                    and not sh.next_hop_already_paid(
+                                        bank, map_id, (px, py), effective_action)):
+                                sh.mark_next_hop_paid(
+                                    bank, map_id, (px, py), effective_action)
+                                reward += self.NEXT_HOP_REWARD
+                                reward_events.append(
+                                    f"nav_next_hop:+{self.NEXT_HOP_REWARD:.3f}")
+
+                            if gd is not None:
+                                _is_best = sh.record_distance(_key, gd)
+                                if _is_best and not _frozen:
+                                    reward += self.DIRECTED_PROGRESS_REWARD
+                                    reward_events.append(
+                                        "directed_progress_best:"
+                                        f"+{self.DIRECTED_PROGRESS_REWARD:.3f}")
+                                elif self._nav_shaping_frozen:
+                                    reward_events.append(
+                                        "directed_progress_recovery_frozen:+0")
+                                elif _rl.get("suppress_shaping"):
+                                    reward_events.append(
+                                        "directed_progress_loop_suppressed:+0")
+
+                            if _rl.get("penalty"):
+                                reward += _rl["penalty"]
+                                reward_events.append(
+                                    f"{_rl.get('kind', 'region_loop')}:"
+                                    f"{_rl['penalty']:+.3f}")
+
+                        elif _obj_geo:
+                            # spec point 3: no confirmed directed route yet ->
+                            # honest symmetric geometric approach shaping toward
+                            # the VERIFIED exit. Same RegionLoopGuard + recovery
+                            # gating as the directed path; NO one-off edge /
+                            # highwater rewards (those need a confirmed route).
+                            _rlg = self.region_loop_guard.update(
+                                (int(x), int(y)), effective_action,
+                                obj.get("target_manhattan"),
+                                active=bool(loc.get("trusted")))
+                            self._region_loop_last = _rlg
+                            if _rlg.get("loop"):
+                                self.episode_region_loops += 1
+                            _geo_frozen = (
+                                self._nav_shaping_frozen
+                                or _rlg.get("suppress_shaping")
+                                or (getattr(self, "_short_cycle_last", None)
+                                    or {}).get("suppress_shaping")
+                                or bool(_wipe_cooldown_active)
+                                or bool(getattr(self, "post_wipe_recovery", False)))
+                            _geo = self._geometric_approach_component(
+                                prev, obj, moved_tiles=manhattan,
+                                recovery_frozen=_geo_frozen)
+                            if _geo:
+                                reward += _geo
+                                reward_events.append(f"geo_approach:{_geo:+.3f}")
+                            elif _geo_frozen:
+                                reward_events.append("geo_approach_frozen:+0")
+                            if _rlg.get("penalty"):
+                                reward += _rlg["penalty"]
+                                reward_events.append(
+                                    f"{_rlg.get('kind', 'region_loop')}:"
+                                    f"{_rlg['penalty']:+.3f}")
 
                 else:
                     # Mapwechsel / Warp: Ein konkreter Ein-/Ausgangspunkt wird
@@ -6252,6 +7069,11 @@ class PokemonFireRedEnv(gym.Env):
                     self._map_change_count = int(
                         getattr(self, "_map_change_count", 0)
                     ) + 1
+                    # nav-graph: suppress move/block recording for a few steps
+                    # after a warp (the coord freezes during the fade -> false
+                    # walls; a stale _dir_move_from -> false multi-tile ledges).
+                    self._last_map_change_step = int(self.total_steps)
+                    self._dir_move_from = None
                     _hop_fwd, _hop_was_known, _hop_became_known = (
                         self._v20_record_known_transition(
                             pb, pm, px, py, bank, map_id, x, y
@@ -6651,11 +7473,84 @@ class PokemonFireRedEnv(gym.Env):
                 self.last_stage_timeout = "full_exit_cap"
                 reward_events.append("full_exit_cap:truncate")
 
-        # V10.15: ten long full probes get a real 32k horizon.
-        if self._is_long_full_probe() and self.route_steps >= self.LONG_FULL_PROBE_STEPS and not truncated:
+        # 2026-09-08: every FULL / watcher run truncates at the adaptive
+        # navigation horizon (twoby2.horizon, via _episode_step_limit) - a
+        # TimeLimit, NOT a terminal state (PPO bootstraps V(s); it must not
+        # treat the horizon step as worth 0). This replaces the frozen 32768
+        # "long_full_32k" cut, which stranded the _is_long_full_probe ranks
+        # below the raised horizon once the ramp advanced past 32768.
+        episode_limit = self._episode_step_limit()
+        if (
+            self.training_objective in ("full", "watcher")
+            and self.route_steps >= episode_limit
+            and not truncated
+        ):
             truncated = True
-            self.last_stage_timeout = "long_full_32k"
-            reward_events.append("long_full_32k:truncate")
+            self.last_stage_timeout = "nav_horizon"
+            reward_events.append("nav_horizon:truncate")
+
+        # -------------------------------------------------------------
+        # NAVIGATION PROGRESS DEADLINES (plan G) - a navigation-only clock:
+        # battles and menu/dialog steps do NOT advance it, and it is paused
+        # while recovering a pre-wipe highwater (walking back is not a stall).
+        # Only armed with a valid + reachable objective and a trusted position.
+        # -------------------------------------------------------------
+        _obj = self._nav_obj
+        # the route no-progress clock excludes battles/menus AND is paused
+        # while recovering a pre-wipe highwater (walking back is not a stall)...
+        _nav_step = bool(
+            loc.get("trusted") and not in_battle and gameplay_ready
+            and not self._nav_shaping_frozen
+        )
+        if _nav_step:
+            self._nav_clock += 1
+        # ...but recovery is NOT unbounded (item 9): a separate recovery clock
+        # advances unless the directed recovery distance keeps falling; a clear
+        # recovery loop truncates diagnostically (recovery reward stays 0).
+        if (self._nav_shaping_frozen and not in_battle and gameplay_ready
+                and loc.get("trusted")):
+            self._recovery_clock += 1
+            if (self.training_objective in ("full", "watcher") and not truncated
+                    and self._recovery_clock >= self.RECOVERY_NO_PROGRESS_STEPS):
+                truncated = True
+                self.last_stage_timeout = "recovery_no_progress_timeout"
+                reward_events.append("recovery_no_progress_timeout:truncate")
+        _ws = self._current_world_stage(bank, map_id)
+        if (self.training_objective in ("full", "watcher") and not truncated
+                and _obj is not None and _obj.get("valid")):
+            if (int(bank), int(map_id)) == self.STAGE_PALLET or (
+                    self.left_house_confirmed and _ws <= 1
+                    and int(bank) in (self.OVERWORLD_BANK, 4)):
+                if _nav_step:
+                    self._pallet_outdoor_steps += 1
+                if self._pallet_outdoor_steps >= self.PALLET_EXIT_TIMEOUT_STEPS:
+                    truncated = True
+                    self.last_stage_timeout = "pallet_exit_timeout"
+                    reward += self.PALLET_EXIT_TIMEOUT_PENALTY
+                    reward_events.append(
+                        f"pallet_exit_timeout:{self.PALLET_EXIT_TIMEOUT_PENALTY:+.2f}")
+            elif (int(bank), int(map_id)) == self.STAGE_ROUTE1:
+                if _nav_step and self._nav_steps_since_improve > 0:
+                    self._route1_no_progress_steps += 1
+                else:
+                    self._route1_no_progress_steps = 0
+                if self._route1_no_progress_steps >= self.ROUTE1_NO_PROGRESS_STEPS:
+                    truncated = True
+                    self.last_stage_timeout = "route1_no_progress_timeout"
+                    reward += self.ROUTE1_NO_PROGRESS_PENALTY
+                    reward_events.append(
+                        "route1_no_progress_timeout:"
+                        f"{self.ROUTE1_NO_PROGRESS_PENALTY:+.2f}")
+        if (not truncated and (self._region_loop_last or {}).get("truncate")
+                and self.training_objective in ("full", "watcher")):
+            truncated = True
+            _lk = (self._region_loop_last or {}).get("kind", "region_loop")
+            self.last_stage_timeout = (
+                "route1_ledge_loop"
+                if (_lk == "ledge_loop"
+                    and (int(bank), int(map_id)) == self.STAGE_ROUTE1)
+                else _lk)
+            reward_events.append(f"{self.last_stage_timeout}:truncate")
 
         if self._frontier_backtrack_expired(
             self._current_world_stage(bank, map_id), loc.get("trusted", False), in_battle
@@ -6740,6 +7635,17 @@ class PokemonFireRedEnv(gym.Env):
                 reward_events.append(f"progress_tier{_tier}_cap:truncate")
 
         # Select before all telemetry/accounting so PPO and dashboard agree.
+        if getattr(self, "_twoby2_split_active", False):
+            # A battle may finish between two navigation decisions. Legacy
+            # bookkeeping then notices HP/XP/level changes on the following
+            # overworld step. Remove every tagged combat term before returning
+            # the navigation transition; the wrapper adds only its coarse
+            # strategic win/wipe/recovery consequence.
+            reward -= sum(float(value) for _event, value in combat_rewards)
+            combat_names = {event for event, _value in combat_rewards}
+            reward_events = [event for event in reward_events
+                             if not any(event.startswith(name + ":")
+                                        for name in combat_names)]
         if getattr(self, "training_mode", "") == "FIGHTER":
             _fkeys = self.FIGHTER_COMBAT_UNCUT_KEYS
             _fmul = self.FIGHTER_COMBAT_UNCUT_MULT
@@ -6835,6 +7741,10 @@ class PokemonFireRedEnv(gym.Env):
         info["route_steps"] = self.route_steps
         info["battle_steps"] = self.battle_steps
         info["ppo_episode_steps"] = self.total_steps
+        info["episode_step_limit"] = int(episode_limit)
+        info["episode_steps_remaining"] = max(
+            0, int(episode_limit) - int(self.route_steps)
+        )
         info["story_stage"] = (
             "OUTDOOR"
             if self.left_house_confirmed else
@@ -6894,6 +7804,10 @@ class PokemonFireRedEnv(gym.Env):
                     "route_steps": self.route_steps,
                     "battle_steps": self.battle_steps,
                     "ppo_episode_steps": self.total_steps,
+                    "episode_step_limit": int(episode_limit),
+                    "episode_steps_remaining": max(
+                        0, int(episode_limit) - int(self.route_steps)
+                    ),
                     "reward": round(self.current_reward, 2),
                     "level": self.last_level,
                     "badges": self.last_badges,
@@ -6961,6 +7875,11 @@ class PokemonFireRedEnv(gym.Env):
                     "warp_loops": int(self.episode_warp_loops),
                     "proven_progress_edges": int(self.episode_proven_progress_edges),
                     "proven_exit_reached": int(self.episode_proven_exit_reached),
+                    "navigation": self._nav_telemetry(bank, map_id, x, y),
+                    "last_nav_battle": getattr(self, "_last_nav_battle", None),
+                    "battles_per_1k_nav_steps": round(
+                        1000.0 * int(self.run_stats.get("battles_completed", 0))
+                        / max(1, int(self.total_steps)), 2),
                     "visited_maps": len(self.visited_maps),
                     "stuck_counter": self.stuck_counter,
                     "episode_start": self.episode_start,
@@ -7050,9 +7969,7 @@ class PokemonFireRedEnv(gym.Env):
         else:
             info["progress_stall_reset"] = False
 
-        # V20 section 16: long Full probes must actually get LONG_FULL_PROBE_STEPS
-        # instead of being silently capped at MAX_EPISODE_STEPS.
-        episode_limit = self._episode_step_limit()
+        # episode_limit was computed above (nav-horizon truncation block).
         # A single stuck battle is still capped for everyone; the per-episode
         # battle-step budget does not apply to FIGHTER ranks (fighting IS their
         # episode - the 400-step out-of-battle leash bounds them instead).
@@ -7072,7 +7989,12 @@ class PokemonFireRedEnv(gym.Env):
         terminated = bool(
             objective_done
             or _role_wipe_terminal
-            or self.route_steps >= episode_limit
+            # FULL / watcher hit the navigation horizon as a TimeLimit
+            # *truncation* (handled above), not a terminal - only the other
+            # objectives (legacy progress/badge) end their step budget as a
+            # termination here.
+            or (self.training_objective not in ("full", "watcher")
+                and self.route_steps >= episode_limit)
         )
 
         # V20: feed transition statistics once, when the episode actually ends.

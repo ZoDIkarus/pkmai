@@ -1,9 +1,11 @@
 import os
 import asyncio
+import collections
 import glob
 import json
 import threading
 import tempfile
+from datetime import datetime, timezone
 from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 import uvicorn
@@ -16,11 +18,20 @@ BASE_DIR = PROJECT_ROOT
 ROOMS_DIR = os.path.join(RUNTIME_DIR, "room_captures")
 MAP_FILE = os.path.join(ASSETS_DIR, "maps", "kanto_map.png")
 INSTANCES_DIR = os.path.join(RUNTIME_DIR, "instances_data")
-VERSION_FILE = os.path.join(RUNTIME_DIR, "model_version.json")
+NAV_RUNTIME_DIR = os.path.join(RUNTIME_DIR, "navigation")
+BATTLE_RUNTIME_DIR = os.path.join(RUNTIME_DIR, "battle")
+VERSION_FILE = os.path.join(NAV_RUNTIME_DIR, "model_version.json")
 SKELETON_FILE = os.path.join(RUNTIME_DIR, "skeleton_map.json")
 HISTORY_FILE = os.path.join(RUNTIME_DIR, "training_history.json")
-CHAMPION_FILE = os.path.join(RUNTIME_DIR, "champion_score.json")
-TRAINER_STATUS_FILE = os.path.join(RUNTIME_DIR, "trainer_status.json")
+CHAMPION_FILE = os.path.join(NAV_RUNTIME_DIR, "champion_score.json")
+TRAINER_STATUS_FILE = os.path.join(NAV_RUNTIME_DIR, "trainer_status.json")
+NAV_GLOBAL_FILE = os.path.join(NAV_RUNTIME_DIR, "nav_global.json")
+MOVEMENT_GRAPH_FILE = os.path.join(NAV_RUNTIME_DIR, "movement_graph_v1.json")
+BATTLE_STATUS_FILE = os.path.join(BATTLE_RUNTIME_DIR, "battle_stats.json")
+BATTLE_CHAMPION_FILE = os.path.join(
+    BATTLE_RUNTIME_DIR, "checkpoints", "battle_champion.zip"
+)
+BATTLE_SCENARIOS_FILE = os.path.join(BATTLE_RUNTIME_DIR, "scenarios", "index.json")
 HISTORY_LOCK = threading.Lock()
 EXPLORATION_MEMORY_DIR = os.path.join(RUNTIME_DIR, "exploration_memory")
 WATCHER_MAPPING_FILE = os.path.join(RUNTIME_DIR, "watcher_mapping.json")
@@ -30,7 +41,15 @@ MAPPER_DIR = os.path.join(RUNTIME_DIR, "mapper")
 MAPPER_ATLAS_FILE = os.path.join(MAPPER_DIR, "kanto_map.png")
 MAPPER_STATUS_FILE = os.path.join(RUNTIME_DIR, "mapper_status.json")
 MAPPER_MAPS_DIR = os.path.join(MAPPER_DIR, "stitched_maps")
-TRAINER_STATUS_FILE = os.path.join(RUNTIME_DIR, "trainer_status.json")
+
+
+def _load_json(path, default=None):
+    try:
+        with open(path, "r") as f:
+            value = json.load(f)
+        return value if isinstance(value, dict) else (default or {})
+    except Exception:
+        return default or {}
 
 def _live_learner_steps(fallback=0):
     try:
@@ -57,6 +76,26 @@ def _load_version_meta():
     return default
 
 
+def _file_freshness(path, declared=None):
+    """Return a truthful timestamp and age for one live status file."""
+    stamp = declared
+    if not stamp:
+        try:
+            stamp = datetime.fromtimestamp(
+                os.path.getmtime(path), tz=timezone.utc
+            ).isoformat()
+        except OSError:
+            return {"updated_at": None, "age_seconds": None}
+    try:
+        parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        age = max(0, int((datetime.now(timezone.utc) - parsed).total_seconds()))
+    except (TypeError, ValueError):
+        age = None
+    return {"updated_at": stamp, "age_seconds": age}
+
+
 @app.get("/api/champion")
 def get_champion():
     try:
@@ -73,6 +112,230 @@ def get_trainer_status():
             return json.load(f) or {}
     except Exception:
         return {"learner_steps":0,"champion_steps":0,"champion_version":0,"delta_steps":0}
+
+
+@app.get("/api/brains")
+def get_brains():
+    """Single truthful status source for the live 2x2 architecture."""
+    nav = _load_json(TRAINER_STATUS_FILE)
+    nav_champion = _load_json(CHAMPION_FILE)
+    battle = _load_json(BATTLE_STATUS_FILE)
+    battle_counts = battle.get("counters") or {}
+    # The first proven PPO champion predates battle_stats.json's version field
+    # in some migrated runs.  A present champion artifact is v1 at minimum;
+    # later promotions always publish their explicit version in battle_stats.
+    battle_champion_version = int(battle.get("champion_version", 0) or 0)
+    if battle_champion_version <= 0 and os.path.isfile(BATTLE_CHAMPION_FILE):
+        battle_champion_version = 1
+    scenarios = (_load_json(BATTLE_SCENARIOS_FILE).get("scenarios") or [])
+    areas = sorted({str(s.get("area") or "unknown") for s in scenarios})
+    nav_freshness = _file_freshness(TRAINER_STATUS_FILE, nav.get("updated"))
+    battle_freshness = _file_freshness(BATTLE_STATUS_FILE, battle.get("updated"))
+    fresh_nav_workers = 0
+    now = datetime.now(timezone.utc).timestamp()
+    _nav_tel = []
+    for path in glob.glob(os.path.join(INSTANCES_DIR, "inst_*.json")):
+        try:
+            agent_id = int(os.path.basename(path)[5:-5])
+            if 0 <= agent_id < 40 and now - os.path.getmtime(path) < 15:
+                fresh_nav_workers += 1
+                with open(path) as _f:
+                    _d = json.load(_f)
+                if _d.get("navigation"):
+                    _nav_tel.append((agent_id, _d))
+        except (OSError, ValueError):
+            continue
+
+    def _directed_nav_summary():
+        n = len(_nav_tel) or 1
+        on_r1 = sum(1 for _, d in _nav_tel if (d.get("bank"), d.get("map")) == (3, 19))
+        in_pallet = sum(1 for _, d in _nav_tel if (d.get("bank"), d.get("map")) == (3, 0))
+        loops = sum(int((d.get("navigation") or {}).get("region_loops", 0)) for _, d in _nav_tel)
+        ledges = sum(int((d.get("navigation") or {}).get("ledge_jumps", 0)) for _, d in _nav_tel)
+        frozen = sum(1 for _, d in _nav_tel if (d.get("navigation") or {}).get("shaping_frozen"))
+        tos = collections.Counter((d.get("navigation") or {}).get("timeout_reason")
+                                  for _, d in _nav_tel if (d.get("navigation") or {}).get("timeout_reason"))
+        r1r = next((v.get("navigation", {}).get("route1_reach_rate")
+                    for _, v in _nav_tel if v.get("navigation", {}).get("route1_reach_rate") is not None), None)
+        return {
+            "agents": len(_nav_tel),
+            "on_route1": on_r1, "in_pallet": in_pallet,
+            "pct_on_route1": round(100 * on_r1 / n),
+            "region_loops": loops, "ledge_jumps": ledges,
+            "shaping_frozen_agents": frozen,
+            "timeout_reasons": dict(tos),
+            "route1_reach_rate": r1r,
+            "movement_graph_edges": max((int((d.get("navigation") or {}).get(
+                "movement_graph_edges", 0)) for _, d in _nav_tel), default=0),
+            "per_agent": [
+                {"id": aid,
+                 "target": (d.get("navigation") or {}).get("target"),
+                 "source": (d.get("navigation") or {}).get("target_source"),
+                 "graph_distance": (d.get("navigation") or {}).get("graph_distance"),
+                 "best": (d.get("navigation") or {}).get("best_graph_distance"),
+                 "since_improve": (d.get("navigation") or {}).get("steps_since_improve"),
+                 "next_hop": (d.get("navigation") or {}).get("next_hop_action"),
+                 "blocked": (d.get("navigation") or {}).get("blocked_directions"),
+                 "loop": (d.get("navigation") or {}).get("loop_kind"),
+                 "timeout": (d.get("navigation") or {}).get("timeout_reason"),
+                 "recovery": (d.get("navigation") or {}).get("recovery_mode")}
+                for aid, d in sorted(_nav_tel)],
+        }
+    return {
+        "schema": "twoby2_brains_v1",
+        "navigation": {
+            "workers": 40,
+            "telemetry_workers": fresh_nav_workers,
+            "learner_steps": int(nav.get("learner_steps", 0) or 0),
+            "champion_steps": int(nav.get("champion_steps", 0)
+                                  or nav_champion.get("timesteps", 0) or 0),
+            "since_champion": int(nav.get("delta_steps", 0) or 0),
+            "learner_version": int(nav.get("champion_version", 0) or 0) + 1,
+            "champion_version": int(nav.get("champion_version", 0)
+                                    or nav_champion.get("version", 0) or 0),
+            "phase": str(nav.get("training_phase") or "training"),
+            "completed_runs": int(nav.get("recent_full_done", 0) or 0),
+            "last_eval_result": str(nav.get("last_eval_result") or "none"),
+            "last_eval_at_step": int(nav.get("last_eval_at_step", 0) or 0),
+            "metrics": nav.get("last_eval_metrics") or nav_champion.get("metrics") or {},
+            "directed": _directed_nav_summary(),
+            **nav_freshness,
+        },
+        "battle": {
+            "workers": int(battle.get("n_workers", 9) or 9),
+            "learner_steps": int(battle_counts.get("env_steps", 0) or 0),
+            "ppo_updates": int(battle_counts.get("ppo_updates", 0) or 0),
+            "episodes": int(battle_counts.get("episodes", 0) or 0),
+            "wins": int(battle_counts.get("wins", 0) or 0),
+            "wipes": int(battle_counts.get("wipes", 0) or 0),
+            "flees": int(battle_counts.get("flees", 0) or 0),
+            "timeouts": int(battle_counts.get("timeouts", 0) or 0),
+            "kos": int(battle_counts.get("kos", 0) or 0),
+            "learner_version": int(battle.get("learner_version", 0) or 0),
+            "champion_version": battle_champion_version,
+            "champion_source": ("ppo" if battle_champion_version
+                                else "rule fallback"),
+            "phase": str(battle.get("phase") or "training"),
+            "next_promotion_step": int(battle.get("next_promotion_step", 0) or 0),
+            "scenario_count": len(scenarios),
+            "areas": areas,
+            # spec §1B: the ACTUAL live battle-policy source — a v1 PPO champion
+            # or the rule fallback, plus the schema and (on a fallback) why.
+            "policy": _battle_policy_view(),
+            # rolling window (last 100 / 200 battles) + reward breakdown
+            "rolling": battle.get("rolling") or {},
+            # last champion check: candidate vs champion + why it was rejected
+            "last_promotion": battle.get("last_promotion") or {},
+            "last_eval": battle.get("last_live_eval") or {},
+            # --- Catch-v2 telemetry (spec §16). Never computed from log text —
+            # these are the counters BattleCounters recorded where BattleEnv
+            # produced the reward. ``schema`` shows whether the live champion
+            # is still combat-only (v1) or the catch-capable v2.
+            "catch": _battle_catch_view(battle, battle_counts),
+            **battle_freshness,
+        },
+        # spec ZIEL C: wild-encounter + shiny counters, separate per agent
+        # class, read straight from the persisted event-counter files. Nothing
+        # here is reconstructed from logs.
+        "shiny": _shiny_view(),
+    }
+
+
+def _shiny_view():
+    try:
+        from twoby2.shiny_counters import aggregate_all
+        from twoby2 import shiny_ram
+        agg = aggregate_all()
+        t = agg["totals"]
+        return {
+            "ram_verified": bool(shiny_ram.SHINY_RAM_VERIFIED),
+            "ram_status": ("verified" if shiny_ram.SHINY_RAM_VERIFIED
+                           else "shiny_ram_unverified"),
+            "seen": int(t.get("shiny_encounters_verified", 0)),
+            "caught": int(t.get("shiny_caught", 0)),
+            "lost": int(t.get("shiny_ko", 0)) + int(t.get("shiny_fled", 0))
+            + int(t.get("shiny_lost_wipe", 0)),
+            "unknown": int(t.get("shiny_ram_unknown", 0)),
+            "unresolved": int(t.get("shiny_unresolved", 0)),
+            "wild_encounters": int(t.get("wild_encounters", 0)),
+            "by_agent_class": {cls: v["counters"]
+                               for cls, v in agg["per_agent_class"].items()},
+            "recent_shinies": agg["recent_shinies"][:8],
+        }
+    except Exception:
+        return {"ram_verified": False, "ram_status": "shiny_ram_unverified",
+                "seen": 0, "caught": 0, "lost": 0, "unknown": 0,
+                "wild_encounters": 0, "by_agent_class": {}, "recent_shinies": []}
+
+
+def _battle_policy_view():
+    """The live battle-policy status written by
+    ``twoby2.live_integration.LatestBattleChampionPolicy`` (spec §1B)."""
+    doc = _load_json(os.path.join(BATTLE_RUNTIME_DIR, "battle_policy_status.json"))
+    return {
+        "source": doc.get("battle_policy_source", "unknown"),
+        "schema": doc.get("battle_policy_schema"),
+        "champion_dims": doc.get("battle_policy_champion_dims"),
+        "fallback_reason": doc.get("battle_policy_fallback_reason", ""),
+        "updated": doc.get("updated"),
+    }
+
+
+def _battle_catch_view(battle, battle_counts):
+    """The Catch-v2 dashboard block (spec §16). Reads the persisted counters +
+    rolling catch section; computes nothing from logs."""
+    rolling = (battle.get("rolling") or {}).get("catch") or {}
+    manifest = _load_json(os.path.join(BATTLE_RUNTIME_DIR,
+                                      "battle_model_manifest.json"))
+    lp = battle.get("last_promotion") or {}
+    return {
+        "live_schema": str(manifest.get("live_schema") or "v1"),
+        "v2_training_active": bool(manifest.get("v2", {}).get("training_schema") == "v2"),
+        "objective_distribution": rolling.get("objective_distribution") or {},
+        "combat_episodes": int(battle_counts.get("combat_episodes", 0) or 0),
+        "catch_episodes": int(battle_counts.get("catch_episodes", 0) or 0),
+        "catch_requested_episodes": int(battle_counts.get("catch_requested_episodes", 0) or 0),
+        "catch_orders": int(battle_counts.get("catch_orders", 0) or 0),
+        "catch_attempts": int(battle_counts.get("catch_attempts", 0) or 0),
+        "catch_successes": int(battle_counts.get("catch_successes", 0) or 0),
+        "catch_failures": int(battle_counts.get("catch_failures", 0) or 0),
+        "catch_target_kos": int(battle_counts.get("catch_target_kos", 0) or 0),
+        "premature_catches": int(battle_counts.get("premature_catches", 0) or 0),
+        "unrequested_catches": int(battle_counts.get("unrequested_catches", 0) or 0),
+        "trainer_catch_attempts": int(battle_counts.get("trainer_catch_attempts", 0) or 0),
+        "balls_used": int(battle_counts.get("balls_used", 0) or 0),
+        "balls_per_successful_catch": rolling.get("balls_per_successful_catch", 0.0),
+        "catch_success_rate_when_requested": rolling.get("catch_success_rate_when_requested", 0.0),
+        "reward_sum_mismatch_steps": int(battle_counts.get("reward_sum_mismatch_steps", 0) or 0),
+        "last_catch_gate": lp.get("catch_reasons") or lp.get("catch_eval") or {},
+    }
+
+
+@app.get("/api/movement_graph")
+def get_movement_graph(bank: int = 3, map_id: int = 19):
+    """The directed movement graph for one map: walk / jump_or_ledge / blocked
+    edges as (from, to, action, kind) for the map viz."""
+    path = os.path.join(RUNTIME_DIR, "navigation", "movement_graph_v1.json")
+    try:
+        with open(path) as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return {"bank": bank, "map": map_id, "edges": [], "blocked": []}
+    key = f"{bank},{map_id}"
+    edges, blocked = [], []
+    for row in (raw.get("edges", {}) or {}).get(key, []):
+        frm, action, e = row[0], row[1], row[2]
+        if e.get("kind") in ("blocked_static", "blocked_dynamic"):
+            blocked.append({"xy": frm, "action": action, "kind": e["kind"]})
+        else:
+            edges.append({"from": frm, "to": e["to"], "action": action,
+                          "kind": e.get("kind"), "legacy": e.get("legacy", False),
+                          "confidence": e.get("confidence", 0)})
+    for row in (raw.get("blocks", {}) or {}).get(key, []):
+        blocked.append({"xy": row[0], "action": row[1],
+                        "kind": row[2].get("kind", "blocked_dynamic")})
+    return {"bank": bank, "map": map_id, "generation": raw.get("generation", 0),
+            "edges": edges, "blocked": blocked}
 
 
 @app.get("/map.png")
@@ -166,7 +429,17 @@ def get_badge_png(badge_id: int):
     if not os.path.exists(path):
         return Response(status_code=404)
     return FileResponse(path, media_type="image/png",
-                        headers={"Cache-Control": "public, max-age=86400"})
+                        headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
+
+@app.get("/battler.png")
+def get_battler_png():
+    """Whitelisted Battle-agent marker used throughout the dashboard."""
+    path = os.path.join(ASSETS_DIR, "maps", "Battler.png")
+    if not os.path.exists(path):
+        return Response(status_code=404)
+    return FileResponse(path, media_type="image/png",
+                        headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
 @app.get("/mapper.jpg")
@@ -310,6 +583,28 @@ def _save_training_history(history):
                 os.remove(tmp)
         except Exception:
             pass
+
+
+def _confirmed_movement_graph_summary():
+    """Return persistent exploration rather than per-episode tile counts."""
+    raw = _load_json(MOVEMENT_GRAPH_FILE)
+    confirmed_edges = 0
+    confirmed_maps = 0
+    for rows in (raw.get("edges") or {}).values():
+        map_edges = 0
+        for row in rows if isinstance(rows, list) else ():
+            edge = row[2] if isinstance(row, list) and len(row) >= 3 else {}
+            if not isinstance(edge, dict) or edge.get("legacy", False):
+                continue
+            if int(edge.get("confidence", 0) or 0) <= 0:
+                continue
+            if edge.get("kind") not in ("walk", "jump_or_ledge", "warp"):
+                continue
+            map_edges += 1
+        if map_edges:
+            confirmed_maps += 1
+            confirmed_edges += map_edges
+    return {"confirmed_edges": confirmed_edges, "confirmed_maps": confirmed_maps}
 
 
 def _aggregate_training_stats(instances):
@@ -526,16 +821,28 @@ def _maybe_record_history(version_meta, instances):
         # Spitzenwert wird nie wieder erreicht) -> die Historie fror auf dem
         # Vor-Reset-Stand ein und zeigte nie wieder echte, aktuelle Werte.
         # Ein Rueckwaertssprung heisst "neuer Lauf" -> immer neu aufzeichnen.
-        if history and last_ts >= bucket and timesteps >= last_ts:
+        graph = _confirmed_movement_graph_summary()
+        run_id = int(_load_json(NAV_GLOBAL_FILE).get("training_run_id", 0) or 0)
+        # Upgrade the active bucket once so the truthful graph curve starts
+        # immediately after deployment without inventing old measurements.
+        upgrade_current_bucket = bool(
+            history and last_ts == bucket
+            and "movement_graph_edges" not in history[-1]
+        )
+        if history and last_ts >= bucket and timesteps >= last_ts and not upgrade_current_bucket:
             return
 
         stats = _aggregate_training_stats(instances)
-        history.append({
+        point = {
             "version": version,
             "timesteps": timesteps,
             "max_level": max(stats["max_level"], int(version_meta.get("max_level", 0))),
             "max_badges": max(stats["max_badges"], int(version_meta.get("max_badges", 0))),
             "max_maps": max(stats["max_maps"], int(version_meta.get("max_maps", 0))),
+            "max_stage": max(
+                [int(i.get("world_stage", 0) or 0) for i in instances] or [0]
+            ),
+            "max_explored_tiles": stats["max_explored_tiles"],
             "episodes": stats["episodes"],
             "avg_episode_reward": stats["avg_episode_reward"],
             "best_episode_reward": stats["best_episode_reward"],
@@ -555,8 +862,15 @@ def _maybe_record_history(version_meta, instances):
                 "exit_episodes": stats["run_totals"]["v2_exit_episodes"],
                 "exit_success": stats["run_totals"]["v2_exit_success"],
             },
-            "stats_schema": 3,
-        })
+            "movement_graph_edges": graph["confirmed_edges"],
+            "movement_graph_maps": graph["confirmed_maps"],
+            "training_run_id": run_id,
+            "stats_schema": 4,
+        }
+        if upgrade_current_bucket:
+            history[-1] = point
+        else:
+            history.append(point)
         _save_training_history(history)
 
 
@@ -750,6 +1064,9 @@ def get_state():
         try:
             with open(f, "r") as jf:
                 data = json.load(jf)
+                agent_id = int(data.get("id", -1))
+                if agent_id != 120 and not (0 <= agent_id < 40):
+                    continue
                 instances.append(data)
                 if data.get("level", 0) > max_level:
                     max_level = data.get("level", 0)
@@ -1510,19 +1827,28 @@ def index():
             box-shadow: 0 4px 15px rgba(0,0,0,0.4);
             z-index: 100;
         }
-        .header-left { display: flex; align-items: center; gap: 14px; }
-        .logo-title { font-weight: 800; font-size: 15px; color: #00e676; letter-spacing: 0.5px; }
+        .header-left { display:grid;grid-template-columns:auto auto auto auto;align-items:stretch;gap:10px; }
+        .identity-card,.header-group{background:#0e1017;border:1px solid #292f40;border-radius:10px;padding:7px 9px}
+        .identity-card{display:flex;flex-direction:column;justify-content:center;min-width:150px}
+        .logo-title { font-weight: 900; font-size: 18px; color: #00e676; letter-spacing: 0.5px; }
+        .trainer-line{font-size:13px;color:#8e98aa;margin-top:5px}
+        .header-group-label{display:block;font-size:9px;font-weight:800;color:#8793a8;letter-spacing:.7px;text-transform:uppercase;margin-bottom:5px}
         
-        .badge-bar { display: flex; align-items: center; gap: 5px; background: #0e1017; padding: 4px 8px; border-radius: 20px; border: 1px solid #232738; }
-        .badge-slot{width:28px;height:28px;border-radius:9px;background:linear-gradient(145deg,#202432,#10131c);border:1px solid #353b50;display:flex;align-items:center;justify-content:center;font-size:14px;filter:grayscale(1);opacity:.34;transform:scale(.94);transition:.25s;box-shadow:inset 0 0 10px rgba(0,0,0,.45)}
+        .badge-bar { display:grid;grid-template-columns:repeat(4,28px);align-items:center;gap:4px; }
+        .badge-slot{width:28px;height:28px;border-radius:7px;background:linear-gradient(145deg,#202432,#10131c);border:1px solid #353b50;display:flex;align-items:center;justify-content:center;font-size:14px;filter:grayscale(1);opacity:.34;transform:scale(.94);transition:.25s;box-shadow:inset 0 0 10px rgba(0,0,0,.45)}
         .badge-slot.active{filter:none;opacity:1;transform:scale(1);border-color:#ffd54f;background:linear-gradient(145deg,#3b3420,#17191f);box-shadow:0 0 13px rgba(255,213,79,.5)}
         .badge-icon{width:100%;height:100%;object-fit:contain;padding:3px;box-sizing:border-box}
-        .live-global{position:absolute;top:16px;right:16px;z-index:950;min-width:245px;background:rgba(12,14,20,.91);border:1px solid #2b3143;border-radius:12px;padding:10px;backdrop-filter:blur(10px);box-shadow:0 10px 28px rgba(0,0,0,.48)}
+        .live-global{grid-column:1/-1;position:static;background:#0b0e14;border-top:1px solid #283142;padding:6px 12px}
         .live-global-title{display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:800;color:#00e676;margin-bottom:8px;letter-spacing:.4px}
         .live-dot{width:8px;height:8px;border-radius:50%;background:#00e676;display:inline-block;box-shadow:0 0 8px #00e676;margin-right:5px}
-        .live-global-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
-        .live-stat{background:#11151e;border:1px solid #242a3a;border-radius:8px;padding:7px}
-        .live-stat .lv{font-size:15px;font-weight:800;color:#fff}.live-stat .lk{font-size:8px;color:#747d94;text-transform:uppercase;margin-top:2px;letter-spacing:.5px}
+        .live-global-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+        .live-stat{background:#11151e;border:1px solid #242a3a;border-radius:8px;padding:6px 8px;text-align:center}
+        .live-stat .lv{font-size:12px;font-weight:800;color:#fff}.live-stat .lk{font-size:7px;color:#747d94;text-transform:uppercase;margin-top:2px;letter-spacing:.5px}
+        .battle-fighter-marker{background:transparent;border:0}
+        .battle-fighter-marker .battle-map-icon{position:relative;width:38px;height:38px;border-radius:9px;overflow:hidden;border:1px solid #ff8a65;box-shadow:0 0 9px rgba(255,61,0,.9);background:#090909}
+        .battle-fighter-marker img{display:block;width:100%;height:100%;object-fit:cover;image-rendering:pixelated}
+        .battle-fighter-marker b{position:absolute;right:1px;bottom:1px;min-width:12px;padding:1px 3px;border-radius:5px;background:rgba(0,0,0,.88);color:#fff;font:900 9px/12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-align:center}
+        .battler-icon{width:17px;height:17px;object-fit:cover;border-radius:4px;vertical-align:-4px;margin-right:4px;image-rendering:pixelated}
 
         .journey-wrap{margin-bottom:14px;background:#11151e;border:1px solid #242a3a;border-radius:12px;padding:12px}
         .journey-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
@@ -1532,14 +1858,15 @@ def index():
         .journey-card.done{border-color:#00e676;box-shadow:0 0 14px rgba(0,230,118,.12)}
         .journey-card.locked{opacity:.55;filter:grayscale(.35)}
         .journey-icon{font-size:22px;margin-bottom:6px}.journey-name{font-size:10px;font-weight:800}
+        .journey-icon img{width:28px;height:28px;object-fit:contain;image-rendering:pixelated}
         .journey-sub{font-size:8px;color:#6f788e;margin-top:2px}.journey-value{position:absolute;right:8px;top:8px;font-size:10px;font-weight:800;color:#00e676}
         .journey-bar{height:4px;background:#202635;border-radius:99px;overflow:hidden;margin-top:8px}.journey-fill{height:100%;background:linear-gradient(90deg,#00e676,#4dd0e1);width:0%}
         @media(max-width:1200px){.journey-grid{grid-template-columns:repeat(4,1fr)}}
 
-        .team-bar { display: flex; align-items: center; gap: 6px; background: #0e1017; padding: 4px 8px; border-radius: 8px; border: 1px solid #232738; }
+        .team-bar { display:grid;grid-template-columns:repeat(3,36px);align-items:center;gap:4px; }
         .team-slot {
-            width: 42px;
-            height: 42px;
+            width: 36px;
+            height: 36px;
             background: #181c28;
             border-radius: 6px;
             border: 1px dashed #2f354a;
@@ -1555,8 +1882,8 @@ def index():
             background: radial-gradient(circle, #1f2736 0%, #12151f 100%);
         }
         .team-slot img {
-            width: 32px;
-            height: 32px;
+            width: 29px;
+            height: 29px;
             image-rendering: pixelated;
         }
         .team-slot .lvl-tag {
@@ -1588,7 +1915,7 @@ def index():
 
         .team-slot.filled { cursor:pointer; }
         .team-slot.filled:hover { transform:translateY(-1px); box-shadow:0 0 12px rgba(0,230,118,.25); }
-        .team-label { font-size:9px; color:#7f8799; margin-left:2px; cursor:pointer; }
+        .team-label { font-size:9px; color:#7f8799; cursor:pointer; }
         .poke-modal-backdrop {
             display:none; position:fixed; inset:0; z-index:5000;
             background:rgba(4,6,10,.72); backdrop-filter:blur(5px);
@@ -1620,40 +1947,32 @@ def index():
 
         /* AGENT FILTER CONTROL */
         .filter-control {
-            display: flex;
-            align-items: center;
+            display:flex;
+            flex-direction:column;
+            justify-content:center;
             gap: 6px;
             background: #0e1017;
             padding: 4px 10px;
             border-radius: 8px;
             border: 1px solid #232738;
-            font-size: 11px;
+            font-size:11px;
         }
-        .filter-input {
-            width: 44px;
-            background: #181c28;
-            border: 1px solid #3b4258;
-            color: #00e676;
-            font-weight: bold;
-            font-size: 12px;
-            text-align: center;
-            border-radius: 4px;
-            padding: 2px;
-        }
+        .filter-buttons{display:grid;grid-template-columns:repeat(2,1fr);gap:4px}
         .filter-btn {
             background: #232738;
             border: none;
             color: #aaa;
-            padding: 3px 6px;
+            padding: 6px 8px;
             border-radius: 4px;
-            font-size: 10px;
+            font-size: 11px;
             cursor: pointer;
         }
         .filter-btn:hover { background: #3b4258; color: #fff; }
+        .filter-btn.active{background:#00e676;color:#07120c}
 
         .header-right { display: flex; align-items: center; gap: 10px; }
-        .tabs { display: flex; gap: 6px; }
-        .tab-btn { background: #232738; color: #aaa; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 11px; transition: all 0.2s; }
+        .tabs { display: grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap: 6px; width:100%; }
+        .tab-btn { background: #232738; color: #aaa; border: none; padding: 9px 14px; border-radius: 7px; cursor: pointer; font-weight: 700; font-size: 13px; transition: all 0.2s; }
         .tab-btn:hover { color: #fff; background: #2f344a; }
         .tab-btn.active { background: #00e676; color: #000; font-weight: 700; }
 
@@ -1720,7 +2039,18 @@ def index():
         .status-title h2 { margin:0; color:#fff; font-size:20px; }
         .status-title span { color:#7f879b; font-size:10px; }
         .status-summary, .status-role-grid, .status-agent-grid { display:grid; gap:10px; }
-        .status-summary { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); margin-bottom:14px; }
+        .status-summary { display:block; margin-bottom:14px; }
+        .status-brain-group{background:#0e1118;border:1px solid #293148;border-radius:13px;padding:12px;margin-bottom:12px}
+        .status-brain-group.nav{border-color:rgba(82,222,172,.34)}.status-brain-group.battle{border-color:rgba(255,116,82,.38)}
+        .status-brain-head{display:flex;justify-content:space-between;align-items:center;font-size:14px;font-weight:900;margin-bottom:10px}
+        .status-brain-head span{font-size:11px;color:#8f9db0}.status-brain-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:9px}
+        .rew-break{margin-top:11px;background:#151821;border:1px solid #293148;border-radius:11px;padding:11px}
+        .rew-break-h{font-size:10px;color:#8b93a7;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px}
+        .rew-row{display:grid;grid-template-columns:88px 1fr 54px;align-items:center;gap:8px;margin:3px 0;font-size:11px}
+        .rew-k{color:#aeb8c8}.rew-v{text-align:right;color:#dfe6f0;font-variant-numeric:tabular-nums}
+        .rew-bar{height:9px;background:#0e1118;border-radius:5px;overflow:hidden}.rew-bar i{display:block;height:100%}
+        .bp-reason{margin-top:10px;padding:9px 11px;background:#171a12;border:1px solid #3a4327;border-radius:9px;font-size:11px;color:#cdd7c2;line-height:1.5}
+        .bp-reason b{color:#e7efd9}
         .status-kpi, .status-watcher, .status-role, .status-agent { background:#151821; border:1px solid #293148; border-radius:11px; padding:12px; }
         .status-kpi .big { color:#00e676; font-size:21px; font-weight:900; }
         .status-kpi .small { color:#8b93a7; font-size:10px; margin-top:3px; }
@@ -1745,7 +2075,7 @@ def index():
         .status-role-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:5px; }
         .status-role-stats span { background:#0e1119; padding:6px 4px; border-radius:6px; text-align:center; color:#929caf; font-size:9px; }
         .status-role-stats strong { display:block; color:#fff; font-size:14px; margin-bottom:2px; }
-        .status-agent-grid { grid-template-columns:repeat(auto-fit,minmax(245px,1fr)); }
+        .status-agent-grid { grid-template-columns:repeat(auto-fit,minmax(245px,1fr)); max-height:25vh; overflow-y:auto; align-content:start; padding:3px 5px 3px 0; scrollbar-gutter:stable; }
         .status-agent { cursor:pointer; transition:border-color .12s, background .12s; }
         .status-agent:hover { border-color:#3d4a6b; }
         .status-agent.sel { border-color:#00e676; background:rgba(0,230,118,.10); }
@@ -1927,8 +2257,10 @@ def index():
         .agent-filter-bar.filtered { border-color:#00e676; }
     </style>
 <style id="champion-night-style">
-#brain-summary-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;padding:8px 12px;background:#0c0e14;border-bottom:1px solid #232738;flex:none}
-#champion-night-card{position:static;width:auto;padding:10px 12px;border-radius:14px;background:linear-gradient(145deg,rgba(8,17,28,.96),rgba(15,27,41,.93));border:1px solid rgba(68,214,255,.28);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+#brain-summary-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:8px 12px;background:#0c0e14;border-bottom:1px solid #232738;flex:none}
+#champion-night-card,#battle-brain-card{position:static;width:auto;padding:10px 12px;border-radius:14px;background:linear-gradient(145deg,rgba(8,17,28,.96),rgba(15,27,41,.93));border:1px solid rgba(68,214,255,.28);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+#battle-brain-card{border-color:rgba(255,116,82,.32)}
+#battle-brain-card .cn-grid{grid-template-columns:repeat(3,1fr)}
 #champion-night-card.minimized{width:185px}
 #champion-night-card.minimized .cn-grid,#champion-night-card.minimized .cn-foot{display:none}
 .cn-title{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;font-weight:900;letter-spacing:.65px;color:#55e4a3}
@@ -1937,6 +2269,9 @@ def index():
 .cn-grid div{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.065);border-radius:9px;padding:7px 3px;text-align:center}
 .cn-grid b{display:block;font-size:13px;color:#f4f8ff}.cn-grid small{font-size:7px;color:#8191a7;text-transform:uppercase}
 .cn-foot{margin-top:7px;font-size:7px;color:#74879d}
+.cn-sub{margin-top:6px;font-size:8.5px;color:#cbd9ea;line-height:1.55;letter-spacing:.2px}
+.cn-sub b{color:#ffd7c4;font-weight:800}
+.cn-sub .sep{color:#4a5f76;margin:0 5px}
 </style>
 <style id="pkmai-window-tools-style">
 .pkmai-float-tools{position:absolute;right:8px;top:7px;display:flex;gap:4px;z-index:30}
@@ -1979,20 +2314,20 @@ def index():
 
   /* MAIN: kein 100vh-Kaefig mehr, alles im Fluss */
   #main-container{position:static!important;overflow:visible!important;flex:none!important;height:auto!important}
-  #rooms-view,#graphs-view,#status-view,#watcher-view{position:relative!important;display:none;height:auto!important;min-height:auto!important;overflow:visible!important;padding:10px 10px calc(72px + env(safe-area-inset-bottom))!important}
+  #graphs-view,#status-view,#watcher-view{position:relative!important;display:none;height:auto!important;min-height:auto!important;overflow:visible!important;padding:10px 10px calc(72px + env(safe-area-inset-bottom))!important}
   /* Leaflet braucht feste Hoehe, sonst kollabiert die Karte / kein Zoom */
   #map-view{position:relative!important;height:72vh!important;min-height:360px!important;overflow:hidden!important}
 
   /* ALLE Panels: feste Kacheln - nicht schwebend, nicht verschiebbar,
      nicht minimierbar */
-  #brain-summary-row,#learner-truth-hud,#champion-night-card,.pkmai-movable,.hud-overlay,.detail-panel,
+  #brain-summary-row,#learner-truth-hud,#champion-night-card,#battle-brain-card,.pkmai-movable,.hud-overlay,.detail-panel,
   .agent-filter-bar,.pkmai-mobile-tile,.live-global,.v81skills{
     position:static!important;inset:auto!important;left:auto!important;right:auto!important;top:auto!important;bottom:auto!important;
     transform:none!important;width:auto!important;max-width:none!important;max-height:none!important;
     z-index:auto!important;box-shadow:none!important;backdrop-filter:none!important;
   }
   #brain-summary-row{grid-template-columns:1fr!important;gap:8px!important;margin:0!important;padding:8px!important}
-  #brain-summary-row #learner-truth-hud,#brain-summary-row #champion-night-card{margin:0!important}
+  #brain-summary-row #learner-truth-hud,#brain-summary-row #champion-night-card,#brain-summary-row #battle-brain-card{margin:0!important}
   .pkmai-mobile-tile{display:block!important}
   .agent-filter-bar select{flex:1 1 42%!important;max-width:none!important;font-size:12px!important;padding:8px 6px!important}
   /* Verschiebe- / Minimier- / Ausblende-Knoepfe komplett weg */
@@ -2041,14 +2376,26 @@ def index():
 html,body{height:100%!important;min-height:0!important;overflow:hidden!important}
 body{height:100dvh!important;display:flex!important;flex-direction:column!important;background:#0c0e14}
 header{flex:none;flex-wrap:wrap;gap:8px;position:relative!important}
-.header-left{flex-wrap:wrap;gap:8px}
+.header-left{gap:10px;flex:1 1 auto;grid-template-columns:auto auto auto auto!important}
+.header-right{flex:1 0 100%;width:100%}
+.header-right .tab-btn{width:100%}
+.filter-control{min-width:128px}
+.team-label small{display:block;color:#657187;font-size:8px;margin-top:2px;text-transform:none;letter-spacing:0}
+.battle-champion-mini{margin-top:9px;padding-top:8px;border-top:1px solid #283142}
+.battle-champion-mini .cn-grid{grid-template-columns:repeat(3,1fr)}
+.agent-list-meta{display:block;text-align:right;line-height:1.35;color:#aeb8ca;font-size:10px}
+.cn-title,.lth-head{font-size:12px!important}.cn-grid b,.lth-cell b{font-size:16px!important}
+.cn-grid small,.lth-cell small{font-size:9px!important}.cn-foot{font-size:9px!important}
+.live-stat .lv{font-size:14px!important}.live-stat .lk{font-size:9px!important}
+.detail-stat .v{font-size:16px!important}.detail-stat .k{font-size:9px!important}
 #brain-summary-row{flex:none;width:100%;box-sizing:border-box;grid-template-columns:1fr 1fr 1fr!important;gap:0!important;padding:0!important;margin:0!important}
-#learner-truth-hud,#champion-night-card,.live-global,.hud-overlay,.detail-panel,.agent-filter-bar{
+#learner-truth-hud,#champion-night-card,#battle-brain-card,.live-global,.hud-overlay,.detail-panel,.agent-filter-bar{
 position:static!important;inset:auto!important;transform:none!important;width:auto!important;max-width:none!important;max-height:none!important;
 background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important;backdrop-filter:none!important;
 padding:12px!important;margin:0!important;box-sizing:border-box}
 #brain-summary-row>div{min-width:0;border-right:1px solid #283142!important}
-.live-global-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+.live-global{grid-column:1/-1!important;border-right:0!important;border-top:1px solid #283142!important;padding:5px 10px!important}
+.live-global-grid{grid-template-columns:repeat(6,minmax(0,1fr));gap:4px}
 .cn-grid div,.lth-cell,.live-stat,.detail-stat{background:transparent!important;border:0!important;border-radius:0!important}
 #main-container{position:relative!important;flex:1 1 0!important;min-height:0!important;overflow:hidden!important;height:auto!important;order:3}
 #map-workspace{display:grid;grid-template-columns:minmax(230px,26%) minmax(0,1fr) minmax(210px,22%);height:100%;width:100%;min-height:0}
@@ -2056,14 +2403,14 @@ padding:12px!important;margin:0!important;box-sizing:border-box}
 #map-column{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
 #map-column #map-view{position:relative!important;inset:auto!important;flex:1 1 0;height:auto!important;min-height:0!important;width:100%;overflow:hidden!important}
 #map-column .agent-filter-bar{flex:none;justify-content:flex-start;gap:5px;border-bottom:1px solid #283142!important}
-#map-column .agent-filter-bar select{min-width:0;max-width:130px;font-size:10px}
+#map-column .agent-filter-bar select{min-width:0;max-width:170px;font-size:12px}
 #map-workspace #hud{min-width:0;min-height:0;overflow-y:auto!important;border-left:1px solid #283142!important}
 #alex-watcher-column .wt-stream-wrap{width:100%;max-width:none;margin:0;border:0;border-radius:0}
 #alex-watcher-stream{position:static;width:100%;height:auto;display:block;image-rendering:pixelated}
 #alex-watcher-column .wt-stream-wrap{aspect-ratio:3/2}
 #alex-watcher-column .v8-agent-party{display:none}
-#language-toggle{position:fixed;right:10px;top:8px;z-index:5001;background:#303236;color:#eee;border:1px solid #555;border-radius:5px;padding:6px;cursor:pointer}
-header{padding-right:85px!important}
+#language-toggle{position:absolute;right:7px;top:6px;z-index:2;background:#303236;color:#eee;border:1px solid #555;border-radius:5px;padding:3px 7px;font-size:10px;font-weight:800;cursor:pointer}
+.badge-group{position:relative;padding-right:42px!important}
 #watcher-view .wt-stream-wrap{aspect-ratio:1200/570;max-width:1000px}
 #watcher-stream{width:100%;position:static}
 .leaflet-container{background:#202124!important}
@@ -2073,7 +2420,7 @@ header{padding-right:85px!important}
 #alex-watcher-column #detail-panel{border-top:1px solid #283142!important}
 #rooms-view,#graphs-view,#watcher-view,#mapper-view,#status-view{position:absolute!important;inset:0;height:100%!important;overflow-y:auto!important;box-sizing:border-box}
 .pkmai-float-tools,#pkmai-hidden-tray{display:none!important}
-.hud-overlay .agent-row{padding:9px 4px}
+.hud-overlay{font-size:12px!important}.hud-overlay .agent-row{padding:10px 4px}
 /* V17.3: eigene Agenten-Kachel-Sektion fuer die mobile Kartenansicht -
    auf Desktop unsichtbar, dort erledigt die rechte Sidebar (#hud) das. */
 #mobile-agent-section{display:none}
@@ -2084,9 +2431,14 @@ header{padding-right:85px!important}
    Watcher + Agenten-Kacheln unterhalb der Karte komplett unerreichbar. */
 html,body{height:auto!important;overflow:auto!important;overflow-y:auto!important}
 #main-container{overflow:visible!important;flex:none!important}
-header{padding:6px!important;gap:4px!important}
-#brain-summary-row{grid-template-columns:repeat(3,minmax(0,1fr))!important}
-#brain-summary-row>div{padding:6px!important}
+header{padding:6px!important;gap:6px!important}
+.header-left{display:grid!important;grid-template-columns:1fr 1fr!important;width:100%!important;gap:6px!important}
+.identity-card{grid-column:1/-1;min-width:0!important}.filter-control{grid-column:1/-1}
+.team-bar{grid-template-columns:repeat(3,34px)!important}.team-slot{width:34px!important;height:34px!important}
+.badge-bar{grid-template-columns:repeat(4,25px)!important}.badge-slot{width:25px!important;height:25px!important}
+#brain-summary-row{grid-template-columns:1fr!important}
+#brain-summary-row>div{padding:9px!important;border-right:0!important;border-bottom:1px solid #283142!important}
+.live-global-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
 .cn-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 .lth-body{grid-template-columns:1fr}.cn-foot{display:none}
 /* Handy: Karte oben (volle Breite), dann Watcher, dann Agenten als
@@ -2104,88 +2456,105 @@ header{padding:6px!important;gap:4px!important}
 .detail-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
 .agent-row{flex-wrap:wrap;overflow-wrap:anywhere}
 }
+@media(min-width:821px) and (max-width:1400px){
+  .header-left{grid-template-columns:auto auto auto!important}.filter-control{grid-column:1/-1;flex-direction:row!important;justify-content:flex-start!important}
+  .header-right{align-self:flex-start}.tab-btn{font-size:12px!important;padding:8px 10px!important}
+}
 </style>
 <script src="/dashboard-language.js"></script>
 </head>
 <body>
     <header>
-        <button id="language-toggle" aria-label="Switch language / Sprache wechseln">EN / DE</button>
         <div class="header-left">
-            <div class="logo-title">⚡ PKMAI <span id="model-ver" style="color:#2979ff;">v000001</span></div>
-            
-            <div style="font-size: 12px; color:#888;">Trainer: <b id="hud-trainer" style="color:#00e676;">Alex</b></div>
-
-            <span class="team-label" onclick="openFirstPokemon()">POKÉMON TEAM</span>
-            <div class="team-bar">
+            <div class="identity-card"><div class="logo-title">⚡ PKMAI <span id="model-ver" style="color:#5795ff;">v000001</span></div>
+              <div class="trainer-line">Trainer: <b id="hud-trainer" style="color:#00e676;">Alex</b></div>
+            </div>
+            <div class="header-group team-group"><span class="header-group-label team-label" onclick="openFirstPokemon()">Pokémon-Team<small>anklicken für Details</small></span><div class="team-bar">
                 <div class="team-slot" id="slot-0"><span style="font-size: 9px; color: #444;">1</span></div>
                 <div class="team-slot" id="slot-1"><span style="font-size: 9px; color: #444;">2</span></div>
                 <div class="team-slot" id="slot-2"><span style="font-size: 9px; color: #444;">3</span></div>
                 <div class="team-slot" id="slot-3"><span style="font-size: 9px; color: #444;">4</span></div>
                 <div class="team-slot" id="slot-4"><span style="font-size: 9px; color: #444;">5</span></div>
                 <div class="team-slot" id="slot-5"><span style="font-size: 9px; color: #444;">6</span></div>
-            </div>
+            </div></div>
 
-            <div class="badge-bar" title="Kanto Orden">
-                <div class="badge-slot" id="badge-1" title="Felsorden"><img class="badge-icon" src="/badges/1.png" alt="Felsorden"></div>
-                <div class="badge-slot" id="badge-2" title="Quellorden"><img class="badge-icon" src="/badges/2.png" alt="Quellorden"></div>
-                <div class="badge-slot" id="badge-3" title="Donnerorden"><img class="badge-icon" src="/badges/3.png" alt="Donnerorden"></div>
-                <div class="badge-slot" id="badge-4" title="Farborden"><img class="badge-icon" src="/badges/4.png" alt="Farborden"></div>
-                <div class="badge-slot" id="badge-5" title="Seelenorden"><img class="badge-icon" src="/badges/5.png" alt="Seelenorden"></div>
-                <div class="badge-slot" id="badge-6" title="Sumpforden"><img class="badge-icon" src="/badges/6.png" alt="Sumpforden"></div>
-                <div class="badge-slot" id="badge-7" title="Vulkanorden"><img class="badge-icon" src="/badges/7.png" alt="Vulkanorden"></div>
-                <div class="badge-slot" id="badge-8" title="Erdorden"><img class="badge-icon" src="/badges/8.png" alt="Erdorden"></div>
-            </div>
+            <div class="header-group badge-group"><button id="language-toggle" aria-label="Switch language / Sprache wechseln">DE</button><span class="header-group-label">Kanto-Orden · 1 bis 8</span><div class="badge-bar" title="Kanto Orden">
+                <div class="badge-slot" id="badge-1" title="1 · Felsorden"><img class="badge-icon" src="/badges/1.png?v=kanto2" alt="Felsorden"></div>
+                <div class="badge-slot" id="badge-2" title="2 · Quellorden"><img class="badge-icon" src="/badges/2.png?v=kanto2" alt="Quellorden"></div>
+                <div class="badge-slot" id="badge-3" title="3 · Donnerorden"><img class="badge-icon" src="/badges/3.png?v=kanto2" alt="Donnerorden"></div>
+                <div class="badge-slot" id="badge-4" title="4 · Farborden"><img class="badge-icon" src="/badges/4.png?v=kanto2" alt="Farborden"></div>
+                <div class="badge-slot" id="badge-5" title="5 · Seelenorden"><img class="badge-icon" src="/badges/5.png?v=kanto2" alt="Seelenorden"></div>
+                <div class="badge-slot" id="badge-6" title="6 · Sumpforden"><img class="badge-icon" src="/badges/6.png?v=kanto2" alt="Sumpforden"></div>
+                <div class="badge-slot" id="badge-7" title="7 · Vulkanorden"><img class="badge-icon" src="/badges/7.png?v=kanto2" alt="Vulkanorden"></div>
+                <div class="badge-slot" id="badge-8" title="8 · Erdorden"><img class="badge-icon" src="/badges/8.png?v=kanto2" alt="Erdorden"></div>
+            </div></div>
 
-            <!-- AGENTEN FILTER INPUT -->
             <div class="filter-control">
-                <span>Zeige Agenten:</span>
-                <input type="number" id="agent-limit" class="filter-input" value="9999" min="0" max="9999" onchange="updateFilter(this.value)">
-                <button class="filter-btn" onclick="setFilter(5)">5</button>
-                <button class="filter-btn" onclick="setFilter(10)">10</button>
-                <button class="filter-btn" onclick="setFilter(20)">20</button>
-                <button class="filter-btn" onclick="setFilter(9999)">Alle</button>
+                <span class="header-group-label">Agents anzeigen</span>
+                <div class="filter-buttons"><button class="filter-btn" onclick="setFilter(5)">5</button>
+                  <button class="filter-btn" onclick="setFilter(10)">10</button>
+                  <button class="filter-btn" onclick="setFilter(20)">20</button>
+                  <button class="filter-btn" onclick="setFilter(9999)">Alle</button></div>
             </div>
         </div>
 
         <div class="header-right">
             <div class="tabs">
-                <button class="tab-btn active" onclick="showTab('map', event)">🗺️ Overworld Map</button>
-                <button class="tab-btn" onclick="showTab('rooms', event)">🏠 Indoor Mapping</button>
-                <button class="tab-btn" onclick="showTab('graphs', event)">📈 Graphs</button>
+                <button class="tab-btn active" onclick="showTab('map', event)">🗺️ Overview</button>
+                <button class="tab-btn" onclick="showTab('graphs', event)">📈 Learning</button>
                 <button class="tab-btn" onclick="showTab('status', event)">📊 Status</button>
                 <button class="tab-btn" onclick="showTab('watcher', event)">👁️ Watcher</button>
             </div>
         </div>
     </header>
 <div id="brain-summary-row">
-<div id="learner-truth-hud"><div class="lth-head"><span>🧠 TRAINER · LIVE</span></div><div class="lth-body"><div class="lth-cell"><b id="lth-learner">0</b><small>Learner Steps</small></div><div class="lth-cell"><b id="lth-champion">0</b><small>Champion Steps</small></div><div class="lth-cell"><b id="lth-delta">0</b><small>Seit Champion</small></div></div></div>
+<div id="learner-truth-hud"><div class="lth-head"><span>🧠 NAVIGATION BRAIN · LIVE</span><span id="nav-brain-state">TRAINING</span></div><div class="lth-body"><div class="lth-cell"><b id="lth-learner">0</b><small>Learner Steps</small></div><div class="lth-cell"><b id="lth-champion">0</b><small>Champion Steps</small></div><div class="lth-cell"><b id="lth-delta">0</b><small>Seit Champion</small></div></div></div>
 <div id="champion-night-card">
-  <div class="cn-title"><span>🏆 FRONTIER CHAMPION</span><span class="cn-title-right"><span id="cn-ver">v0</span></span></div>
+  <div class="cn-title"><span>🏆 NAVIGATION CHAMPION</span><span class="cn-title-right"><span id="cn-ver">v0</span></span></div>
   <div class="cn-grid">
     <div><b id="cn-steps">0</b><small>Steps</small></div>
-    <div><b id="cn-full">0%</b><small>Full Exit</small></div>
-    <div><b id="cn-starter">0%</b><small>Full Starter</small></div>
-    <div><b id="cn-badge">0</b><small>Badge</small></div>
+    <div><b id="cn-stage">0</b><small>Stage</small></div>
+    <div><b id="cn-maps">0</b><small>Maps</small></div>
+    <div><b id="cn-runs">0</b><small>Full Runs</small></div>
   </div>
-  <div class="cn-foot">32 abgeschlossene Full-Runs · nur bessere Candidates werden Champion</div>
+  <div class="cn-foot">Promotion nur durch reproduzierbaren geografischen Fortschritt</div>
+  <div class="battle-champion-mini">
+    <div class="cn-title"><span><img class="battler-icon" src="/battler.png" alt="">BATTLE CHAMPION</span><span id="cn-battle-ver">RULE</span></div>
+    <div class="cn-grid">
+      <div><b id="cn-battle-win">–</b><small>Siegrate</small></div>
+      <div><b id="cn-battle-turns">–</b><small>Ø Sieger-Züge</small></div>
+      <div><b id="cn-battle-hp">–</b><small>Rest-HP</small></div>
+    </div>
+  </div>
+</div>
+<div id="battle-brain-card">
+  <div class="cn-title"><span><img class="battler-icon" src="/battler.png" alt="">BATTLE BRAIN · LIVE</span><span class="cn-title-right"><span id="bb-state">TRAINING</span></span></div>
+  <div class="cn-sub">Training <b id="bb-learner-ver">v0</b> · <b id="bb-steps">0</b> Steps<span class="sep">|</span>Live <b id="bb-champion">RULE</b><span class="sep">|</span>Nächste Prüfung <b id="bb-next-check">–</b></div>
+  <div class="cn-sub">Ø Rwd/100 <b id="bb-avgrew">0.0</b><span class="sep">|</span>letzte 200: <b id="bb-roll">– / – / –</b> (Sieg/Wipe/Flucht)<span class="sep">|</span>Prüfung <b id="bb-lastcheck">–</b></div>
+  <div class="cn-grid">
+    <div><b id="bb-updates">0</b><small>PPO Updates</small></div>
+    <div><b id="bb-episodes">0</b><small>Kämpfe</small></div>
+    <div><b id="bb-kos">0</b><small>Gegner-K.O.</small></div>
+    <div><b id="bb-wins">0</b><small>Siege</small></div>
+    <div><b id="bb-wipes">0</b><small>Wipes</small></div>
+    <div><b id="bb-flees">0</b><small>Fluchten</small></div>
+  </div>
+  <div class="cn-foot"><span id="bb-workers">9 Battle</span> · <span id="bb-scenarios">0 Szenarien</span> · <span id="bb-reason">–</span></div>
+</div>
+<div class="live-global" id="system-pulse">
+  <div class="live-global-grid">
+    <div class="live-stat"><div class="lv" id="pulse-nav-eval">–</div><div class="lk">🧠 Nav-Prüfung</div></div>
+    <div class="live-stat"><div class="lv" id="pulse-battle-outcomes">0</div><div class="lk">⚔ Fluchten / Timeouts</div></div>
+    <div class="live-stat"><div class="lv" id="pulse-nav-workers">0 / 40</div><div class="lk">🧭 FULL aktiv</div></div>
+    <div class="live-stat"><div class="lv" id="pulse-battle-workers">0 / 9</div><div class="lk"><img class="battler-icon" src="/battler.png" alt="">Battler aktiv</div></div>
+    <div class="live-stat"><div class="lv" id="pulse-scenarios">0</div><div class="lk">🧪 Kampfszenarien</div></div>
+    <div class="live-stat"><div class="lv" id="pulse-runs">0</div><div class="lk">✅ FULL Runs</div></div>
+  </div>
 </div>
 </div>
 
     <div id="main-container">
-        <div id="map-view"><div class="v81skills" hidden><div id="v81skills"></div><span id="v81-agent-count"></span></div>
-            <div class="live-global">
-                <div class="live-global-title"><span><span class="live-dot"></span>GLOBAL AI</span><span id="live-model">v0</span></div>
-                <div class="live-global-grid">
-                    <div class="live-stat"><div class="lv" id="live-maps">0</div><div class="lk">🌍 Maps</div></div>
-                    <div class="live-stat"><div class="lv" id="live-warps">0</div><div class="lk">🚪 Warps</div></div>
-                    <div class="live-stat"><div class="lv" id="live-edges">0</div><div class="lk">🧭 Edges</div></div>
-                    <div class="live-stat"><div class="lv" id="live-battles">0</div><div class="lk">⚔ Battles</div></div>
-                    <div class="live-stat"><div class="lv" id="live-finished">0</div><div class="lk">✅ Finished</div></div>
-                    <div class="live-stat"><div class="lv" id="live-steps">0</div><div class="lk">🧠 PPO Steps</div></div>
-                </div>
-            </div>
-        </div>
-        <div id="rooms-view"><div class="room-grid" id="room-grid"></div></div>
+        <div id="map-view"><div class="v81skills" hidden><div id="v81skills"></div><span id="v81-agent-count"></span></div></div>
         <div id="watcher-view"><section class="watcher-page">
             <div class="watcher-page-head"><div><b>● LIVE WATCHER</b><span>End-to-End-Screenshot + Live-Stats jedes Agenten</span></div><a href="/watcher.jpg" target="_blank" rel="noopener">JPEG ↗</a></div>
             <div class="wt-stream-wrap"><img id="watcher-stream" src="/watcher.jpg" alt="Live-Bild des Watchers"></div>
@@ -2196,15 +2565,10 @@ header{padding:6px!important;gap:4px!important}
         <!-- Mapper-Tab entfernt: der Mapper laeuft standardmaessig nicht
              (start_all.sh --no-mapper), eine dauerleere Ansicht verwirrt nur. -->
         <div id="status-view">
-            <div class="status-title"><h2>📊 Flotten-Status</h2><span>Watcher · Kategorien · einzelne Runner</span></div>
+            <div class="status-title"><h2>📊 2×2 Status</h2><span>Navigation Brain · Battle Brain · 40 FULL Agents</span></div>
             <div class="status-summary" id="status-summary"></div>
-            <h3 class="status-section-title">🧠 Brain Progress <span style="font-weight:400;color:#7f879b;font-size:11px">– wird das Netz wirklich besser?</span></h3>
-            <div class="status-summary" id="brain-progress"></div>
-            <div class="bp-versions" id="brain-progress-versions"></div>
             <div class="status-watcher" id="status-watcher"></div>
-            <h3 class="status-section-title">🧩 Kategorien – aktuelle Episoden</h3>
-            <div class="status-role-grid" id="status-role-grid"></div>
-            <h3 class="status-section-title">🤖 Einzelne Agenten <span style="font-weight:400;color:#7f879b;font-size:11px">– anklicken für Live-Stats + Reward-Events</span></h3>
+            <h3 class="status-section-title">🧭 FULL Agents <span style="font-weight:400;color:#7f879b;font-size:11px">– alle 40 trainieren Navigation vom Master-Start</span></h3>
             <div class="wt-detail" id="status-agent-detail" hidden style="margin-bottom:12px"></div>
             <div class="status-agent-grid" id="status-agent-grid"></div>
         </div>
@@ -2222,54 +2586,45 @@ header{padding:6px!important;gap:4px!important}
                 <div class="fleet-depth-track" id="fleet-depth-track"></div>
             </div>
             <div class="fleet-grid">
-                <div class="fleet-cell"><div class="fc-v" id="fleet-outdoor">0</div><div class="fc-k">🌳 draußen</div></div>
-                <div class="fleet-cell"><div class="fc-v" id="fleet-indoor">0</div><div class="fc-k">🏠 drinnen</div></div>
-                <div class="fleet-cell"><div class="fc-v" id="fleet-battle">0</div><div class="fc-k">⚔️ im Kampf</div></div>
+                <div class="fleet-cell"><div class="fc-v" id="fleet-full">0</div><div class="fc-k">🧭 FULL Telemetrie</div></div>
+                <div class="fleet-cell"><div class="fc-v" id="fleet-outdoor">0</div><div class="fc-k">🌳 gerade draußen</div></div>
                 <div class="fleet-cell"><div class="fc-v" id="fleet-brk">0</div><div class="fc-k">🚩 Tiefen-Durchbrüche</div></div>
-                <div class="fleet-cell"><div class="fc-v" id="fleet-ko">0</div><div class="fc-k">💥 Gegner-K.O.</div></div>
-                <div class="fleet-cell"><div class="fc-v" id="fleet-dmg">0</div><div class="fc-k">🩸 Schaden-HP</div></div>
-                <div class="fleet-cell"><div class="fc-v" id="fleet-bstarted">0</div><div class="fc-k">🥊 Kämpfe ges.</div></div>
+                <div class="fleet-cell"><div class="fc-v" id="fleet-tiles">0</div><div class="fc-k">🟩 erkundete Tiles</div></div>
+                <div class="fleet-cell"><div class="fc-v" id="fleet-fighters">0</div><div class="fc-k"><img class="battler-icon" src="/battler.png" alt="">Battle</div></div>
+                <div class="fleet-cell"><div class="fc-v" id="fleet-scenarios">0</div><div class="fc-k">🧪 Szenarien</div></div>
             </div>
             <div class="fleet-roles" id="fleet-roles"></div>
             <div class="fleet-events" id="fleet-events"></div>
         </div>
             <div class="journey-wrap">
-                <div class="journey-title"><h3>🗺️ Fortschritt</h3><span>Maps, Level, Orden</span></div>
+                <div class="journey-title"><h3>🗺️ Fortschritt</h3><span>nur Geografie und Story</span></div>
                 <div class="journey-grid">
-                    <div class="journey-card" id="journey-maps"><div class="journey-value" id="jv-maps">0</div><div class="journey-icon">🗺️</div><div class="journey-name">Maps</div><div class="journey-sub">Global entdeckt</div></div>
-                    <div class="journey-card" id="journey-level"><div class="journey-value" id="jv-level">0</div><div class="journey-icon">⬆️</div><div class="journey-name">Level</div><div class="journey-sub">Bestes Party-Level</div></div>
-                    <div class="journey-card" id="journey-badges"><div class="journey-value" id="jv-badges">0/8</div><div class="journey-icon">🪨</div><div class="journey-name">Orden</div><div class="journey-sub">Gesammelte Orden</div><div class="journey-bar"><div class="journey-fill" id="jf-badges"></div></div></div>
+                    <div class="journey-card" id="journey-stage"><div class="journey-value" id="jv-stage">0</div><div class="journey-icon">🚩</div><div class="journey-name">Stage</div><div class="journey-sub">Tiefster bestätigter Fortschritt</div></div>
+                    <div class="journey-card" id="journey-maps"><div class="journey-value" id="jv-maps">0</div><div class="journey-icon">🗺️</div><div class="journey-name">Progress-Maps</div><div class="journey-sub">Champion-Evaluation, ohne Häuserzählung</div></div>
+                    <div class="journey-card" id="journey-badges"><div class="journey-value" id="jv-badges">0/8</div><div class="journey-icon"><img src="/badges/1.png?v=kanto2" alt="Felsorden"></div><div class="journey-name">Nächster Orden: Felsorden</div><div class="journey-sub">Kanto-Orden in richtiger Reihenfolge</div><div class="journey-bar"><div class="journey-fill" id="jf-badges"></div></div></div>
                 </div>
             </div>
             <div class="graphs-kpis">
-                <div class="graphs-kpi"><div class="v" id="g-steps">0</div><div class="k">PPO Steps</div></div>
-                <div class="graphs-kpi"><div class="v" id="g-version">v0</div><div class="k">Modell</div></div>
-                <div class="graphs-kpi"><div class="v" id="g-episodes">0 / 0</div><div class="k">Beginning / Alle Episoden</div></div>
-                <div class="graphs-kpi"><div class="v" id="g-avgreward">0</div><div class="k">Ø Reward</div></div>
-                <div class="graphs-kpi"><div class="v" id="g-world-depth">0</div><div class="k">Welt-Tiefe (Außen-Maps)</div></div>
-                <div class="graphs-kpi"><div class="v" id="g-outdoor-cp">0</div><div class="k">Tiefster Checkpoint</div></div>
-                <div class="graphs-kpi"><div class="v" id="g-champ-steps">0</div><div class="k">Champion Steps</div></div>
-                <div class="graphs-kpi"><div class="v" id="g-champ-delta">0</div><div class="k">Learner − Champion</div></div>
-                <div class="graphs-kpi"><div class="v" id="g-champ-starter">0%</div><div class="k">Full Starter</div></div>
+                <div class="graphs-kpi"><div class="v" id="g-steps">0</div><div class="k">Navigation Steps</div></div>
+                <div class="graphs-kpi"><div class="v" id="g-version">v0</div><div class="k">Navigation Champion</div></div>
+                <div class="graphs-kpi"><div class="v" id="g-champ-delta">0</div><div class="k">Seit Champion</div></div>
+                <div class="graphs-kpi"><div class="v" id="g-episodes">0</div><div class="k">FULL Runs</div></div>
+                <div class="graphs-kpi"><div class="v" id="g-battle-steps">0</div><div class="k">Battle Steps</div></div>
+                <div class="graphs-kpi"><div class="v" id="g-battle-updates">0</div><div class="k">Battle PPO Updates</div></div>
+                <div class="graphs-kpi"><div class="v" id="g-battle-episodes">0</div><div class="k">Battle Episoden</div></div>
+                <div class="graphs-kpi"><div class="v" id="g-battle-kos">0</div><div class="k">Battle K.O.</div></div>
+                <div class="graphs-kpi"><div class="v" id="g-world-depth">0</div><div class="k">Geografische Stage</div></div>
             </div>
             <div class="graphs-grid">
-                <div class="graph-card"><div class="graph-title">Lernkurve</div><div class="graph-sub">Ø Episode-Reward über echte PPO-Trainingsschritte.</div><div class="graph-canvas-wrap"><canvas id="graph-reward"></canvas></div></div>
-                <div class="graph-card"><div class="graph-title">Full-Brain Retention</div><div class="graph-sub">Nur vollständige Runs vom echten Spielanfang: Intro, Treppe, Hausausgang, Schiggi und Orden.</div><div class="graph-canvas-wrap"><canvas id="graph-success"></canvas></div></div>
-                <div class="graph-card"><div class="graph-title">Spiel-Fortschritt</div><div class="graph-sub">Bestes Level, Orden und Maps je Modellstand.</div><div class="graph-canvas-wrap"><canvas id="graph-progress"></canvas></div></div>
-                <div class="graph-card"><div class="graph-title">Festfahren / Anti-Loop</div><div class="graph-sub">Loops pro 100 echte Beginning-Runs; Curriculum wird separat gezählt.</div><div class="graph-canvas-wrap"><canvas id="graph-loops"></canvas></div></div>
+                <div class="graph-card"><div class="graph-title">Navigation Learning</div><div class="graph-sub">Episoden-Reward des aktuellen Trainer-Laufs; Neustarts werden nicht verbunden.</div><div class="graph-canvas-wrap"><canvas id="graph-reward"></canvas></div></div>
+                <div class="graph-card"><div class="graph-title">Exploration Growth</div><div class="graph-sub">Emulator-bestätigte, persistente Kanten und Maps im gerichteten Bewegungsgraphen.</div><div class="graph-canvas-wrap"><canvas id="graph-success"></canvas></div></div>
+                <div class="graph-card"><div class="graph-title">Geografischer Fortschritt</div><div class="graph-sub">Maps, Story-Stages und Orden; Level zählt nicht als Navigation.</div><div class="graph-canvas-wrap"><canvas id="graph-progress"></canvas></div></div>
+                <div class="graph-card"><div class="graph-title">Battle Learning</div><div class="graph-sub">Battle-Schritte, Episoden und K.O. seit Öffnen dieser Ansicht.</div><div class="graph-canvas-wrap"><canvas id="graph-battle"></canvas></div></div>
             </div>
         </div>
         <div class="agent-filter-bar" id="agent-filter-bar">
-            <select id="af-role" onchange="setAgentFilter('role',this.value)">
-                <option value="">Full Journey</option>
-            </select>
             <select id="af-map" onchange="setAgentFilter('map',this.value)">
-                <option value="">Alle Maps</option>
-            </select>
-            <select id="af-starter" onchange="setAgentFilter('starter',this.value)">
-                <option value="">Starter egal</option>
-                <option value="1">hat Starter</option>
-                <option value="0">kein Starter</option>
+                <option value="">Alle Orte</option>
             </select>
             <select id="af-stage" onchange="setAgentFilter('stage',this.value)">
                 <option value="">Alle Stages</option>
@@ -2277,8 +2632,7 @@ header{padding:6px!important;gap:4px!important}
             <select id="af-sort" onchange="setAgentFilter('sort',this.value)">
                 <option value="">Sortierung: Standard</option>
                 <option value="progress">Weitester Fortschritt</option>
-                <option value="maps">Meiste Maps</option>
-                <option value="level">Höchstes Level</option>
+                <option value="steps">Meiste Run-Steps</option>
                 <option value="reward">Höchster Reward</option>
             </select>
             <button id="path-toggle" class="af-reset path-toggle" onclick="toggleAgentPaths()" title="Zusätzliche echte Nachbarschritte der Savestate-Runner anzeigen">👣 Weitere Wege: aus</button>
@@ -2295,13 +2649,13 @@ header{padding:6px!important;gap:4px!important}
             <div class="detail-stats">
                 <div class="detail-stat"><div class="v" id="detail-steps">0</div><div class="k">Steps</div></div>
                 <div class="detail-stat"><div class="v" id="detail-reward">0</div><div class="k">Episode Reward</div></div>
-                <div class="detail-stat"><div class="v" id="detail-level">0</div><div class="k">Level</div></div>
-                <div class="detail-stat"><div class="v" id="detail-maps">0</div><div class="k">Episode Maps</div></div>
-                <div class="detail-stat"><div class="v" id="detail-edges">0</div><div class="k">Known Edges</div></div>
-                <div class="detail-stat"><div class="v" id="detail-knownmaps">0</div><div class="k">Known Maps</div></div>
-                <div class="detail-stat"><div class="v" id="detail-transitions">0</div><div class="k">Transitions</div></div>
-                <div class="detail-stat"><div class="v" id="detail-battles">0</div><div class="k">⚔ Battles</div></div>
-                <div class="detail-stat"><div class="v" id="detail-battle-done">0</div><div class="k">✅ Finished</div></div>
+                <div class="detail-stat"><div class="v" id="detail-stage">0</div><div class="k">Geografische Stage</div></div>
+                <div class="detail-stat"><div class="v" id="detail-position">0,0</div><div class="k">Position X,Y</div></div>
+                <div class="detail-stat"><div class="v" id="detail-tiles">0</div><div class="k">Erkundete Tiles</div></div>
+                <div class="detail-stat"><div class="v" id="detail-runsteps">0</div><div class="k">Run-Steps</div></div>
+                <div class="detail-stat"><div class="v" id="detail-remaining">–</div><div class="k">Steps bis Reset</div></div>
+                <div class="detail-stat"><div class="v" id="detail-inbattle">–</div><div class="k">Im Kampf</div></div>
+                <div class="detail-stat"><div class="v" id="detail-badges">0 / 8</div><div class="k">Orden</div></div>
             </div>
             <div class="chart-wrap">
                 <div class="chart-label">Letztes Reward-Event</div>
@@ -2380,8 +2734,10 @@ header{padding:6px!important;gap:4px!important}
         const historyByAgent = {};
 
         function setFilter(n) {
-            document.getElementById('agent-limit').value = n;
             maxVisibleAgents = parseInt(n);
+            document.querySelectorAll('.filter-btn').forEach(b=>
+                b.classList.toggle('active', (n===9999 && b.textContent.trim()==='Alle') || b.textContent.trim()===String(n))
+            );
         }
 
         function updateFilter(val) {
@@ -2453,7 +2809,7 @@ header{padding:6px!important;gap:4px!important}
 
         function resetAgentFilter() {
             Object.keys(agentFilter).forEach(k => agentFilter[k] = '');
-            ['af-role','af-map','af-starter','af-stage','af-sort'].forEach(id => {
+            ['af-map','af-stage','af-sort'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.value = '';
             });
@@ -2488,8 +2844,7 @@ header{padding:6px!important;gap:4px!important}
         function agentSortKey(i) {
             switch (agentFilter.sort) {
                 case 'progress': return agentProgressRank(i);
-                case 'maps':     return Number(i.visited_maps || 0);
-                case 'level':    return Number(i.level || 0);
+                case 'steps':    return Number(i.steps || 0);
                 case 'reward':   return Number(i.reward || 0);
                 default:         return 0;
             }
@@ -2637,6 +2992,7 @@ header{padding:6px!important;gap:4px!important}
         };
 
         let agentMarkers = {};
+        let battleFighterMarkers = {};
         let agentPolylines = {};
         let mapperMapLayers = {};
         let mapperMapSignatures = {};
@@ -2923,6 +3279,11 @@ header{padding:6px!important;gap:4px!important}
 
         // --- klickbare Agenten-Liste + Live-Stats (Watcher- UND Status-Tab) ---
         let wtSelected = null;
+        function agentDisplayName(d) {
+            const id = Number(d && d.id);
+            if (id === 120) return 'Watcher';
+            return 'Full ' + String(id + 1).padStart(2, '0');
+        }
         function wtPick(id) {
             const opening = wtSelected !== id;
             wtSelected = opening ? id : null;
@@ -2954,9 +3315,10 @@ header{padding:6px!important;gap:4px!important}
                 const lvl = Number(d.level || 0);
                 const stage = Number(d.world_stage || 0);
                 const cls = 'wt-chip' + (wtSelected === id ? ' sel' : '') + (isW ? ' watcher' : '');
-                const battle = Number(d.in_battle || 0) ? ' ⚔' : '';
+                const battle = Number(d.in_battle || 0)
+                    ? ' <img class="battler-icon" src="/battler.png" alt="Battle">' : '';
                 return '<div class="' + cls + '" onclick="wtPick(' + id + ')">'
-                    + '<div class="c-id">' + (isW ? '👁 Watcher' : 'A' + String(id).padStart(2, '0')) + battle + '</div>'
+                    + '<div class="c-id">' + (isW ? '👁 Watcher' : agentDisplayName(d)) + battle + '</div>'
                     + '<div class="c-role">' + role + '</div>'
                     + '<div class="c-meta">S' + stage + ' · L' + lvl + ' · <b style="color:' + (rew >= 0 ? '#5fe08a' : '#ff7a7a') + '">' + (rew >= 0 ? '+' : '') + rew.toFixed(0) + '</b></div>'
                     + '</div>';
@@ -3012,7 +3374,7 @@ header{padding:6px!important;gap:4px!important}
             box.innerHTML =
                 '<button class="wt-close" onclick="wtPick(' + wtSelected + ')">✕</button>'
                 + starterSpriteHtml
-                + '<h4>' + (isW ? '👁 Watcher' : 'Agent ' + String(wtSelected).padStart(2, '0')) + (d.name ? ' · ' + d.name : '') + '</h4>'
+                + '<h4>' + (isW ? '👁 Watcher' : agentDisplayName(d)) + '</h4>'
                 + '<div class="wt-sub">' + (d.training_objective || d.agent_role || '?') + ' · ' + (d.room || ('Bank ' + d.bank + ' / Map ' + d.map)) + ' @ ' + d.x + ',' + d.y + ' · Start: ' + (d.episode_start || '?') + '</div>'
                 + '<div class="wt-dgrid">'
                 + cell(rew.toFixed(1), 'Episode-Reward', rew >= 0 ? '#5fe08a' : '#ff7a7a')
@@ -3020,7 +3382,7 @@ header{padding:6px!important;gap:4px!important}
                 + cell(Number(d.world_stage || 0), 'Welt-Stufe')
                 + cell(Number(d.level || 0), 'Level')
                 + cell(Number(d.badges || 0), 'Orden')
-                + cell(starter, 'Starter')
+                + cell(Number(d.episode_steps_remaining || 0).toLocaleString(), 'Steps bis Reset')
                 + cell((sp.pallet_oaks_lab_scene || 0) + '/6', 'Eich-Szene')
                 + cell(Number(bs.started || 0) + '/' + Number(bs.completed || 0), 'Kämpfe s/f')
                 + cell(String(d.input || d.effective_action || '–'), 'Taste')
@@ -3057,7 +3419,6 @@ header{padding:6px!important;gap:4px!important}
             if (e && e.target) e.target.classList.add('active');
 
             document.getElementById('map-view').style.display = t === 'map' ? 'block' : 'none';
-            document.getElementById('rooms-view').style.display = t === 'rooms' ? 'block' : 'none';
             document.getElementById('graphs-view').style.display = t === 'graphs' ? 'block' : 'none';
             document.getElementById('status-view').style.display = t === 'status' ? 'block' : 'none';
             document.getElementById('watcher-view').style.display = t === 'watcher' ? 'block' : 'none';
@@ -3072,7 +3433,7 @@ header{padding:6px!important;gap:4px!important}
             // Mobile: .live-global/.v81skills werden aus #map-view raus- und als
             // feste Kacheln in #main-container gehaengt (pkmai-mobile-relayout).
             // Dadurch haengen sie an KEINER Tab-View mehr und ueberlagerten bisher
-            // jeden anderen Tab (das "GLOBAL AI"-Ueberlappungsproblem am Handy).
+            // jeden anderen Tab (das alte schwebende Panel am Handy).
             // Inline !important noetig, um die CSS-Regel .pkmai-mobile-tile{display:
             // block!important} zu schlagen.
             document.querySelectorAll('.pkmai-mobile-tile').forEach(el => {
@@ -3083,9 +3444,6 @@ header{padding:6px!important;gap:4px!important}
             const brainRow = document.getElementById('brain-summary-row');
             if (brainRow) brainRow.style.display = showOverlays ? 'grid' : 'none';
 
-            if (t === 'rooms') {
-                updateGlobalMapping(true);
-            }
             if (t === 'graphs') loadTrainingGraphs();
             if (t === 'watcher') { refreshWatcherStream(); renderWatcherTab(); }
             if (t === 'mapper') refreshMapperStream();
@@ -3300,7 +3658,7 @@ header{padding:6px!important;gap:4px!important}
             // des Watchers duerfen nicht bei einem Trainingsagenten erscheinen.
             const headInst = inst;
             document.getElementById('hud-trainer').innerText =
-                (headInst.name || 'Alex').replace(' (Watcher)', '') + ' (Live)';
+                (isW ? (headInst.name || 'Alex').replace(' (Watcher)', '') : agentDisplayName(headInst)) + ' (Live)';
 
             updateParty(headInst.party || []);
 
@@ -3311,24 +3669,20 @@ header{padding:6px!important;gap:4px!important}
                 else el.classList.remove('active');
             }
 
-            document.getElementById('detail-name').innerText =
-                inst.name || `Agent ${inst.id}`;
+            document.getElementById('detail-name').innerText = agentDisplayName(inst);
             document.getElementById('detail-room').innerText = inst.room || `Bank ${inst.bank} / Map ${inst.map}`;
             document.getElementById('detail-steps').innerText = Number(inst.steps || 0).toLocaleString();
             document.getElementById('detail-reward').innerText = Number(inst.reward || 0).toFixed(2);
-            document.getElementById('detail-level').innerText = Number(inst.level || 0);
-            document.getElementById('detail-maps').innerText = Number(inst.visited_maps || 0);
-
             const pe = inst.persistent_exploration || {};
-            document.getElementById('detail-edges').innerText =
-                Number(pe.known_edges || 0).toLocaleString();
-            document.getElementById('detail-knownmaps').innerText =
-                Number(pe.known_maps || 0).toLocaleString();
-            document.getElementById('detail-transitions').innerText =
-                Number(pe.known_transitions || 0).toLocaleString();
-            const bs = inst.battle_stats || {};
-            document.getElementById('detail-battles').innerText = Number(bs.started || 0).toLocaleString();
-            document.getElementById('detail-battle-done').innerText = Number(bs.completed || 0).toLocaleString();
+            document.getElementById('detail-stage').innerText = Number(inst.world_stage || 0);
+            document.getElementById('detail-position').innerText = `${Number(inst.x||0)},${Number(inst.y||0)}`;
+            document.getElementById('detail-tiles').innerText = Number(inst.explored_tiles || 0).toLocaleString();
+            document.getElementById('detail-runsteps').innerText = Number(inst.ppo_episode_steps || inst.steps || 0).toLocaleString();
+            document.getElementById('detail-remaining').innerText = Number(
+                inst.episode_steps_remaining || 0
+            ).toLocaleString('de-DE');
+            document.getElementById('detail-inbattle').innerText = inst.in_battle ? 'JA' : 'NEIN';
+            document.getElementById('detail-badges').innerText = `${Number(inst.badges||0)} / 8`;
 
             const navState = pe.exit_seek_active
                 ? `EXIT SEEK (${Number(pe.steps_since_new_edge || 0)} stale)`
@@ -3452,12 +3806,13 @@ header{padding:6px!important;gap:4px!important}
         const FLEET_ROLE_LABELS = {
             intro:'Intro', stairs:'Treppe', exit:'Haus-Exit', starter:'Starter',
             starter_rush:'Starter', battle:'Kampf', level:'Level', progress:'Progress',
-            full:'Full Journey', badge:'Orden', scout:'Frontier Scout'
+            full:'FULL Navigation', badge:'Orden', scout:'Frontier Scout'
         };
         const STATUS_ROLE_ICONS = {
             intro:'🎬', stairs:'🪜', exit:'🚪', starter:'🐣', battle:'⚔️',
             level:'⬆️', progress:'🧭', full:'🏁', badge:'🪨', scout:'🔭'
         };
+        const NAV_KEY_NAMES = ['A','B','START','↑','↓','←','→'];
         function statusEsc(value){
             return String(value ?? '–').replace(/[&<>"']/g, c=>({
                 '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
@@ -3475,7 +3830,7 @@ header{padding:6px!important;gap:4px!important}
             const summary=document.getElementById('status-summary');
             if(summary) summary.innerHTML=[
                 ['🧠',Number(state.training_timesteps||0).toLocaleString('de-DE'),'Learner Steps'],
-                ['🏆','v'+String(state.version||0).padStart(6,'0'),'Champion'],
+                ['🏆','v'+String(state.version||0),'Champion'],
                 ['🗺️',Number(state.world_depth||0),FLEET_DEPTH_NAMES[Number(state.world_depth||0)]||'Weltstufe'],
                 ['⚔️',Number(battle.started||0).toLocaleString('de-DE'),'Kämpfe gesamt'],
                 ['💥',Number(rt.enemy_faints||0).toLocaleString('de-DE'),'Gegner-K.O.'],
@@ -3496,7 +3851,7 @@ header{padding:6px!important;gap:4px!important}
                       <div class="status-pill">🧠 Modell <b>${statusEsc(watcher.loaded_model)}</b></div>
                       <div class="status-pill">📈 Learner <b>${Number(watcher.learner_steps||0).toLocaleString('de-DE')}</b> Steps</div>
                       <div class="status-pill">🔄 Netz nachgeladen <b>${Number(watcher.brain_reloads||0)}×</b></div>
-                      <div class="status-pill">🏆 Champion <b>v${String(watcher.model_version||0).padStart(6,'0')}</b></div>
+                      <div class="status-pill">🏆 Champion <b>v${String(watcher.model_version||0)}</b></div>
                       <div class="status-pill">👣 Lauf-Steps <b>${Number(watcher.steps||0).toLocaleString('de-DE')}</b></div>
                       <div class="status-pill">📍 Ort <b>${statusEsc(watcher.bank)}/${statusEsc(watcher.map)} @ ${statusEsc(watcher.x)},${statusEsc(watcher.y)}</b></div>
                       <div class="status-pill">⭐ Level <b>${Number(watcher.level||0)}</b></div>
@@ -3544,14 +3899,16 @@ header{padding:6px!important;gap:4px!important}
                 const rew=Number(i.reward||0);
                 const sel=Number(i.id)===wtSelected?' sel':'';
                 return `<div class="status-agent ${i.in_battle?'fighting':''}${sel}" data-aid="${Number(i.id)}" onclick="wtPick(${Number(i.id)})">
-                  <div class="status-agent-top"><span>${STATUS_ROLE_ICONS[role]||'🤖'} A${String(i.id).padStart(2,'0')} · ${statusEsc(FLEET_ROLE_LABELS[role]||role)}</span><span style="color:${rew>=0?'#5fe08a':'#ff7a7a'}">${rew>=0?'+':''}${rew.toFixed(0)}</span></div>
-                  <div class="status-agent-meta">👣 ${Number(i.steps||0).toLocaleString('de-DE')} Ep-Steps · 🎬 ${statusEsc(i.story_stage)} · 🐣 ${i.has_target_starter?'Schiggi':(i.has_starter?'falsch?':'nein')}<br>
+                  <div class="status-agent-top"><span>${STATUS_ROLE_ICONS[role]||'🤖'} ${agentDisplayName(i)}</span><span style="color:${rew>=0?'#5fe08a':'#ff7a7a'}">${rew>=0?'+':''}${rew.toFixed(0)}</span></div>
+                  <div class="status-agent-meta">⌨️ ${NAV_KEY_NAMES[Number(i.effective_action)]||'–'} · 👣 ${Number(i.steps||0).toLocaleString('de-DE')} Ep-Steps · 🎬 ${statusEsc(i.story_stage)} · 🐣 ${i.has_target_starter?'Schiggi':(i.has_starter?'falsch?':'nein')}<br>
                   📍 ${statusEsc(i.bank)}/${statusEsc(i.map)} @ ${statusEsc(i.x)},${statusEsc(i.y)} · 🌍 Welt ${Number(i.world_stage||0)} · ⭐ Lv ${Number(i.level||0)}<br>
                   🥊 ${Number(bs.episode_started||0)}/${Number(bs.episode_completed||0)} · 💥 ${Number(bs.enemy_faints||0)} · 🩸 ${Number(bs.enemy_damage_hp||0)} · 💾 ${statusEsc(i.episode_start)}</div>
                 </div>`;
             }).join('');
             renderAgentDetail('status-agent-detail');
-            renderBrainProgress(state);
+            if (typeof latestBrains !== 'undefined' && latestBrains.navigation) {
+                renderBrainArchitecture(latestBrains);
+            }
         }
 
         // --- Brain Progress: wird das Netz wirklich besser? Fest in die
@@ -3600,7 +3957,7 @@ header{padding:6px!important;gap:4px!important}
             const avgDelta = avgNow - avgOld;
             const lvlNow = Number(nowPoint.max_level || 0);
             const lvlOld = Number((oldPoint || nowPoint).max_level || 0);
-            const champVer = 'v' + String(state.version || 0).padStart(6, '0');
+            const champVer = 'v' + String(state.version || 0);
             const champSteps = Number((state.champion_speed || {}).steps || 0);
             box.innerHTML =
                 tile('🏆', champVer, 'Champion (bestätigt, Steps ' + champSteps.toLocaleString('de-DE') + ')', '', 0)
@@ -3636,7 +3993,7 @@ header{padding:6px!important;gap:4px!important}
                     const r = Number(entry.p.best_episode_reward || 0);
                     const prev = i > 0 ? Number(lastVersions[i - 1].p.best_episode_reward || 0) : null;
                     const arrow = prev === null ? '' : (r > prev ? ' <span style="color:#5fe08a">▲</span>' : r < prev ? ' <span style="color:#ff7a7a">▼</span>' : ' <span style="color:#8b93a7">▬</span>');
-                    return '<div class="bp-ver-chip"><b>v' + String(entry.v).padStart(6, '0') + '</b><span>' + r.toFixed(0) + ' Reward' + arrow + '</span></div>';
+                    return '<div class="bp-ver-chip"><b>v' + String(entry.v) + '</b><span>' + r.toFixed(0) + ' Reward' + arrow + '</span></div>';
                 }).join('<span class="bp-ver-sep">→</span>');
             }
         }
@@ -3649,15 +4006,14 @@ header{padding:6px!important;gap:4px!important}
             setTxt('fleet-depth-num', wd);
             setTxt('fleet-depth-name', FLEET_DEPTH_NAMES[wd] || ('Tiefe '+wd));
             setTxt('fleet-cp', 'stage_'+cp);
+            setTxt('fleet-full', Number((state.instances||[]).filter(i=>Number(i.id)!==120).length));
             setTxt('fleet-outdoor', loc.outdoor||0);
-            setTxt('fleet-indoor', loc.indoor||0);
-            setTxt('fleet-battle', loc.battle||0);
             setTxt('fleet-brk', f.depth_breakthroughs||0);
-            setTxt('fleet-ko', f.enemy_ko||0);
-            setTxt('fleet-dmg', f.enemy_damage_hp||0);
-            setTxt('fleet-bstarted', (state.battle_stats||{}).started||0);
+            setTxt('fleet-tiles', Number((state.training_stats||{}).max_explored_tiles||0));
+            setTxt('fleet-fighters', Number((latestBrains.battle||{}).workers||0));
+            setTxt('fleet-scenarios', Number((latestBrains.battle||{}).scenario_count||0));
             const on=document.getElementById('fleet-outdoor');
-            if(on) on.style.color = (loc.outdoor||0) >= (loc.indoor||0) ? '#00e676' : '#ff8a65';
+            if(on) on.style.color = '#00e676';
             const track = document.getElementById('fleet-depth-track');
             if(track){
                 let h='';
@@ -3688,14 +4044,14 @@ header{padding:6px!important;gap:4px!important}
                     : '<div class="none">noch kein world_depth-Event in diesem Zyklus</div>';
             }
         }
-        function updateJourneySkills(state){
+        function updateJourneySkills(state, brains){
             const setTxt=(id,v)=>{ const e=document.getElementById(id); if(e) e.innerText=v; };
-            const st=state.training_stats||{}, gx=state.global_exploration||{};
-            const maps=Number(gx.known_maps||0);
-            const level=Number(st.max_level||state.max_level||0);
-            const badges=Number(state.max_badges||0);
+            const metrics=((brains||{}).navigation||{}).metrics||{};
+            const maps=Number(metrics.max_maps||0);
+            const stage=Number(metrics.max_stage||state.world_depth||0);
+            const badges=Number(metrics.max_badges||state.max_badges||0);
             setTxt('jv-maps', maps);
-            setTxt('jv-level', level);
+            setTxt('jv-stage', stage);
             setTxt('jv-badges', `${badges}/8`);
             const badgeFill=document.getElementById('jf-badges');
             if(badgeFill) badgeFill.style.width=`${Math.min(100,100*badges/8)}%`;
@@ -3716,6 +4072,7 @@ header{padding:6px!important;gap:4px!important}
                 console.error('State load failed', e);
             }
             let hist = [];
+            let brains = {};
             try {
                 const hr = await fetch('/api/history?t='+Date.now());
                 const histPayload = await hr.json();
@@ -3724,70 +4081,71 @@ header{padding:6px!important;gap:4px!important}
                 console.error('History load failed', e);
             }
             try {
-                updateJourneySkills(state);
+                const br = await fetch('/api/brains?t='+Date.now());
+                brains = await br.json();
+            } catch (e) {
+                console.error('Brain status load failed', e);
+            }
+            try {
+                updateJourneySkills(state, brains);
                 const st=state.training_stats||{};
                 const rates=st.beginning_success_rates||{};
                 const skillRates=st.v6_skill_rates||{};
 
-                document.getElementById('g-steps').innerText=Number(state.training_timesteps||0).toLocaleString();
-                document.getElementById('g-version').innerText=`v${String(state.version||0).padStart(6,'0')}`;
+                const nav=brains.navigation||{}, bat=brains.battle||{};
+                document.getElementById('g-steps').innerText=Number(nav.learner_steps||state.training_timesteps||0).toLocaleString('de-DE');
+                document.getElementById('g-version').innerText=`v${String(nav.champion_version||state.version||0)}`;
+                document.getElementById('g-champ-delta').innerText='+'+Number(nav.since_champion||0).toLocaleString('de-DE');
+                document.getElementById('g-episodes').innerText=Number(nav.completed_runs||0).toLocaleString('de-DE');
+                document.getElementById('g-battle-steps').innerText=Number(bat.learner_steps||0).toLocaleString('de-DE');
+                document.getElementById('g-battle-updates').innerText=Number(bat.ppo_updates||0).toLocaleString('de-DE');
+                document.getElementById('g-battle-episodes').innerText=Number(bat.episodes||0).toLocaleString('de-DE');
+                document.getElementById('g-battle-kos').innerText=Number(bat.kos||0).toLocaleString('de-DE');
                 const wd=Number(state.world_depth||0);
                 const gwd=document.getElementById('g-world-depth');
                 if(gwd){gwd.innerText=wd; gwd.style.color = wd>=3 ? '#00e676' : (wd>=2 ? '#ffea00' : '#ff8a65');}
-                const goc=document.getElementById('g-outdoor-cp');
-                if(goc) goc.innerText='outdoor_'+Number(state.deepest_outdoor_checkpoint||0);
                 try { updateFleetPanel(state); } catch(e) {}
-                const rt=st.run_totals||{};
-                const fullRuns = Number(rt.v2_full_episodes||0);
-                document.getElementById('g-episodes').innerText=
-                    `${fullRuns.toLocaleString()} / ${Number(rt.all_episodes||0).toLocaleString()}`;
-                document.getElementById('g-avgreward').innerText=Number(st.avg_episode_reward||0).toFixed(1);
-                try {
-                    const [tsr, cr] = await Promise.all([
-                        fetch('/api/trainer-status?ts='+Date.now()),
-                        fetch('/api/champion?ts='+Date.now())
-                    ]);
-                    const tst = await tsr.json();
-                    const champ = await cr.json();
-                    const cm = champ.metrics || {};
-                    document.getElementById('g-champ-steps').innerText =
-                        Number(tst.champion_steps||champ.timesteps||0).toLocaleString('de-DE');
-                    const dv = Number(tst.delta_steps||0);
-                    document.getElementById('g-champ-delta').innerText =
-                        (dv>=0?'+':'') + dv.toLocaleString('de-DE');
-                    document.getElementById('g-champ-starter').innerText =
-                        `${(Number(cm.full_starter_permille||0)/10).toFixed(1)}%`;
-                } catch(e) {}
 
                 if (!hist.length) return;
-                const labels=hist.map(p=>Number(p.timesteps||0).toLocaleString());
+                // Never connect incompatible trainer/reset runs. Episode
+                // counters are process-local; learner timesteps may reset too.
+                let runStart=0;
+                for(let i=1;i<hist.length;i++){
+                    const prev=hist[i-1], cur=hist[i];
+                    const explicitRunChange = Number(prev.training_run_id||0)>0 && Number(cur.training_run_id||0)>0 && Number(prev.training_run_id)!==Number(cur.training_run_id);
+                    const stepReset = Number(cur.timesteps||0)<Number(prev.timesteps||0);
+                    const episodeReset = Number(cur.episodes||0)<Number(prev.episodes||0);
+                    if(explicitRunChange || stepReset || episodeReset) runStart=i;
+                }
+                const rewardHist=hist.slice(runStart).filter(p=>Number(p.episodes||0)>0);
+                const labels=rewardHist.map(p=>Number(p.timesteps||0).toLocaleString());
 
                 upsertTrainingChart('graph-reward',labels,[
-                    {label:'Ø Episode Reward',data:hist.map(p=>Number(p.avg_episode_reward||0)),borderWidth:2,pointRadius:1.5,tension:.22}
+                    {label:'Ø Episode Reward',data:rewardHist.map(p=>Number(p.avg_episode_reward||0)),borderWidth:2,pointRadius:1.5,tension:.22}
                 ]);
 
-                const cleanHist=hist.filter(p=>Number(p.stats_schema||0)>=3);
+                const cleanHist=hist.filter(p=>Number(p.stats_schema||0)>=4 && p.movement_graph_edges!=null);
                 const cleanLabels=cleanHist.map(p=>Number(p.timesteps||0).toLocaleString());
 
                 upsertTrainingChart('graph-success',cleanLabels,[
-                    {label:'Full Intro',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).full_intro||0)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Full Treppe',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).full_stairs||0)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Full Haus raus',data:cleanHist.map(p=>Number((p.v6_skill_rates||{}).full_exit||0)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Full Schiggi',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).full_starter||0)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Full Badge 1',data:cleanHist.map(p=>Number((p.v8_skill_rates||{}).full_badge1||0)),borderWidth:2,pointRadius:1,tension:.2}
-                ],true);
+                    {label:'Bestätigte Kanten',data:cleanHist.map(p=>Number(p.movement_graph_edges||0)),borderWidth:2,pointRadius:1,tension:.2},
+                    {label:'Graph-Maps',data:cleanHist.map(p=>Number(p.movement_graph_maps||0)),borderWidth:2,pointRadius:1,tension:.2}
+                ]);
 
                 const runningMax=(arr)=>{let m=0;return arr.map(v=>{m=Math.max(m,Number(v||0));return m;});};
                 upsertTrainingChart('graph-progress',labels,[
-                    {label:'Max Level',data:runningMax(hist.map(p=>p.max_level)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Orden',data:runningMax(hist.map(p=>p.max_badges)),borderWidth:2,pointRadius:1,tension:.2},
-                    {label:'Maps',data:runningMax(hist.map(p=>p.max_maps)),borderWidth:2,pointRadius:1,tension:.2}
+                    {label:'Stage',data:runningMax(rewardHist.map(p=>p.max_stage)),borderWidth:2,pointRadius:1,tension:.2},
+                    {label:'Orden',data:runningMax(rewardHist.map(p=>p.max_badges)),borderWidth:2,pointRadius:1,tension:.2},
+                    {label:'Maps',data:runningMax(rewardHist.map(p=>p.max_maps)),borderWidth:2,pointRadius:1,tension:.2}
                 ]);
-
-                const loopHist=hist.filter(p=>Number(p.stats_schema||0)>=2);
-                const loopLabels=loopHist.map(p=>Number(p.timesteps||0).toLocaleString());
-                upsertTrainingChart('graph-loops',loopLabels,[
-                    {label:'Loops pro 100 Beginning-Runs',data:loopHist.map(p=>Number(p.beginning_loops_per_100_runs||0)),borderWidth:2,pointRadius:1,tension:.2}
+                window.__battleGraphHistory = window.__battleGraphHistory || [];
+                window.__battleGraphHistory.push({t:new Date().toLocaleTimeString('de-DE'),s:Number(bat.learner_steps||0),e:Number(bat.episodes||0),k:Number(bat.kos||0)});
+                window.__battleGraphHistory = window.__battleGraphHistory.slice(-120);
+                const bh=window.__battleGraphHistory;
+                upsertTrainingChart('graph-battle',bh.map(p=>p.t),[
+                    {label:'Steps / 1000',data:bh.map(p=>p.s/1000),borderWidth:2,pointRadius:0,tension:.2},
+                    {label:'Episoden',data:bh.map(p=>p.e),borderWidth:2,pointRadius:0,tension:.2},
+                    {label:'K.O.',data:bh.map(p=>p.k),borderWidth:2,pointRadius:0,tension:.2}
                 ]);
             } catch(e) {
                 console.error('Graph load failed',e);
@@ -4010,13 +4368,6 @@ header{padding:6px!important;gap:4px!important}
                         ? data.warp_points : []
                 };
 
-                const setLiveMap=(id,v)=>{
-                    const el=document.getElementById(id);
-                    if(el) el.innerText=v;
-                };
-                setLiveMap('live-maps', Number(latestGlobalMapping.maps.length).toLocaleString());
-                setLiveMap('live-warps', '—');
-                setLiveMap('live-edges', Number(latestGlobalMapping.edges.length).toLocaleString());
                 recomputeDynamicMapBounds();
                 updateGlobalTileCoverage();
 
@@ -4026,7 +4377,6 @@ header{padding:6px!important;gap:4px!important}
                     `${latestGlobalMapping.warp_points.length}`;
 
                 if (!force && signature === globalMappingSignature) {
-                    if (currentTab === 'rooms') renderIndoorMapping();
                     return;
                 }
                 globalMappingSignature = signature;
@@ -4035,9 +4385,6 @@ header{padding:6px!important;gap:4px!important}
                 // Rohdaten/Transitions bleiben erhalten und werden NICHT geloescht.
                 globalWarpLayer.clearLayers();
 
-                if (currentTab === 'rooms') {
-                    renderIndoorMapping();
-                }
             } catch(e) {
                 console.error('Global mapping load failed', e);
             }
@@ -4211,7 +4558,7 @@ header{padding:6px!important;gap:4px!important}
         }
 
         setInterval(() => {
-            if (currentTab === 'map' || currentTab === 'rooms') {
+            if (currentTab === 'map') {
                 updateGlobalMapping(false);
             }
         }, 2000);
@@ -4221,17 +4568,7 @@ header{padding:6px!important;gap:4px!important}
                 const res = await fetch('/api/state?t=' + Date.now());
                 const state = await res.json();
                 
-                                const setLiveState=(id,v)=>{
-                    const el=document.getElementById(id);
-                    if(el) el.innerText=v;
-                };
-                const globalBattles=state.battle_stats||{};
-                setLiveState('live-model', `v${String(state.version||0).padStart(6,'0')}`);
-                setLiveState('live-battles', Number(globalBattles.started||0).toLocaleString());
-                setLiveState('live-finished', Number(globalBattles.completed||0).toLocaleString());
-                setLiveState('live-steps', Number(state.training_timesteps||0).toLocaleString());
-
-document.getElementById('model-ver').innerText = `v${String(state.version).padStart(6, '0')}`;
+document.getElementById('model-ver').innerText = `v${String(state.version)}`;
 
                 window.__trainerName = state.trainer_name || 'Alex';
                 const instances = state.instances || [];
@@ -4276,7 +4613,7 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                     : instances.length;
                 let hudHtml = `
                     <div class="hud-title">
-                        <span>Instanzen ${_shown}${_anyFilter ? ' / ' + instances.length : ''}${agentFilter.sort ? ' ↓' : ''}</span>
+                        <span>40 Full + 9 Battle · ${Math.max(0,_shown-1)}/40 Full live + Watcher${agentFilter.sort ? ' ↓' : ''}</span>
                         <span class="agent-badge">Max Speed</span>
                     </div>
                 `;
@@ -4317,9 +4654,9 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                         <div class="agent-row ${nameClass} ${selectedClass}" onclick="selectAgent(${inst.id})">
                             <span class="agent-name-wrap">
                                 <span class="agent-color-dot" style="background:${markerColor}"></span>
-                                <span>${inst.name || ('Agent ' + inst.id)}</span>
+                                <span>${agentDisplayName(inst)}</span>
                             </span>
-                            <span>${starterTag} ${inst.room} · ${inst.story_stage || ''} (${inst.steps} ep)</span>
+                            <span class="agent-list-meta">${starterTag}${inst.room}<br>${inst.story_stage || ''}<br>${Number(inst.steps || 0).toLocaleString('de-DE')} Steps</span>
                         </div>
                     `;
                     }
@@ -4337,7 +4674,7 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                                 fillOpacity: isWatcher ? 1.0 : 0.9,
                                 weight: 2
                             }).bindPopup(
-                                `<b>${inst.name}</b><br>${inst.room}`
+                                `<b>${agentDisplayName(inst)}</b><br>${inst.room}`
                             ).addTo(map);
                             agentMarkers[inst.id].on(
                                 'click', () => selectAgent(inst.id)
@@ -4349,7 +4686,7 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
                                 fillColor: markerColor
                             });
                             agentMarkers[inst.id].setPopupContent(
-                                `<b>${inst.name}</b><br>${inst.room}`
+                                `<b>${agentDisplayName(inst)}</b><br>${inst.room}`
                             );
                         }
 
@@ -4431,24 +4768,185 @@ document.getElementById('model-ver').innerText = `v${String(state.version).padSt
         setInterval(updateDashboard, 1000);
 
     </script>
-<script id="champion-night-js">
-async function refreshChampionNight(){
-  try{
-    const r=await fetch('/api/champion?ts='+Date.now());
-    const c=await r.json(),m=c.metrics||{};
-    const fmt=n=>Number(n||0).toLocaleString('de-DE');
-    document.getElementById('cn-ver').textContent='v'+String(c.version||0).padStart(6,'0');
-    document.getElementById('cn-steps').textContent=fmt(c.timesteps||0);
-    document.getElementById('cn-full').textContent=(Number(m.full_exit_permille||0)/10).toFixed(1)+'%';
-    document.getElementById('cn-starter').textContent=(Number(m.full_starter_permille||0)/10).toFixed(1)+'%';
-    document.getElementById('cn-badge').textContent=String(m.max_badges||0);
-  }catch(e){}
+<script id="twoby2-brains-js">
+let latestBrains={};
+const brainFmt=n=>Number(n||0).toLocaleString('de-DE');
+const BATTLE_AREA_ANCHORS={
+  route1:[3,19,10,18],viridian:[3,1,20,20],route2:[3,20,10,20],
+  forest:[1,0,17,35],pewter:[3,2,20,30]
+};
+function brainFreshness(x){
+  if(!x||x.updated_at==null)return 'keine Daten';
+  const date=new Date(x.updated_at),clock=Number.isNaN(date.getTime())?'–':date.toLocaleTimeString('de-DE');
+  const age=Number(x.age_seconds);
+  return `${clock} · ${Number.isFinite(age)?age+'s':'?'}`;
 }
-setInterval(refreshChampionNight,2000);refreshChampionNight();
+function renderBattleFightersOnMap(b){
+  if(typeof map==='undefined'||typeof L==='undefined')return;
+  const areas=(b.areas||[]).filter(a=>BATTLE_AREA_ANCHORS[a]);
+  const wanted=new Set();
+  if(!areas.length){
+    Object.keys(battleFighterMarkers).forEach(k=>{map.removeLayer(battleFighterMarkers[k]);delete battleFighterMarkers[k];});
+    return;
+  }
+  // One marker per actual training area, not one marker per worker. Nine
+  // isolated workers at the same scenario anchor otherwise obscure the map.
+  for(const area of areas){
+    const base=BATTLE_AREA_ANCHORS[area];
+    const key=String(area);
+    const pos=getLeafletCoords(base[0],base[1],base[2],base[3]);
+    wanted.add(key);
+    const popup=`<b><img class="battler-icon" src="/battler.png" alt="">Battle-Training</b><br>${area}<br>${brainFmt(b.workers)} Battle-Agenten · Szenario-Anker`;
+    if(!battleFighterMarkers[key]){
+      const icon=L.divIcon({className:'battle-fighter-marker',html:`<div class="battle-map-icon"><img src="/battler.png" alt="Battle"></div>`,iconSize:[38,38],iconAnchor:[19,19]});
+      battleFighterMarkers[key]=L.marker(pos,{icon,zIndexOffset:1000})
+        .bindPopup(popup).addTo(map);
+    }else{
+      battleFighterMarkers[key].setLatLng(pos).setPopupContent(popup);
+    }
+  }
+  Object.keys(battleFighterMarkers).forEach(k=>{if(!wanted.has(k)){map.removeLayer(battleFighterMarkers[k]);delete battleFighterMarkers[k];}});
+}
+function renderBrainArchitecture(d){
+  latestBrains=d||{};
+  const n=latestBrains.navigation||{},b=latestBrains.battle||{},m=n.metrics||{};
+  const set=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
+  set('lth-learner',brainFmt(n.learner_steps));
+  set('lth-champion',brainFmt(n.champion_steps));
+  set('lth-delta',(Number(n.since_champion||0)>=0?'+':'')+brainFmt(n.since_champion));
+  set('nav-brain-state',String(n.phase||'training').replaceAll('_',' ').toUpperCase());
+  set('cn-ver','v'+String(n.champion_version||0));
+  set('cn-steps',brainFmt(n.champion_steps));
+  set('cn-stage',String(m.max_stage||0));
+  set('cn-maps',String(m.max_maps||0));
+  set('cn-runs',brainFmt(n.completed_runs));
+  set('bb-steps',brainFmt(b.learner_steps));
+  set('bb-updates',brainFmt(b.ppo_updates));
+  set('bb-episodes',brainFmt(b.episodes));
+  set('bb-kos',brainFmt(b.kos));
+  set('bb-wins',brainFmt(b.wins));
+  set('bb-wipes',brainFmt(b.wipes));
+  set('bb-flees',brainFmt(b.flees));
+  set('bb-learner-ver','v'+String(b.learner_version||0));
+  set('bb-champion',b.champion_version?'v'+String(b.champion_version):'RULE');
+  set('bb-next-check',b.next_promotion_step?brainFmt(b.next_promotion_step)+' Steps'
+      :(String(b.phase||'')==='champion_evaluation'?'läuft …':'–'));
+  set('bb-state',String(b.phase||'training').replaceAll('_',' ').toUpperCase());
+  set('bb-workers',brainFmt(b.workers)+' Battle');
+  set('bb-scenarios',brainFmt(b.scenario_count)+' Szenarien');
+  {const rl=b.rolling||{}, lp=b.last_promotion||{}, p=v=>(Number(v||0)*100).toFixed(0)+'%';
+   set('bb-avgrew',(Number(rl.avg_reward_last_100||0)).toFixed(2));
+   set('bb-roll',rl.window?`${p(rl.win_rate_200)} / ${p(rl.wipe_rate_200)} / ${p(rl.flee_rate_200)}`:'– / – / –');
+   set('bb-lastcheck',('promote'in lp)?(lp.promote?'✅ v'+String(b.champion_version):'❌ abgelehnt'):'–');
+   set('bb-reason',lp.reason?String(lp.reason).slice(0,120):'Promotion nur über echte Kampfergebnisse');}
+  {const ev=b.last_eval||{}, rl=b.rolling||{}, p=v=>(Number(v||0)*100).toFixed(0)+'%';
+   set('cn-battle-ver',b.champion_version?'v'+String(b.champion_version):'RULE');
+   set('cn-battle-win',p(ev.win_rate ?? rl.win_rate_200));
+   set('cn-battle-turns',Number(ev.avg_turns_on_win ?? rl.avg_turns_on_win ?? 0).toFixed(1));
+   set('cn-battle-hp',p(ev.avg_residual_hp_on_win));}
+  set('pulse-nav-eval',String(n.last_eval_result||'keine').toUpperCase()+' @ '+brainFmt(n.last_eval_at_step));
+  set('pulse-battle-outcomes',brainFmt(b.flees)+' / '+brainFmt(b.timeouts));
+  set('pulse-nav-workers',brainFmt(n.telemetry_workers)+' / '+brainFmt(n.workers));
+  set('pulse-battle-workers',brainFmt(b.workers)+' / 9');
+  set('pulse-scenarios',brainFmt(b.scenario_count));
+  set('pulse-runs',brainFmt(n.completed_runs));
+  renderBattleFightersOnMap(b);
+  const status=document.getElementById('status-summary');
+  if(status){
+    const cards=rows=>rows.map(x=>`<div class="status-kpi"><div class="big">${x[0]} ${x[1]}</div><div class="small">${x[2]}</div></div>`).join('');
+    const nd=n.directed||{};
+    const pct=v=>(Number(v||0)*100).toFixed(0)+'%';
+    const navRows=[
+      ['🧠',brainFmt(n.learner_steps),'Learner Steps'],
+      ['🏆','v'+String(n.champion_version||0),'Champion · '+brainFmt(n.champion_steps)+' Steps'],
+      ['➕',brainFmt(n.since_champion),'Seit Champion'],
+      ['📍',brainFmt(m.max_stage),'Geografische Stage'],
+      ['🧭',(nd.on_route1||0)+'/'+(nd.agents||0)+' ('+(nd.pct_on_route1||0)+'%)','Agenten auf Route 1'],
+      ['🏚️',String(nd.in_pallet||0),'noch in Pallet Town'],
+      ['↩️',String(nd.region_loops||0)+' / '+String(nd.ledge_jumps||0),'Region-Loops / Ledge-Sprünge'],
+      ['🧊',String(nd.shaping_frozen_agents||0),'im Recovery-Freeze'],
+      ['🕸️',brainFmt(nd.movement_graph_edges||0),'gerichtete Graph-Kanten'],
+      ['🎯',nd.route1_reach_rate!=null?pct(nd.route1_reach_rate):'–','Route-1-Reachrate'],
+      ['⏱️',Object.entries(nd.timeout_reasons||{}).map(([k,v])=>k+':'+v).join(' ')||'keine','aktive Timeout-Gründe'],
+      ['✅',brainFmt(n.completed_runs),'abgeschlossene FULL Runs'],
+      ['🔬',String(n.last_eval_result||'keine').toUpperCase(),'letzte Prüfung @ '+brainFmt(n.last_eval_at_step)]
+    ];
+    const navAgentRows=(nd.per_agent||[]).slice(0,40).map(a=>
+      `<div class="rew-row" style="grid-template-columns:34px 1fr 1fr 60px">`+
+      `<span class="rew-k">#${a.id}</span>`+
+      `<span class="rew-k">→ ${a.next_hop||'–'}  d=${a.graph_distance??'–'}/${a.best??'–'}</span>`+
+      `<span class="rew-k">${a.recovery?'RECOVERY ':''}${a.loop||a.timeout||''} ${(a.blocked||[]).length?'⛔'+a.blocked.join(''):''}</span>`+
+      `<span class="rew-v">${a.since_improve??''}</span></div>`).join('');
+    const roll=b.rolling||{}, ev=b.last_eval||{}, lp=b.last_promotion||{};
+    const rcomp=roll.reward_components||{};
+    const promoTxt=(lp&&('promote'in lp))?(lp.promote?'PROMOTED v'+String(b.champion_version):'REJECTED'):'noch keine';
+    const battleRows=[
+      ['⚔️','v'+String(b.learner_version||0)+' · '+brainFmt(b.learner_steps),'Training · Learner Steps'],
+      ['🏆',b.champion_version?'v'+String(b.champion_version):'RULE','Live · Battle Champion'],
+      ['🔬',b.next_promotion_step?brainFmt(b.next_promotion_step):'–','Nächste Champion-Prüfung (Steps)'],
+      ['🔁',brainFmt(b.ppo_updates),'PPO Updates'],
+      ['<img class="battler-icon" src="/battler.png" alt="">',brainFmt(b.episodes),'Battle Episoden (gesamt)'],
+      ['💰',(Number(roll.avg_reward_last_100||0)).toFixed(2),'Ø Reward · letzte 100'],
+      ['🏅',pct(roll.win_rate_200),'Siegrate · letzte 200'],
+      ['☠️',pct(roll.wipe_rate_200),'Wipe-Rate · letzte 200'],
+      ['🏃',pct(roll.flee_rate_200),'Flucht-Rate · letzte 200'],
+      ['⏱️',(Number(roll.avg_turns_on_win||0)).toFixed(1),'Ø Züge bei Sieg'],
+      ['❤️',pct(ev.avg_residual_hp_on_win),'Ø Rest-HP bei Sieg (letzte Prüfung)'],
+      ['⏳',brainFmt(b.timeouts),'echte Timeouts (gesamt)'],
+      ['🧪',brainFmt(b.scenario_count)+' / '+brainFmt(ev.scenario_coverage||0),'Szenarien vorhanden / in Prüfung'],
+      ['🔎',promoTxt,'Ergebnis letzte Prüfung'],
+    ];
+    const rewBars=[
+      ['Schaden',rcomp.damage,1],['Gegner-KO',rcomp.enemy_ko,1],['Sieg',rcomp.battle_win,1],
+      ['Faint',rcomp.own_faint,-1],['Wipe',rcomp.wipe,-1],['Flucht',rcomp.fled,-1],
+      ['Zug-Kosten',rcomp.turn_cost,-1],['ungültig',rcomp.invalid_action,-1],['Switch-Loop',rcomp.switch_loop,-1],
+    ];
+    const maxAbs=Math.max(1,...rewBars.map(x=>Math.abs(Number(x[1]||0))));
+    const rewHtml=rewBars.map(x=>{const v=Number(x[1]||0);const w=(Math.abs(v)/maxAbs*100).toFixed(0);
+      return `<div class="rew-row"><span class="rew-k">${x[0]}</span><span class="rew-bar"><i style="width:${w}%;background:${v>=0?'#3fb96b':'#d9534f'}"></i></span><span class="rew-v">${v>=0?'+':''}${v.toFixed(1)}</span></div>`;}).join('');
+    const reason=lp.reason?`<div class="bp-reason"><b>${lp.promote?'Prüfung bestanden':'Ablehnungsgrund'}:</b> ${String(lp.reason)}</div>`:'';
+    // spec ZIEL C.9: wild-encounter + shiny counters, separate per agent class,
+    // straight from the persisted event counters. Clearly flag unverified RAM.
+    const sh=latestBrains.shiny||{};
+    const scl=sh.by_agent_class||{};
+    const shName={battle_fighter:'Battle-Fighter',full_agent:'FULL-Agenten',watcher:'Watcher'};
+    const shRow=(cls)=>{const c=scl[cls]||{};
+      const lost=(Number(c.shiny_ko||0)+Number(c.shiny_fled||0)+Number(c.shiny_lost_wipe||0));
+      return `<div class="rew-row" style="grid-template-columns:120px repeat(5,1fr)">`+
+        `<span class="rew-k">${shName[cls]||cls}</span>`+
+        `<span class="rew-k">Enc ${brainFmt(c.wild_encounters||0)}</span>`+
+        `<span class="rew-k">✨ ${brainFmt(c.shiny_encounters_verified||0)}</span>`+
+        `<span class="rew-k">🎣 ${brainFmt(c.shiny_caught||0)}</span>`+
+        `<span class="rew-k">💔 ${brainFmt(lost)}</span>`+
+        `<span class="rew-v">? ${brainFmt(c.shiny_ram_unknown||0)}</span></div>`;};
+    const ramBad=!(sh.ram_verified);
+    const shBanner=ramBad
+      ? `<div class="bp-reason" style="border-color:#d9534f;color:#ffb3b3"><b>SHINY-RAM NICHT VERIFIZIERT</b> — PID/TID/SID für BPRD unbestätigt. `+
+        `Kein Shiny wird gezählt oder belohnt, kein Fang. Status: ${sh.ram_status||'shiny_ram_unverified'}. `+
+        `Freischalten via <code>tools/shiny_ram_probe.py</code>.</div>`
+      : `<div class="bp-reason" style="border-color:#3fb96b;color:#b7f2c9"><b>Shiny-RAM verifiziert</b></div>`;
+    const shList=(sh.recent_shinies||[]).slice(0,6).map(r=>
+      `<div class="rew-row" style="grid-template-columns:1fr 1fr 1fr 1fr"><span class="rew-k">#${r.species_id||'?'} L${r.level||'?'}</span>`+
+      `<span class="rew-k">${r.area||'?'}</span><span class="rew-k">${r.agent_class||'?'}</span>`+
+      `<span class="rew-v">${r.outcome||'pending'}</span></div>`).join('');
+    const shinySection=`<section class="status-brain-group battle"><div class="status-brain-head">✨ Shiny &amp; Wild-Encounter <span>${ramBad?'RAM UNVERIFIZIERT':'RAM OK'}</span></div>`+
+      shBanner+
+      `<div class="rew-break"><div class="rew-break-h">pro Agent-Klasse · Encounter · ✨ gesehen (verifiziert) · 🎣 gefangen · 💔 verloren (KO/Flucht/Wipe) · ? unbekannt/unverifiziert</div>`+
+      shRow('battle_fighter')+shRow('full_agent')+shRow('watcher')+`</div>`+
+      (shList?`<div class="rew-break"><div class="rew-break-h">Letzte verifizierte Shinys</div>${shList}</div>`:'')+
+      `</section>`;
+    status.innerHTML=`<section class="status-brain-group nav"><div class="status-brain-head">🧠 Navigation Brain <span>${String(n.phase||'training').replaceAll('_',' ').toUpperCase()}</span></div><div class="status-brain-grid">${cards(navRows)}</div>`+
+      (navAgentRows?`<div class="rew-break"><div class="rew-break-h">Gerichtete Navigation · pro Agent (Next-Hop · Distanz/Best · Loop/Timeout · Steps seit Verbesserung)</div>${navAgentRows}</div>`:'')+
+      `</section>`+
+      `<section class="status-brain-group battle"><div class="status-brain-head">⚔️ Battle Brain <span>${String(b.phase||'training').replaceAll('_',' ').toUpperCase()}</span></div><div class="status-brain-grid">${cards(battleRows)}</div>`+
+      `<div class="rew-break"><div class="rew-break-h">Reward-Aufschlüsselung (seit Prozessstart · Summe ${Number(rcomp&&roll.reward_sum||0).toFixed(0)})</div>${rewHtml}</div>${reason}</section>`+
+      shinySection;
+  }
+}
+async function refreshBrains(){try{const r=await fetch('/api/brains?ts='+Date.now());renderBrainArchitecture(await r.json());}catch(e){}}
+setInterval(refreshBrains,1000);refreshBrains();
 </script>
 <div id="pkmai-hidden-tray"></div>
-
-<script id="learner-truth-js">async function refreshLearnerTruth(){try{const r=await fetch('/api/trainer-status?ts='+Date.now());const d=await r.json();const f=n=>Number(n||0).toLocaleString('de-DE');document.getElementById('lth-learner').textContent=f(d.learner_steps);document.getElementById('lth-champion').textContent=f(d.champion_steps);document.getElementById('lth-delta').textContent=(Number(d.delta_steps||0)>=0?'+':'')+f(d.delta_steps);}catch(e){}}setInterval(refreshLearnerTruth,1000);refreshLearnerTruth();</script>
 
 <script id="fixed-workspace-layout">
 (function(){

@@ -1,5 +1,18 @@
 # Pokemon FireRed AI – PROJECT STATUS / TODO
 
+> **2026-09-07:** the Navigation/Battle 2×2 split was **cut over and is training
+> now** (`scripts/start_2x2_visible.sh`, `PKMAI_TWOBY2_LIVE=1`) — 40 FULL nav
+> workers on one PPO + 9 battle workers on a separate PPO. Open follow-ups
+> (battle win rate 0, live SWITCH masked, legacy cleanup):
+> [`BIG_CHANGES_TODO.md`](BIG_CHANGES_TODO.md) §0. What runs today +
+> delta rounds: [`CURRENT_LOGIC.md`](CURRENT_LOGIC.md).
+> The dated records below are the legacy single-PPO history (rollback path).
+>
+> **2026-09-08:** directed nav graph + Route-1 progress-blocker fix + Catch-v2 +
+> grass/shiny telemetry — **built, 827 tests green, committed, NOT live-activated**.
+> Go-live checklist + root-cause write-up:
+> [`BIG_CHANGES_TODO.md`](BIG_CHANGES_TODO.md) §0b, [`AI_STATUS.md`](AI_STATUS.md).
+
 ## Consolidated review — 2026-09-06
 
 Current behavior and exact reward values: [CURRENT_LOGIC.md](CURRENT_LOGIC.md).

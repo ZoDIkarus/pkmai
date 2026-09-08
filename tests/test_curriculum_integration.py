@@ -103,6 +103,223 @@ class CheckpointIntegrationTests(unittest.TestCase):
             self.assertTrue(e._load_curriculum_state('stage_1'))
             self.assertEqual(e.memory, b'pallet state')
 
+    def _frontier_env(self):
+        e = self.env(45)  # FRONTIER rank
+        e.memory = b'frontier state'
+        e.route_steps = 20
+        e._starter_species = lambda: 7
+        e._stage_at_current_location = lambda *a: 2
+        e._current_frontier_value = lambda *a: 50.0
+        e._v20_can_create_stage_checkpoint = lambda *a: True
+        return e
+
+    def _save(self, e, kind, **frontier_kw):
+        loc = dict(trusted=True, map_bank=3, map_id=19, x_pos=10, y_pos=8)
+        with patch.object(pokemon_env, 'read_player_location', return_value=loc):
+            return e._save_stage_checkpoint(2, 3, 19, 10, 8, kind=kind, **frontier_kw)
+
+    def test_case1_entry_checkpoint_still_rejects_sub_80pct_party(self):
+        e = self._frontier_env()
+        hurt = [{'checksum_ok': True, 'cur_hp': 12, 'max_hp': 20, 'status': 0,
+                 'moves': [{'pp': 10}]},
+                {'checksum_ok': True, 'cur_hp': 12, 'max_hp': 20, 'status': 0,
+                 'moves': [{'pp': 10}]}]
+        with patch.object(pokemon_env, 'read_player_party', return_value=hurt):
+            self.assertFalse(self._save(e, 'entry'))       # 60% -> below strict 80%
+        healthy = [{'checksum_ok': True, 'cur_hp': 20, 'max_hp': 20, 'status': 0,
+                    'moves': [{'pp': 10}]}]
+        with patch.object(pokemon_env, 'read_player_party', return_value=healthy):
+            self.assertTrue(self._save(e, 'entry'))
+
+    def test_case2_frontier_checkpoint_accepts_viable_not_ready_party(self):
+        e = self._frontier_env()
+        hurt = [{'checksum_ok': True, 'cur_hp': 12, 'max_hp': 20, 'status': 0,
+                 'moves': [{'pp': 10}]},
+                {'checksum_ok': True, 'cur_hp': 12, 'max_hp': 20, 'status': 0,
+                 'moves': [{'pp': 10}]}]
+        with patch.object(pokemon_env, 'read_player_party', return_value=hurt):
+            self.assertTrue(self._save(e, 'frontier', frontier_score=50))
+        meta = e._read_stage_meta('stage_frontier_2')
+        self.assertFalse(meta['party_ready'])
+        self.assertTrue(meta['frontier_viable'])
+        self.assertIn('party_total_hp_ratio', meta)
+        # and it is resolvable as a frontier start
+        self.assertEqual(e._v20_stage_checkpoint_name(2, 'frontier'),
+                         'stage_frontier_2')
+
+    def test_case3_frontier_checkpoint_rejects_unplayable_party(self):
+        e = self._frontier_env()
+        dead = [{'checksum_ok': True, 'cur_hp': 0, 'max_hp': 20, 'status': 0,
+                 'moves': [{'pp': 10}]},
+                {'checksum_ok': True, 'cur_hp': 2, 'max_hp': 20, 'status': 0,
+                 'moves': [{'pp': 10}]}]
+        with patch.object(pokemon_env, 'read_player_party', return_value=dead):
+            self.assertFalse(self._save(e, 'frontier', frontier_score=99))
+
+    # ---- fixed per-stage healthy safe fallback ---------------------------
+
+    _HEALTHY = [{'checksum_ok': True, 'cur_hp': 20, 'max_hp': 20, 'status': 0,
+                 'moves': [{'pp': 10}]},
+                {'checksum_ok': True, 'cur_hp': 20, 'max_hp': 20, 'status': 0,
+                 'moves': [{'pp': 10}]}]
+    _HURT = [{'checksum_ok': True, 'cur_hp': 12, 'max_hp': 20, 'status': 0,
+              'moves': [{'pp': 10}]},
+             {'checksum_ok': True, 'cur_hp': 12, 'max_hp': 20, 'status': 0,
+              'moves': [{'pp': 10}]}]
+
+    def _safe_files(self):
+        return sorted(p.name for p in self.root.glob('stage_frontier_safe_2*'))
+
+    def _downgrade_scenario(self):
+        e = self._frontier_env()
+        # 1) healthy anchor
+        e.memory = b'healthy-frontier-state'
+        with patch.object(pokemon_env, 'read_player_party', return_value=self._HEALTHY):
+            self.assertTrue(self._save(e, 'frontier', frontier_score=40))
+        self.assertEqual(self._safe_files(), [])       # nothing captured yet
+        # 2) same anchor, deeper, HURT party -> triggers the one-time capture
+        e.memory = b'hurt-frontier-state'
+        with patch.object(pokemon_env, 'read_player_party', return_value=self._HURT):
+            self.assertTrue(self._save(e, 'frontier', frontier_score=44))
+        return e
+
+    def test_safe_fallback_captured_before_first_weak_overwrite(self):
+        e = self._downgrade_scenario()
+        self.assertEqual(
+            self._safe_files(),
+            ['stage_frontier_safe_2.meta.json', 'stage_frontier_safe_2.state.gz'])
+        with gzip.open(self.root / 'stage_frontier_safe_2.state.gz', 'rb') as f:
+            self.assertEqual(f.read(), b'healthy-frontier-state')
+        smeta = json.loads((self.root / 'stage_frontier_safe_2.meta.json').read_text())
+        self.assertTrue(smeta['party_ready'])
+        self.assertEqual(smeta['frontier_score'], 40.0)
+        self.assertEqual(smeta['kind'], 'frontier_safe')
+        # main anchor is now the hurt state
+        m = e._read_stage_meta('stage_frontier_2')
+        self.assertFalse(m['party_ready'])
+        self.assertTrue(m['frontier_viable'])
+
+    def test_weak_state_never_overwrites_the_safe_fallback(self):
+        e = self._downgrade_scenario()
+        e.memory = b'even-weaker-state'
+        weaker = [{'checksum_ok': True, 'cur_hp': 10, 'max_hp': 20, 'status': 0,
+                   'moves': [{'pp': 10}]},
+                  {'checksum_ok': True, 'cur_hp': 10, 'max_hp': 20, 'status': 0,
+                   'moves': [{'pp': 10}]}]
+        with patch.object(pokemon_env, 'read_player_party', return_value=weaker):
+            self.assertTrue(self._save(e, 'frontier', frontier_score=48))   # +>=3
+        with gzip.open(self.root / 'stage_frontier_safe_2.state.gz', 'rb') as f:
+            self.assertEqual(f.read(), b'healthy-frontier-state')  # unchanged
+
+    def test_exactly_one_safe_fallback_file_pair_per_stage(self):
+        e = self._downgrade_scenario()
+        for score, mem in ((52, b'w1'), (60, b'w2'), (70, b'w3')):
+            e.memory = mem
+            with patch.object(pokemon_env, 'read_player_party', return_value=self._HURT):
+                self._save(e, 'frontier', frontier_score=score)
+        self.assertEqual(len(list(self.root.glob('stage_frontier_safe_2.state.gz'))), 1)
+        self.assertEqual(len(list(self.root.glob('stage_frontier_safe_*'))), 2)  # state + meta
+
+    def test_episode_start_routes_a_deterministic_minority_to_the_safe_fallback(self):
+        self._downgrade_scenario()   # main anchor hurt, safe fallback present
+        # FRONTIER ranks are 41-50 at n_envs=60. rank % 3 == 0 -> safe fallback.
+        got = {}
+        for rank in range(41, 51):
+            got[rank] = self.env(rank)._choose_episode_start()
+        safe_ranks = [r for r, v in got.items() if v == 'stage_frontier_safe_2']
+        main_ranks = [r for r, v in got.items() if v == 'stage_frontier_2']
+        self.assertEqual(safe_ranks, [42, 45, 48])
+        self.assertEqual(sorted(main_ranks), [41, 43, 44, 46, 47, 49, 50])
+        # deterministic: identical result on a repeat
+        self.assertEqual([self.env(r)._choose_episode_start() for r in range(41, 51)],
+                         list(got.values()))
+        # when the main anchor is HEALTHY again, everyone uses the main anchor
+        e = self._frontier_env()
+        e.memory = b'healed'
+        with patch.object(pokemon_env, 'read_player_party', return_value=self._HEALTHY):
+            self.assertTrue(self._save(e, 'frontier', frontier_score=44))
+        self.assertTrue(all(self.env(r)._choose_episode_start() == 'stage_frontier_2'
+                            for r in range(41, 51)))
+
+    # ---- safe fallback: strict-only + FIGHTER isolation -----------------
+
+    def _put_frontier_meta(self, name, *, party_ready, frontier_viable=True,
+                           score=40.0, content=None):
+        data = (content or name).encode()
+        with gzip.open(self.root / (name + '.state.gz'), 'wb') as f:
+            f.write(data)
+        meta = dict(state_validation=1, stage=2, bank=3, map=19, x=12, y=30,
+                    has_starter=True, frontier_score=score,
+                    frontier_metric_version=2,
+                    state_sha256=hashlib.sha256(data).hexdigest())
+        if party_ready is not None:
+            meta['party_ready'] = party_ready
+        if frontier_viable is not None:
+            meta['frontier_viable'] = frontier_viable
+        (self.root / (name + '.meta.json')).write_text(json.dumps(meta))
+
+    def test_safe_fallback_meta_without_party_ready_is_rejected_by_name_resolver(self):
+        e = self.env(45)
+        for missing in ({}, dict(party_ready=False), dict(party_ready=None),
+                        dict(party_ready='yes')):
+            (self.root / 'stage_frontier_safe_2.meta.json').unlink(missing_ok=True)
+            (self.root / 'stage_frontier_safe_2.state.gz').unlink(missing_ok=True)
+            data = b's'
+            with gzip.open(self.root / 'stage_frontier_safe_2.state.gz', 'wb') as f:
+                f.write(data)
+            meta = dict(state_validation=1, stage=2, bank=3, map=19, x=12, y=30,
+                        has_starter=True,
+                        state_sha256=hashlib.sha256(data).hexdigest(), **missing)
+            (self.root / 'stage_frontier_safe_2.meta.json').write_text(json.dumps(meta))
+            e.saved_milestones = e._discover_saved_milestones()
+            self.assertIsNone(e._v20_stage_checkpoint_name(2, 'frontier_safe'), missing)
+        # only a strict party_ready True is accepted
+        self._put_frontier_meta('stage_frontier_safe_2', party_ready=True)
+        e.saved_milestones = e._discover_saved_milestones()
+        self.assertEqual(e._v20_stage_checkpoint_name(2, 'frontier_safe'),
+                         'stage_frontier_safe_2')
+
+    def test_viable_but_hurt_safe_state_is_rejected_at_actual_load(self):
+        e = self.env(45)
+        e.memory = b'initial'
+        # a "safe" file that is actually only viable/hurt must not load
+        self._put_frontier_meta('stage_frontier_safe_2', party_ready=False,
+                                content='hurt-safe')
+        loc = dict(trusted=True, map_bank=3, map_id=19, x_pos=12, y_pos=30)
+        with patch.object(pokemon_env, 'read_player_location', return_value=loc), \
+             patch.object(pokemon_env, 'read_player_party', return_value=self._HURT):
+            self.assertFalse(e._load_curriculum_state('stage_frontier_safe_2'))
+        self.assertEqual(e.memory, b'initial')
+        # the same load succeeds once the restored party is party_ready
+        with patch.object(pokemon_env, 'read_player_location', return_value=loc), \
+             patch.object(pokemon_env, 'read_player_party', return_value=self._HEALTHY):
+            self.assertTrue(e._load_curriculum_state('stage_frontier_safe_2'))
+        self.assertEqual(e.memory, b'hurt-safe')
+
+    def test_fighter_with_hurt_main_and_healthy_safe_starts_from_safe(self):
+        e = self.env(58)   # FIGHTER rank
+        self._put_frontier_meta('stage_frontier_2', party_ready=False)
+        self._put_frontier_meta('stage_frontier_safe_2', party_ready=True)
+        self.write_checkpoint('stage_2', 2, 19)
+        e.saved_milestones = e._discover_saved_milestones()
+        self.assertEqual(e._choose_episode_start(), 'stage_frontier_safe_2')
+
+    def test_fighter_with_hurt_main_and_no_safe_starts_from_stage_2_entry(self):
+        e = self.env(58)
+        self._put_frontier_meta('stage_frontier_2', party_ready=False)
+        self.write_checkpoint('stage_2', 2, 19)
+        e.saved_milestones = e._discover_saved_milestones()
+        start = e._choose_episode_start()
+        self.assertEqual(start, 'stage_2')
+        self.assertNotEqual(start, 'stage_frontier_2')
+
+    def test_fighter_with_healthy_main_still_starts_from_frontier_anchor(self):
+        e = self.env(58)
+        self._put_frontier_meta('stage_frontier_2', party_ready=True)
+        self.write_checkpoint('stage_2', 2, 19)
+        e.saved_milestones = e._discover_saved_milestones()
+        self.assertEqual(e._choose_episode_start(), 'stage_frontier_2')
+
 
 class RewardAndLoopIntegrationTests(unittest.TestCase):
     @staticmethod

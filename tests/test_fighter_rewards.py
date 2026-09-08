@@ -108,3 +108,62 @@ class FrontierResetTests(unittest.TestCase):
             e=self.env(mode)
             for _ in range(200):
                 self.assertFalse(e._frontier_backtrack_expired(1,True,False))
+
+
+class PolicyContextAndWipeTests(unittest.TestCase):
+    """2026-09-07 Part-B: scout -> full policy context, obs shape stable,
+    FRONTIER wipes stay terminal, FIGHTER leash/reward untouched."""
+
+    def _e(self, objective, mode='FRONTIER'):
+        e = Env.__new__(Env)
+        e.training_objective = objective
+        e.training_mode = mode
+        return e
+
+    def test_case8_scout_produces_the_full_objective_one_hot(self):
+        full = self._e('full', 'FULL')
+        for objective, mode in (('scout', 'BRIDGE'), ('scout', 'FRONTIER'),
+                                ('scout', 'RETENTION'), ('scout', 'FIGHTER')):
+            e = self._e(objective, mode)
+            self.assertEqual(e._policy_objective(), 'full')
+            self.assertEqual(e._objective_one_hot(), full._objective_one_hot())
+        # exactly one slot hot, and it is the "full" slot
+        oh = self._e('scout', 'BRIDGE')._objective_one_hot()
+        self.assertEqual(sum(oh), 1.0)
+        self.assertEqual(oh[-1], 1.0)   # "full" is last in the names tuple
+
+    def test_case9_observation_shape(self):
+        import inspect
+        # 2026-09-08: nav_obs_v3_directed - the 4-float target block became the
+        # 9-float directed-graph block (next_hop etc). 31 -> 36.
+        src = inspect.getsource(Env.__init__)
+        self.assertIn('self.NAV_DIM = 36', src)
+        self.assertEqual(Env.NAV_OBS_SCHEMA, "nav_obs_v3_directed")
+        self.assertIn('shape=(self.NAV_DIM,)', src)
+        self.assertIn('shape=(self.IMAGE_STACK, 64, 64)', src)
+        # normalising scout->full only changes WHICH one-hot slot is 1.0, never
+        # the length (9), so the assembled nav vector keeps its size.
+        self.assertEqual(len(self._e('scout', 'BRIDGE')._objective_one_hot()), 9)
+        self.assertEqual(len(self._e('full', 'FULL')._objective_one_hot()), 9)
+        self.assertEqual(len(self._e('watcher', 'FULL')._objective_one_hot()), 9)
+
+    def test_case10_frontier_wipe_stays_episode_terminal(self):
+        import inspect
+        src = inspect.getsource(Env.step)
+        self.assertIn('_role_wipe_terminal', src)
+        # the terminal set is exactly FIGHTER + FRONTIER, gated on wipe_active
+        self.assertRegex(
+            src,
+            r'_role_wipe_terminal\s*=\s*\(\s*\n?\s*getattr\(self, "training_mode", ""\)\s*'
+            r'in \("FIGHTER", "FRONTIER"\)\s*\n?\s*and self\.wipe_active',
+        )
+
+    def test_case11_fighter_leash_and_reward_selection_unchanged(self):
+        import inspect
+        self.assertEqual(Env.FIGHTER_LEASH_STEPS, 400)
+        src = inspect.getsource(Env.step)
+        # FIGHTER reward is still ONLY combat_rewards (with the 2026-09-07 uncut
+        # multiplier), selected on training_mode, not the objective one-hot.
+        self.assertIn('FIGHTER_COMBAT_UNCUT_KEYS', src)
+        self.assertIn('getattr(self, "training_mode", "") == "FIGHTER"', src)
+        self.assertIn('self._fighter_out_of_battle_steps >= self.FIGHTER_LEASH_STEPS', src)

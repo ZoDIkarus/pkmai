@@ -257,39 +257,39 @@ class ProgressRegressionTests(unittest.TestCase):
         # ohne bekannten Uebergang: gar kein Ziel (kein Frontier-Fallback)
         e._combined_transitions = lambda: []
         self.assertEqual(e._pallet_route1_target(), [])
-        # V20 frontier redesign: die alte dichte +/-0.20 target_closer/
-        # target_farther-Schrittbelohnung ist entfernt. Distanz-Shaping laeuft
-        # jetzt AUSSCHLIESSLICH ueber den High-Watermark (route_progress_best /
-        # route_backtrack), Oszillation zahlt nichts.
+        # 2026-09-08: the undirected route_approach / target_shaper drip is
+        # gone. Distance shaping now runs on the DIRECTED movement graph:
+        #   * nav_next_hop           - once per directed edge per generation
+        #   * directed_progress_best - strict new directed-distance highwater
+        # Oscillation and ledge loops pay nothing.
         import inspect
         src = inspect.getsource(PokemonFireRedEnv.step)
         self.assertNotIn("target_closer", src)
         self.assertNotIn("target_farther", src)
-        self.assertIn("route_progress_best", src)
-        self.assertIn("route_backtrack", src)
-        # 2026-09-06 (user): potential-based approach gradient ON TOP of the
-        # high-watermark - BRIDGE/FULL barely saw a positive while walking to
-        # the exit. Telescoping (per-tile +/-, keyed to the objective, spike
-        # filtered) => a round trip nets 0, a real approach accumulates +.
-        self.assertIn("route_approach", src)
-        self.assertGreater(PokemonFireRedEnv.TARGET_APPROACH_REWARD, 0.0)
-        # smaller than a first-visit frontier tile, so exploitation of the
-        # proven route never out-earns genuine frontier discovery.
-        self.assertLess(PokemonFireRedEnv.TARGET_APPROACH_REWARD,
+        self.assertNotIn('f"route_approach:{_appr', src)   # old drip removed
+        self.assertIn("directed_progress_best", src)
+        self.assertIn("nav_next_hop", src)
+        self.assertIn("_nav_objective", src)
+        # the next-hop reward is smaller than a first-visit frontier tile, so
+        # exploiting a known route never out-earns genuine frontier discovery.
+        self.assertLess(PokemonFireRedEnv.NEXT_HOP_REWARD,
                         PokemonFireRedEnv.FULL_FRONTIER_TILE_REWARD)
+        self.assertLess(PokemonFireRedEnv.DIRECTED_PROGRESS_REWARD, 1.0)
 
     def test_potential_approach_shaping_round_trip_nets_zero(self):
-        # Mirror of the inline telescoping logic: walking out N tiles and back
-        # to the same distance must sum to exactly 0 (not farmable), while a
-        # net approach of K tiles pays +K * TARGET_APPROACH_REWARD.
+        # Exercise the actual component used by PokemonFireRedEnv.step:
+        # walking out N tiles and back to the same distance must sum to exactly
+        # 0 (not farmable), while a net approach of K tiles pays +K * reward.
         k = PokemonFireRedEnv.TARGET_APPROACH_REWARD
         dists = [20, 19, 18, 19, 20, 19, 18, 17, 16]  # ends 4 closer than start
         total = 0.0
         prev = dists[0]
         for d in dists[1:]:
-            delta = prev - d
-            if 0 < abs(delta) <= 4:
-                total += delta * k
+            total += PokemonFireRedEnv._directed_approach_component(
+                {"valid": True, "key": "route", "graph_distance": prev},
+                {"valid": True, "key": "route", "graph_distance": d},
+                moved_tiles=1,
+            )
             prev = d
         self.assertAlmostEqual(total, 4 * k)
         # pure oscillation 20<->19, returning to the start distance -> exactly 0
@@ -297,11 +297,26 @@ class ProgressRegressionTests(unittest.TestCase):
         t2 = 0.0
         p = osc[0]
         for d in osc[1:]:
-            dd = p - d
-            if 0 < abs(dd) <= 4:
-                t2 += dd * k
+            t2 += PokemonFireRedEnv._directed_approach_component(
+                {"valid": True, "key": "route", "graph_distance": p},
+                {"valid": True, "key": "route", "graph_distance": d},
+                moved_tiles=1,
+            )
             p = d
         self.assertAlmostEqual(t2, 0.0)
+
+        # It must fail closed for recovery, objective changes, legacy-only
+        # routes and implausible RAM/warp jumps.
+        good_prev = {"valid": True, "key": "route", "graph_distance": 9}
+        good_now = {"valid": True, "key": "route", "graph_distance": 8}
+        self.assertEqual(PokemonFireRedEnv._directed_approach_component(
+            good_prev, good_now, moved_tiles=1, recovery_frozen=True), 0.0)
+        self.assertEqual(PokemonFireRedEnv._directed_approach_component(
+            good_prev, {**good_now, "key": "next"}, moved_tiles=1), 0.0)
+        self.assertEqual(PokemonFireRedEnv._directed_approach_component(
+            good_prev, {**good_now, "valid": False}, moved_tiles=1), 0.0)
+        self.assertEqual(PokemonFireRedEnv._directed_approach_component(
+            good_prev, good_now, moved_tiles=5), 0.0)
 
     def test_bank4_interiors_never_get_the_500_city_building_reward(self):
         import inspect

@@ -51,7 +51,11 @@ graceful_stop() {
 
 # Der Trainer bekommt zuerst Ctrl+C/SIGINT. train.py faengt das Signal ab,
 # speichert Candidate + Resume und schliesst erst danach seine Worker.
-graceful_stop "Trainer" "[s]rc/train.py" 450
+graceful_stop "Navigation-Trainer" "[s]rc/train.py" 450
+# Der Battle-Trainer faengt SIGINT ebenfalls ab und schreibt battle_resume*.zip,
+# bevor er seine 9 Fighter-Worker schliesst. Muss VOR dem Battle-Watcher enden.
+graceful_stop "Battle-Trainer" "[s]rc/battle_train.py" 450
+graceful_stop "Battle-Watcher" "[t]ools/battle_mirror_watch.py" 100
 # Auch Watcher/Status duerfen ihren aktuellen Schreibvorgang abschliessen.
 graceful_stop "Watcher" "[s]rc/watch.py" 100
 graceful_stop "Mapper" "[s]rc/mapper.py" 450
@@ -86,7 +90,7 @@ done
 if command -v osascript >/dev/null 2>&1; then
   osascript <<'APPLESCRIPT' >/dev/null 2>&1 || true
 tell application "Terminal"
-  set serviceTitles to {"PKMAI TRAIN", "PKMAI WATCHER", "PKMAI MAPPER", "PKMAI WEB", "PKMAI STATUS"}
+  set serviceTitles to {"PKMai - Navigation", "PKMai - Battler", "PKMai - Battle Watcher", "PKMai - Watcher", "PKMai - Web", "PKMai - Status", "PKMAI TRAIN", "PKMAI WATCHER", "PKMAI MAPPER", "PKMAI WEB", "PKMAI STATUS"}
   repeat with i from (count of windows) to 1 by -1
     try
       set windowName to name of window i

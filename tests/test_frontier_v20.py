@@ -179,14 +179,20 @@ class RoleGatedTileRewardTests(unittest.TestCase):
         self.assertGreaterEqual(r_unknown, Env.FULL_FRONTIER_TILE_REWARD)
         self.assertTrue(any('new_tile_full:frontier' in e for e in ev_u))
 
-        # Same crossing proven twice -> FULL drops to the tiny anti-wall trickle.
+        # Same crossing proven twice -> FULL: a fleet-first tile on a proven
+        # stage is only the small one-off topology reward (2026-09-08 item 6).
         proven = KnownTransitions()
         for _ in range(2):
             proven.record(2, 3, (3, 19), (9, 0), (3, 1), (20, 40))
         r_proven, ev_p = self._run('FULL', known=proven)
-        self.assertLessEqual(r_proven, Env.FULL_NEW_TILE_REWARD)
+        self.assertLessEqual(r_proven, Env.TOPOLOGY_FIRST_REWARD)
         self.assertTrue(any('new_tile_full' in e and 'frontier' not in e
                             for e in ev_p))
+        # a fleet-KNOWN tile on a proven stage pays exactly 0
+        r_known, ev_k = self._run('FULL', known=proven,
+                                  shared={(3, 19, 12, 30): 1})
+        self.assertAlmostEqual(r_known, 0.0)
+        self.assertTrue(any(':known:' in e for e in ev_k), ev_k)
 
     def test_frontier_scout_still_paid_and_stacks_global_bonus(self):
         r_frontier, ev_f = self._run('FRONTIER')
@@ -222,9 +228,12 @@ class ExplorationBalanceTests(RoleGatedTileRewardTests):
         self.assertAlmostEqual(first,1.3)
         self.assertAlmostEqual(later,.3)
 
-    def test_known_ground_retains_cap(self):
+    def test_known_ground_past_the_cap_pays_zero(self):
+        # 2026-09-08: a fleet-known tile past the map cap used to pay +0.002
+        # forever (the permanent Pallet/Route farm). Now it pays exactly 0.
         known=KnownTransitions()
         for _ in range(2):known.record(2,3,(3,19),(9,0),(3,1),(20,40))
         for mode in ('FULL','FRONTIER'):
-            r,_=self._run(mode,known=known,count=100,shared={(3,19,12,30):1})
-            self.assertAlmostEqual(r,.002)
+            r,ev=self._run(mode,known=known,count=100,shared={(3,19,12,30):1})
+            self.assertAlmostEqual(r,0.0)
+            self.assertTrue(any(':known:' in e for e in ev), ev)

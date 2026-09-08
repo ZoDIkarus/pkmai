@@ -1,0 +1,8595 @@
+{
+ "_meta": {
+  "base_stats_rom_offset": "0x2546A8",
+  "generation": 3,
+  "moves_rom_offset": "0x250B28",
+  "note": "Reproducible extraction via tools/extract_gen3_data.py; no ROM bytes are stored, only derived mechanics tables.",
+  "schema": "gen3_battle_db_v1",
+  "source_rom_gamecode": "BPRD",
+  "source_rom_md5": "6648a0484a56097ca75d6af87ebce225",
+  "type_names": [
+   "Normal",
+   "Fighting",
+   "Flying",
+   "Poison",
+   "Ground",
+   "Rock",
+   "Bug",
+   "Ghost",
+   "Steel",
+   "???",
+   "Fire",
+   "Water",
+   "Grass",
+   "Electric",
+   "Psychic",
+   "Ice",
+   "Dragon",
+   "Dark"
+  ]
+ },
+ "species": {
+  "1": {
+   "ability1": 65,
+   "ability2": 0,
+   "base_attack": 49,
+   "base_defense": 49,
+   "base_exp_yield": 64,
+   "base_hp": 45,
+   "base_sp_attack": 65,
+   "base_sp_defense": 65,
+   "base_speed": 45,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Poison"
+   ],
+   "types": [
+    12,
+    3
+   ]
+  },
+  "10": {
+   "ability1": 19,
+   "ability2": 0,
+   "base_attack": 30,
+   "base_defense": 35,
+   "base_exp_yield": 53,
+   "base_hp": 45,
+   "base_sp_attack": 20,
+   "base_sp_defense": 20,
+   "base_speed": 45,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug"
+   ],
+   "types": [
+    6
+   ]
+  },
+  "100": {
+   "ability1": 43,
+   "ability2": 9,
+   "base_attack": 30,
+   "base_defense": 50,
+   "base_exp_yield": 103,
+   "base_hp": 40,
+   "base_sp_attack": 55,
+   "base_sp_defense": 55,
+   "base_speed": 100,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "101": {
+   "ability1": 43,
+   "ability2": 9,
+   "base_attack": 50,
+   "base_defense": 70,
+   "base_exp_yield": 150,
+   "base_hp": 60,
+   "base_sp_attack": 80,
+   "base_sp_defense": 80,
+   "base_speed": 140,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "102": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 40,
+   "base_defense": 80,
+   "base_exp_yield": 98,
+   "base_hp": 60,
+   "base_sp_attack": 60,
+   "base_sp_defense": 45,
+   "base_speed": 40,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Psychic"
+   ],
+   "types": [
+    12,
+    14
+   ]
+  },
+  "103": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 95,
+   "base_defense": 85,
+   "base_exp_yield": 212,
+   "base_hp": 95,
+   "base_sp_attack": 125,
+   "base_sp_defense": 65,
+   "base_speed": 55,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Psychic"
+   ],
+   "types": [
+    12,
+    14
+   ]
+  },
+  "104": {
+   "ability1": 69,
+   "ability2": 31,
+   "base_attack": 50,
+   "base_defense": 95,
+   "base_exp_yield": 87,
+   "base_hp": 50,
+   "base_sp_attack": 40,
+   "base_sp_defense": 50,
+   "base_speed": 35,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 224,
+   "type_names": [
+    "Ground"
+   ],
+   "types": [
+    4
+   ]
+  },
+  "105": {
+   "ability1": 69,
+   "ability2": 31,
+   "base_attack": 80,
+   "base_defense": 110,
+   "base_exp_yield": 124,
+   "base_hp": 60,
+   "base_sp_attack": 50,
+   "base_sp_defense": 80,
+   "base_speed": 45,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 224,
+   "type_names": [
+    "Ground"
+   ],
+   "types": [
+    4
+   ]
+  },
+  "106": {
+   "ability1": 7,
+   "ability2": 0,
+   "base_attack": 120,
+   "base_defense": 53,
+   "base_exp_yield": 139,
+   "base_hp": 50,
+   "base_sp_attack": 35,
+   "base_sp_defense": 110,
+   "base_speed": 87,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fighting"
+   ],
+   "types": [
+    1
+   ]
+  },
+  "107": {
+   "ability1": 51,
+   "ability2": 0,
+   "base_attack": 105,
+   "base_defense": 79,
+   "base_exp_yield": 140,
+   "base_hp": 50,
+   "base_sp_attack": 35,
+   "base_sp_defense": 110,
+   "base_speed": 76,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fighting"
+   ],
+   "types": [
+    1
+   ]
+  },
+  "108": {
+   "ability1": 20,
+   "ability2": 12,
+   "base_attack": 55,
+   "base_defense": 75,
+   "base_exp_yield": 127,
+   "base_hp": 90,
+   "base_sp_attack": 60,
+   "base_sp_defense": 75,
+   "base_speed": 30,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "109": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 95,
+   "base_exp_yield": 114,
+   "base_hp": 40,
+   "base_sp_attack": 60,
+   "base_sp_defense": 45,
+   "base_speed": 35,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison"
+   ],
+   "types": [
+    3
+   ]
+  },
+  "11": {
+   "ability1": 61,
+   "ability2": 0,
+   "base_attack": 20,
+   "base_defense": 55,
+   "base_exp_yield": 72,
+   "base_hp": 50,
+   "base_sp_attack": 25,
+   "base_sp_defense": 25,
+   "base_speed": 30,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug"
+   ],
+   "types": [
+    6
+   ]
+  },
+  "110": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 90,
+   "base_defense": 120,
+   "base_exp_yield": 173,
+   "base_hp": 65,
+   "base_sp_attack": 85,
+   "base_sp_defense": 70,
+   "base_speed": 60,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison"
+   ],
+   "types": [
+    3
+   ]
+  },
+  "111": {
+   "ability1": 31,
+   "ability2": 69,
+   "base_attack": 85,
+   "base_defense": 95,
+   "base_exp_yield": 135,
+   "base_hp": 80,
+   "base_sp_attack": 30,
+   "base_sp_defense": 30,
+   "base_speed": 25,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ground",
+    "Rock"
+   ],
+   "types": [
+    4,
+    5
+   ]
+  },
+  "112": {
+   "ability1": 31,
+   "ability2": 69,
+   "base_attack": 130,
+   "base_defense": 120,
+   "base_exp_yield": 204,
+   "base_hp": 105,
+   "base_sp_attack": 45,
+   "base_sp_defense": 45,
+   "base_speed": 40,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ground",
+    "Rock"
+   ],
+   "types": [
+    4,
+    5
+   ]
+  },
+  "113": {
+   "ability1": 30,
+   "ability2": 32,
+   "base_attack": 5,
+   "base_defense": 5,
+   "base_exp_yield": 255,
+   "base_hp": 250,
+   "base_sp_attack": 35,
+   "base_sp_defense": 105,
+   "base_speed": 50,
+   "catch_rate": 30,
+   "held_item1": 0,
+   "held_item2": 197,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "114": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 55,
+   "base_defense": 115,
+   "base_exp_yield": 166,
+   "base_hp": 65,
+   "base_sp_attack": 100,
+   "base_sp_defense": 40,
+   "base_speed": 60,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass"
+   ],
+   "types": [
+    12
+   ]
+  },
+  "115": {
+   "ability1": 48,
+   "ability2": 0,
+   "base_attack": 95,
+   "base_defense": 80,
+   "base_exp_yield": 175,
+   "base_hp": 105,
+   "base_sp_attack": 40,
+   "base_sp_defense": 80,
+   "base_speed": 90,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "116": {
+   "ability1": 33,
+   "ability2": 0,
+   "base_attack": 40,
+   "base_defense": 70,
+   "base_exp_yield": 83,
+   "base_hp": 30,
+   "base_sp_attack": 70,
+   "base_sp_defense": 25,
+   "base_speed": 60,
+   "catch_rate": 225,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "117": {
+   "ability1": 38,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 95,
+   "base_exp_yield": 155,
+   "base_hp": 55,
+   "base_sp_attack": 95,
+   "base_sp_defense": 45,
+   "base_speed": 85,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "118": {
+   "ability1": 33,
+   "ability2": 41,
+   "base_attack": 67,
+   "base_defense": 60,
+   "base_exp_yield": 111,
+   "base_hp": 45,
+   "base_sp_attack": 35,
+   "base_sp_defense": 50,
+   "base_speed": 63,
+   "catch_rate": 225,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "119": {
+   "ability1": 33,
+   "ability2": 41,
+   "base_attack": 92,
+   "base_defense": 65,
+   "base_exp_yield": 170,
+   "base_hp": 80,
+   "base_sp_attack": 65,
+   "base_sp_defense": 80,
+   "base_speed": 68,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "12": {
+   "ability1": 14,
+   "ability2": 0,
+   "base_attack": 45,
+   "base_defense": 50,
+   "base_exp_yield": 160,
+   "base_hp": 60,
+   "base_sp_attack": 80,
+   "base_sp_defense": 80,
+   "base_speed": 70,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 188,
+   "type_names": [
+    "Bug",
+    "Flying"
+   ],
+   "types": [
+    6,
+    2
+   ]
+  },
+  "120": {
+   "ability1": 35,
+   "ability2": 30,
+   "base_attack": 45,
+   "base_defense": 55,
+   "base_exp_yield": 106,
+   "base_hp": 30,
+   "base_sp_attack": 70,
+   "base_sp_defense": 55,
+   "base_speed": 85,
+   "catch_rate": 225,
+   "held_item1": 108,
+   "held_item2": 109,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "121": {
+   "ability1": 35,
+   "ability2": 30,
+   "base_attack": 75,
+   "base_defense": 85,
+   "base_exp_yield": 207,
+   "base_hp": 60,
+   "base_sp_attack": 100,
+   "base_sp_defense": 85,
+   "base_speed": 115,
+   "catch_rate": 60,
+   "held_item1": 108,
+   "held_item2": 109,
+   "type_names": [
+    "Water",
+    "Psychic"
+   ],
+   "types": [
+    11,
+    14
+   ]
+  },
+  "122": {
+   "ability1": 43,
+   "ability2": 0,
+   "base_attack": 45,
+   "base_defense": 65,
+   "base_exp_yield": 136,
+   "base_hp": 40,
+   "base_sp_attack": 100,
+   "base_sp_defense": 120,
+   "base_speed": 90,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "123": {
+   "ability1": 68,
+   "ability2": 0,
+   "base_attack": 110,
+   "base_defense": 80,
+   "base_exp_yield": 187,
+   "base_hp": 70,
+   "base_sp_attack": 55,
+   "base_sp_defense": 80,
+   "base_speed": 105,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Flying"
+   ],
+   "types": [
+    6,
+    2
+   ]
+  },
+  "124": {
+   "ability1": 12,
+   "ability2": 0,
+   "base_attack": 50,
+   "base_defense": 35,
+   "base_exp_yield": 137,
+   "base_hp": 65,
+   "base_sp_attack": 115,
+   "base_sp_defense": 95,
+   "base_speed": 95,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ice",
+    "Psychic"
+   ],
+   "types": [
+    15,
+    14
+   ]
+  },
+  "125": {
+   "ability1": 9,
+   "ability2": 0,
+   "base_attack": 83,
+   "base_defense": 57,
+   "base_exp_yield": 156,
+   "base_hp": 65,
+   "base_sp_attack": 95,
+   "base_sp_defense": 85,
+   "base_speed": 105,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "126": {
+   "ability1": 49,
+   "ability2": 0,
+   "base_attack": 95,
+   "base_defense": 57,
+   "base_exp_yield": 167,
+   "base_hp": 65,
+   "base_sp_attack": 100,
+   "base_sp_defense": 85,
+   "base_speed": 93,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "127": {
+   "ability1": 52,
+   "ability2": 0,
+   "base_attack": 125,
+   "base_defense": 100,
+   "base_exp_yield": 200,
+   "base_hp": 65,
+   "base_sp_attack": 55,
+   "base_sp_defense": 70,
+   "base_speed": 85,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug"
+   ],
+   "types": [
+    6
+   ]
+  },
+  "128": {
+   "ability1": 22,
+   "ability2": 0,
+   "base_attack": 100,
+   "base_defense": 95,
+   "base_exp_yield": 211,
+   "base_hp": 75,
+   "base_sp_attack": 40,
+   "base_sp_defense": 70,
+   "base_speed": 110,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "129": {
+   "ability1": 33,
+   "ability2": 0,
+   "base_attack": 10,
+   "base_defense": 55,
+   "base_exp_yield": 20,
+   "base_hp": 20,
+   "base_sp_attack": 15,
+   "base_sp_defense": 20,
+   "base_speed": 80,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "13": {
+   "ability1": 19,
+   "ability2": 0,
+   "base_attack": 35,
+   "base_defense": 30,
+   "base_exp_yield": 52,
+   "base_hp": 40,
+   "base_sp_attack": 20,
+   "base_sp_defense": 20,
+   "base_speed": 50,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Poison"
+   ],
+   "types": [
+    6,
+    3
+   ]
+  },
+  "130": {
+   "ability1": 22,
+   "ability2": 0,
+   "base_attack": 125,
+   "base_defense": 79,
+   "base_exp_yield": 214,
+   "base_hp": 95,
+   "base_sp_attack": 60,
+   "base_sp_defense": 100,
+   "base_speed": 81,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Flying"
+   ],
+   "types": [
+    11,
+    2
+   ]
+  },
+  "131": {
+   "ability1": 11,
+   "ability2": 75,
+   "base_attack": 85,
+   "base_defense": 80,
+   "base_exp_yield": 219,
+   "base_hp": 130,
+   "base_sp_attack": 85,
+   "base_sp_defense": 95,
+   "base_speed": 60,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Ice"
+   ],
+   "types": [
+    11,
+    15
+   ]
+  },
+  "132": {
+   "ability1": 7,
+   "ability2": 0,
+   "base_attack": 48,
+   "base_defense": 48,
+   "base_exp_yield": 61,
+   "base_hp": 48,
+   "base_sp_attack": 48,
+   "base_sp_defense": 48,
+   "base_speed": 48,
+   "catch_rate": 35,
+   "held_item1": 0,
+   "held_item2": 223,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "133": {
+   "ability1": 50,
+   "ability2": 0,
+   "base_attack": 55,
+   "base_defense": 50,
+   "base_exp_yield": 92,
+   "base_hp": 55,
+   "base_sp_attack": 45,
+   "base_sp_defense": 65,
+   "base_speed": 55,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "134": {
+   "ability1": 11,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 60,
+   "base_exp_yield": 196,
+   "base_hp": 130,
+   "base_sp_attack": 110,
+   "base_sp_defense": 95,
+   "base_speed": 65,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "135": {
+   "ability1": 10,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 60,
+   "base_exp_yield": 197,
+   "base_hp": 65,
+   "base_sp_attack": 110,
+   "base_sp_defense": 95,
+   "base_speed": 130,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "136": {
+   "ability1": 18,
+   "ability2": 0,
+   "base_attack": 130,
+   "base_defense": 60,
+   "base_exp_yield": 198,
+   "base_hp": 65,
+   "base_sp_attack": 95,
+   "base_sp_defense": 110,
+   "base_speed": 65,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "137": {
+   "ability1": 36,
+   "ability2": 0,
+   "base_attack": 60,
+   "base_defense": 70,
+   "base_exp_yield": 130,
+   "base_hp": 65,
+   "base_sp_attack": 85,
+   "base_sp_defense": 75,
+   "base_speed": 40,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "138": {
+   "ability1": 33,
+   "ability2": 75,
+   "base_attack": 40,
+   "base_defense": 100,
+   "base_exp_yield": 120,
+   "base_hp": 35,
+   "base_sp_attack": 90,
+   "base_sp_defense": 55,
+   "base_speed": 35,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock",
+    "Water"
+   ],
+   "types": [
+    5,
+    11
+   ]
+  },
+  "139": {
+   "ability1": 33,
+   "ability2": 75,
+   "base_attack": 60,
+   "base_defense": 125,
+   "base_exp_yield": 199,
+   "base_hp": 70,
+   "base_sp_attack": 115,
+   "base_sp_defense": 70,
+   "base_speed": 55,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock",
+    "Water"
+   ],
+   "types": [
+    5,
+    11
+   ]
+  },
+  "14": {
+   "ability1": 61,
+   "ability2": 0,
+   "base_attack": 25,
+   "base_defense": 50,
+   "base_exp_yield": 71,
+   "base_hp": 45,
+   "base_sp_attack": 25,
+   "base_sp_defense": 25,
+   "base_speed": 35,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Poison"
+   ],
+   "types": [
+    6,
+    3
+   ]
+  },
+  "140": {
+   "ability1": 33,
+   "ability2": 4,
+   "base_attack": 80,
+   "base_defense": 90,
+   "base_exp_yield": 119,
+   "base_hp": 30,
+   "base_sp_attack": 55,
+   "base_sp_defense": 45,
+   "base_speed": 55,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock",
+    "Water"
+   ],
+   "types": [
+    5,
+    11
+   ]
+  },
+  "141": {
+   "ability1": 33,
+   "ability2": 4,
+   "base_attack": 115,
+   "base_defense": 105,
+   "base_exp_yield": 201,
+   "base_hp": 60,
+   "base_sp_attack": 65,
+   "base_sp_defense": 70,
+   "base_speed": 80,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock",
+    "Water"
+   ],
+   "types": [
+    5,
+    11
+   ]
+  },
+  "142": {
+   "ability1": 69,
+   "ability2": 46,
+   "base_attack": 105,
+   "base_defense": 65,
+   "base_exp_yield": 202,
+   "base_hp": 80,
+   "base_sp_attack": 60,
+   "base_sp_defense": 75,
+   "base_speed": 130,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock",
+    "Flying"
+   ],
+   "types": [
+    5,
+    2
+   ]
+  },
+  "143": {
+   "ability1": 17,
+   "ability2": 47,
+   "base_attack": 110,
+   "base_defense": 65,
+   "base_exp_yield": 154,
+   "base_hp": 160,
+   "base_sp_attack": 65,
+   "base_sp_defense": 110,
+   "base_speed": 30,
+   "catch_rate": 25,
+   "held_item1": 134,
+   "held_item2": 134,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "144": {
+   "ability1": 46,
+   "ability2": 0,
+   "base_attack": 85,
+   "base_defense": 100,
+   "base_exp_yield": 215,
+   "base_hp": 90,
+   "base_sp_attack": 95,
+   "base_sp_defense": 125,
+   "base_speed": 85,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ice",
+    "Flying"
+   ],
+   "types": [
+    15,
+    2
+   ]
+  },
+  "145": {
+   "ability1": 46,
+   "ability2": 0,
+   "base_attack": 90,
+   "base_defense": 85,
+   "base_exp_yield": 216,
+   "base_hp": 90,
+   "base_sp_attack": 125,
+   "base_sp_defense": 90,
+   "base_speed": 100,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric",
+    "Flying"
+   ],
+   "types": [
+    13,
+    2
+   ]
+  },
+  "146": {
+   "ability1": 46,
+   "ability2": 0,
+   "base_attack": 100,
+   "base_defense": 90,
+   "base_exp_yield": 217,
+   "base_hp": 90,
+   "base_sp_attack": 125,
+   "base_sp_defense": 85,
+   "base_speed": 90,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire",
+    "Flying"
+   ],
+   "types": [
+    10,
+    2
+   ]
+  },
+  "147": {
+   "ability1": 61,
+   "ability2": 0,
+   "base_attack": 64,
+   "base_defense": 45,
+   "base_exp_yield": 67,
+   "base_hp": 41,
+   "base_sp_attack": 50,
+   "base_sp_defense": 50,
+   "base_speed": 50,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Dragon"
+   ],
+   "types": [
+    16
+   ]
+  },
+  "148": {
+   "ability1": 61,
+   "ability2": 0,
+   "base_attack": 84,
+   "base_defense": 65,
+   "base_exp_yield": 144,
+   "base_hp": 61,
+   "base_sp_attack": 70,
+   "base_sp_defense": 70,
+   "base_speed": 70,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 216,
+   "type_names": [
+    "Dragon"
+   ],
+   "types": [
+    16
+   ]
+  },
+  "149": {
+   "ability1": 39,
+   "ability2": 0,
+   "base_attack": 134,
+   "base_defense": 95,
+   "base_exp_yield": 218,
+   "base_hp": 91,
+   "base_sp_attack": 100,
+   "base_sp_defense": 100,
+   "base_speed": 80,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 216,
+   "type_names": [
+    "Dragon",
+    "Flying"
+   ],
+   "types": [
+    16,
+    2
+   ]
+  },
+  "15": {
+   "ability1": 68,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 40,
+   "base_exp_yield": 159,
+   "base_hp": 65,
+   "base_sp_attack": 45,
+   "base_sp_defense": 80,
+   "base_speed": 75,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 211,
+   "type_names": [
+    "Bug",
+    "Poison"
+   ],
+   "types": [
+    6,
+    3
+   ]
+  },
+  "150": {
+   "ability1": 46,
+   "ability2": 0,
+   "base_attack": 110,
+   "base_defense": 90,
+   "base_exp_yield": 220,
+   "base_hp": 106,
+   "base_sp_attack": 154,
+   "base_sp_defense": 90,
+   "base_speed": 130,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "151": {
+   "ability1": 28,
+   "ability2": 0,
+   "base_attack": 100,
+   "base_defense": 100,
+   "base_exp_yield": 64,
+   "base_hp": 100,
+   "base_sp_attack": 100,
+   "base_sp_defense": 100,
+   "base_speed": 100,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "152": {
+   "ability1": 65,
+   "ability2": 0,
+   "base_attack": 49,
+   "base_defense": 65,
+   "base_exp_yield": 64,
+   "base_hp": 45,
+   "base_sp_attack": 49,
+   "base_sp_defense": 65,
+   "base_speed": 45,
+   "catch_rate": 45,
+   "held_item1": 141,
+   "held_item2": 141,
+   "type_names": [
+    "Grass"
+   ],
+   "types": [
+    12
+   ]
+  },
+  "153": {
+   "ability1": 65,
+   "ability2": 0,
+   "base_attack": 62,
+   "base_defense": 80,
+   "base_exp_yield": 141,
+   "base_hp": 60,
+   "base_sp_attack": 63,
+   "base_sp_defense": 80,
+   "base_speed": 60,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass"
+   ],
+   "types": [
+    12
+   ]
+  },
+  "154": {
+   "ability1": 65,
+   "ability2": 0,
+   "base_attack": 82,
+   "base_defense": 100,
+   "base_exp_yield": 208,
+   "base_hp": 80,
+   "base_sp_attack": 83,
+   "base_sp_defense": 100,
+   "base_speed": 80,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass"
+   ],
+   "types": [
+    12
+   ]
+  },
+  "155": {
+   "ability1": 66,
+   "ability2": 0,
+   "base_attack": 52,
+   "base_defense": 43,
+   "base_exp_yield": 65,
+   "base_hp": 39,
+   "base_sp_attack": 60,
+   "base_sp_defense": 50,
+   "base_speed": 65,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "156": {
+   "ability1": 66,
+   "ability2": 0,
+   "base_attack": 64,
+   "base_defense": 58,
+   "base_exp_yield": 142,
+   "base_hp": 58,
+   "base_sp_attack": 80,
+   "base_sp_defense": 65,
+   "base_speed": 80,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "157": {
+   "ability1": 66,
+   "ability2": 0,
+   "base_attack": 84,
+   "base_defense": 78,
+   "base_exp_yield": 209,
+   "base_hp": 78,
+   "base_sp_attack": 109,
+   "base_sp_defense": 85,
+   "base_speed": 100,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "158": {
+   "ability1": 67,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 64,
+   "base_exp_yield": 66,
+   "base_hp": 50,
+   "base_sp_attack": 44,
+   "base_sp_defense": 48,
+   "base_speed": 43,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "159": {
+   "ability1": 67,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 80,
+   "base_exp_yield": 143,
+   "base_hp": 65,
+   "base_sp_attack": 59,
+   "base_sp_defense": 63,
+   "base_speed": 58,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "16": {
+   "ability1": 51,
+   "ability2": 0,
+   "base_attack": 45,
+   "base_defense": 40,
+   "base_exp_yield": 55,
+   "base_hp": 40,
+   "base_sp_attack": 35,
+   "base_sp_defense": 35,
+   "base_speed": 56,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal",
+    "Flying"
+   ],
+   "types": [
+    0,
+    2
+   ]
+  },
+  "160": {
+   "ability1": 67,
+   "ability2": 0,
+   "base_attack": 105,
+   "base_defense": 100,
+   "base_exp_yield": 210,
+   "base_hp": 85,
+   "base_sp_attack": 79,
+   "base_sp_defense": 83,
+   "base_speed": 78,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "161": {
+   "ability1": 50,
+   "ability2": 51,
+   "base_attack": 46,
+   "base_defense": 34,
+   "base_exp_yield": 57,
+   "base_hp": 35,
+   "base_sp_attack": 35,
+   "base_sp_defense": 45,
+   "base_speed": 20,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 139,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "162": {
+   "ability1": 50,
+   "ability2": 51,
+   "base_attack": 76,
+   "base_defense": 64,
+   "base_exp_yield": 116,
+   "base_hp": 85,
+   "base_sp_attack": 45,
+   "base_sp_defense": 55,
+   "base_speed": 90,
+   "catch_rate": 90,
+   "held_item1": 139,
+   "held_item2": 142,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "163": {
+   "ability1": 15,
+   "ability2": 51,
+   "base_attack": 30,
+   "base_defense": 30,
+   "base_exp_yield": 58,
+   "base_hp": 60,
+   "base_sp_attack": 36,
+   "base_sp_defense": 56,
+   "base_speed": 50,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal",
+    "Flying"
+   ],
+   "types": [
+    0,
+    2
+   ]
+  },
+  "164": {
+   "ability1": 15,
+   "ability2": 51,
+   "base_attack": 50,
+   "base_defense": 50,
+   "base_exp_yield": 162,
+   "base_hp": 100,
+   "base_sp_attack": 76,
+   "base_sp_defense": 96,
+   "base_speed": 70,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal",
+    "Flying"
+   ],
+   "types": [
+    0,
+    2
+   ]
+  },
+  "165": {
+   "ability1": 68,
+   "ability2": 48,
+   "base_attack": 20,
+   "base_defense": 30,
+   "base_exp_yield": 54,
+   "base_hp": 40,
+   "base_sp_attack": 40,
+   "base_sp_defense": 80,
+   "base_speed": 55,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Flying"
+   ],
+   "types": [
+    6,
+    2
+   ]
+  },
+  "166": {
+   "ability1": 68,
+   "ability2": 48,
+   "base_attack": 35,
+   "base_defense": 50,
+   "base_exp_yield": 134,
+   "base_hp": 55,
+   "base_sp_attack": 55,
+   "base_sp_defense": 110,
+   "base_speed": 85,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Flying"
+   ],
+   "types": [
+    6,
+    2
+   ]
+  },
+  "167": {
+   "ability1": 68,
+   "ability2": 15,
+   "base_attack": 60,
+   "base_defense": 40,
+   "base_exp_yield": 54,
+   "base_hp": 40,
+   "base_sp_attack": 40,
+   "base_sp_defense": 40,
+   "base_speed": 30,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Poison"
+   ],
+   "types": [
+    6,
+    3
+   ]
+  },
+  "168": {
+   "ability1": 68,
+   "ability2": 15,
+   "base_attack": 90,
+   "base_defense": 70,
+   "base_exp_yield": 134,
+   "base_hp": 70,
+   "base_sp_attack": 60,
+   "base_sp_defense": 60,
+   "base_speed": 40,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Poison"
+   ],
+   "types": [
+    6,
+    3
+   ]
+  },
+  "169": {
+   "ability1": 39,
+   "ability2": 0,
+   "base_attack": 90,
+   "base_defense": 80,
+   "base_exp_yield": 204,
+   "base_hp": 85,
+   "base_sp_attack": 70,
+   "base_sp_defense": 80,
+   "base_speed": 130,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison",
+    "Flying"
+   ],
+   "types": [
+    3,
+    2
+   ]
+  },
+  "17": {
+   "ability1": 51,
+   "ability2": 0,
+   "base_attack": 60,
+   "base_defense": 55,
+   "base_exp_yield": 113,
+   "base_hp": 63,
+   "base_sp_attack": 50,
+   "base_sp_defense": 50,
+   "base_speed": 71,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal",
+    "Flying"
+   ],
+   "types": [
+    0,
+    2
+   ]
+  },
+  "170": {
+   "ability1": 10,
+   "ability2": 35,
+   "base_attack": 38,
+   "base_defense": 38,
+   "base_exp_yield": 90,
+   "base_hp": 75,
+   "base_sp_attack": 56,
+   "base_sp_defense": 56,
+   "base_speed": 67,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 50,
+   "type_names": [
+    "Water",
+    "Electric"
+   ],
+   "types": [
+    11,
+    13
+   ]
+  },
+  "171": {
+   "ability1": 10,
+   "ability2": 35,
+   "base_attack": 58,
+   "base_defense": 58,
+   "base_exp_yield": 156,
+   "base_hp": 125,
+   "base_sp_attack": 76,
+   "base_sp_defense": 76,
+   "base_speed": 67,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 50,
+   "type_names": [
+    "Water",
+    "Electric"
+   ],
+   "types": [
+    11,
+    13
+   ]
+  },
+  "172": {
+   "ability1": 9,
+   "ability2": 0,
+   "base_attack": 40,
+   "base_defense": 15,
+   "base_exp_yield": 42,
+   "base_hp": 20,
+   "base_sp_attack": 35,
+   "base_sp_defense": 35,
+   "base_speed": 60,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "173": {
+   "ability1": 56,
+   "ability2": 0,
+   "base_attack": 25,
+   "base_defense": 28,
+   "base_exp_yield": 37,
+   "base_hp": 50,
+   "base_sp_attack": 45,
+   "base_sp_defense": 55,
+   "base_speed": 15,
+   "catch_rate": 150,
+   "held_item1": 0,
+   "held_item2": 94,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "174": {
+   "ability1": 56,
+   "ability2": 0,
+   "base_attack": 30,
+   "base_defense": 15,
+   "base_exp_yield": 39,
+   "base_hp": 90,
+   "base_sp_attack": 40,
+   "base_sp_defense": 20,
+   "base_speed": 15,
+   "catch_rate": 170,
+   "held_item1": 139,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "175": {
+   "ability1": 55,
+   "ability2": 32,
+   "base_attack": 20,
+   "base_defense": 65,
+   "base_exp_yield": 74,
+   "base_hp": 35,
+   "base_sp_attack": 40,
+   "base_sp_defense": 65,
+   "base_speed": 20,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "176": {
+   "ability1": 55,
+   "ability2": 32,
+   "base_attack": 40,
+   "base_defense": 85,
+   "base_exp_yield": 114,
+   "base_hp": 55,
+   "base_sp_attack": 80,
+   "base_sp_defense": 105,
+   "base_speed": 40,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal",
+    "Flying"
+   ],
+   "types": [
+    0,
+    2
+   ]
+  },
+  "177": {
+   "ability1": 28,
+   "ability2": 48,
+   "base_attack": 50,
+   "base_defense": 45,
+   "base_exp_yield": 73,
+   "base_hp": 40,
+   "base_sp_attack": 70,
+   "base_sp_defense": 45,
+   "base_speed": 70,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic",
+    "Flying"
+   ],
+   "types": [
+    14,
+    2
+   ]
+  },
+  "178": {
+   "ability1": 28,
+   "ability2": 48,
+   "base_attack": 75,
+   "base_defense": 70,
+   "base_exp_yield": 171,
+   "base_hp": 65,
+   "base_sp_attack": 95,
+   "base_sp_defense": 70,
+   "base_speed": 95,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic",
+    "Flying"
+   ],
+   "types": [
+    14,
+    2
+   ]
+  },
+  "179": {
+   "ability1": 9,
+   "ability2": 0,
+   "base_attack": 40,
+   "base_defense": 40,
+   "base_exp_yield": 59,
+   "base_hp": 55,
+   "base_sp_attack": 65,
+   "base_sp_defense": 45,
+   "base_speed": 35,
+   "catch_rate": 235,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "18": {
+   "ability1": 51,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 75,
+   "base_exp_yield": 172,
+   "base_hp": 83,
+   "base_sp_attack": 70,
+   "base_sp_defense": 70,
+   "base_speed": 91,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal",
+    "Flying"
+   ],
+   "types": [
+    0,
+    2
+   ]
+  },
+  "180": {
+   "ability1": 9,
+   "ability2": 0,
+   "base_attack": 55,
+   "base_defense": 55,
+   "base_exp_yield": 117,
+   "base_hp": 70,
+   "base_sp_attack": 80,
+   "base_sp_defense": 60,
+   "base_speed": 45,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "181": {
+   "ability1": 9,
+   "ability2": 0,
+   "base_attack": 75,
+   "base_defense": 75,
+   "base_exp_yield": 194,
+   "base_hp": 90,
+   "base_sp_attack": 115,
+   "base_sp_defense": 90,
+   "base_speed": 55,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "182": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 85,
+   "base_exp_yield": 184,
+   "base_hp": 75,
+   "base_sp_attack": 90,
+   "base_sp_defense": 100,
+   "base_speed": 50,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass"
+   ],
+   "types": [
+    12
+   ]
+  },
+  "183": {
+   "ability1": 47,
+   "ability2": 37,
+   "base_attack": 20,
+   "base_defense": 50,
+   "base_exp_yield": 58,
+   "base_hp": 70,
+   "base_sp_attack": 20,
+   "base_sp_defense": 50,
+   "base_speed": 40,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "184": {
+   "ability1": 47,
+   "ability2": 37,
+   "base_attack": 50,
+   "base_defense": 80,
+   "base_exp_yield": 153,
+   "base_hp": 100,
+   "base_sp_attack": 50,
+   "base_sp_defense": 80,
+   "base_speed": 50,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "185": {
+   "ability1": 5,
+   "ability2": 69,
+   "base_attack": 100,
+   "base_defense": 115,
+   "base_exp_yield": 135,
+   "base_hp": 70,
+   "base_sp_attack": 30,
+   "base_sp_defense": 65,
+   "base_speed": 30,
+   "catch_rate": 65,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock"
+   ],
+   "types": [
+    5
+   ]
+  },
+  "186": {
+   "ability1": 11,
+   "ability2": 6,
+   "base_attack": 75,
+   "base_defense": 75,
+   "base_exp_yield": 185,
+   "base_hp": 90,
+   "base_sp_attack": 90,
+   "base_sp_defense": 100,
+   "base_speed": 70,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 187,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "187": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 35,
+   "base_defense": 40,
+   "base_exp_yield": 74,
+   "base_hp": 35,
+   "base_sp_attack": 35,
+   "base_sp_defense": 55,
+   "base_speed": 50,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Flying"
+   ],
+   "types": [
+    12,
+    2
+   ]
+  },
+  "188": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 45,
+   "base_defense": 50,
+   "base_exp_yield": 136,
+   "base_hp": 55,
+   "base_sp_attack": 45,
+   "base_sp_defense": 65,
+   "base_speed": 80,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Flying"
+   ],
+   "types": [
+    12,
+    2
+   ]
+  },
+  "189": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 55,
+   "base_defense": 70,
+   "base_exp_yield": 176,
+   "base_hp": 75,
+   "base_sp_attack": 55,
+   "base_sp_defense": 85,
+   "base_speed": 110,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Flying"
+   ],
+   "types": [
+    12,
+    2
+   ]
+  },
+  "19": {
+   "ability1": 50,
+   "ability2": 62,
+   "base_attack": 56,
+   "base_defense": 35,
+   "base_exp_yield": 57,
+   "base_hp": 30,
+   "base_sp_attack": 25,
+   "base_sp_defense": 35,
+   "base_speed": 72,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "190": {
+   "ability1": 50,
+   "ability2": 53,
+   "base_attack": 70,
+   "base_defense": 55,
+   "base_exp_yield": 94,
+   "base_hp": 55,
+   "base_sp_attack": 40,
+   "base_sp_defense": 55,
+   "base_speed": 85,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "191": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 30,
+   "base_defense": 30,
+   "base_exp_yield": 52,
+   "base_hp": 30,
+   "base_sp_attack": 30,
+   "base_sp_defense": 30,
+   "base_speed": 30,
+   "catch_rate": 235,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass"
+   ],
+   "types": [
+    12
+   ]
+  },
+  "192": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 75,
+   "base_defense": 55,
+   "base_exp_yield": 146,
+   "base_hp": 75,
+   "base_sp_attack": 105,
+   "base_sp_defense": 85,
+   "base_speed": 30,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass"
+   ],
+   "types": [
+    12
+   ]
+  },
+  "193": {
+   "ability1": 3,
+   "ability2": 14,
+   "base_attack": 65,
+   "base_defense": 45,
+   "base_exp_yield": 147,
+   "base_hp": 65,
+   "base_sp_attack": 75,
+   "base_sp_defense": 45,
+   "base_speed": 95,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Flying"
+   ],
+   "types": [
+    6,
+    2
+   ]
+  },
+  "194": {
+   "ability1": 6,
+   "ability2": 11,
+   "base_attack": 45,
+   "base_defense": 45,
+   "base_exp_yield": 52,
+   "base_hp": 55,
+   "base_sp_attack": 25,
+   "base_sp_defense": 25,
+   "base_speed": 15,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Ground"
+   ],
+   "types": [
+    11,
+    4
+   ]
+  },
+  "195": {
+   "ability1": 6,
+   "ability2": 11,
+   "base_attack": 85,
+   "base_defense": 85,
+   "base_exp_yield": 137,
+   "base_hp": 95,
+   "base_sp_attack": 65,
+   "base_sp_defense": 65,
+   "base_speed": 35,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Ground"
+   ],
+   "types": [
+    11,
+    4
+   ]
+  },
+  "196": {
+   "ability1": 28,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 60,
+   "base_exp_yield": 197,
+   "base_hp": 65,
+   "base_sp_attack": 130,
+   "base_sp_defense": 95,
+   "base_speed": 110,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "197": {
+   "ability1": 28,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 110,
+   "base_exp_yield": 197,
+   "base_hp": 95,
+   "base_sp_attack": 60,
+   "base_sp_defense": 130,
+   "base_speed": 65,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Dark"
+   ],
+   "types": [
+    17
+   ]
+  },
+  "198": {
+   "ability1": 15,
+   "ability2": 0,
+   "base_attack": 85,
+   "base_defense": 42,
+   "base_exp_yield": 107,
+   "base_hp": 60,
+   "base_sp_attack": 85,
+   "base_sp_defense": 42,
+   "base_speed": 91,
+   "catch_rate": 30,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Dark",
+    "Flying"
+   ],
+   "types": [
+    17,
+    2
+   ]
+  },
+  "199": {
+   "ability1": 12,
+   "ability2": 20,
+   "base_attack": 75,
+   "base_defense": 80,
+   "base_exp_yield": 164,
+   "base_hp": 95,
+   "base_sp_attack": 100,
+   "base_sp_defense": 110,
+   "base_speed": 30,
+   "catch_rate": 70,
+   "held_item1": 0,
+   "held_item2": 187,
+   "type_names": [
+    "Water",
+    "Psychic"
+   ],
+   "types": [
+    11,
+    14
+   ]
+  },
+  "2": {
+   "ability1": 65,
+   "ability2": 0,
+   "base_attack": 62,
+   "base_defense": 63,
+   "base_exp_yield": 141,
+   "base_hp": 60,
+   "base_sp_attack": 80,
+   "base_sp_defense": 80,
+   "base_speed": 60,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Poison"
+   ],
+   "types": [
+    12,
+    3
+   ]
+  },
+  "20": {
+   "ability1": 50,
+   "ability2": 62,
+   "base_attack": 81,
+   "base_defense": 60,
+   "base_exp_yield": 116,
+   "base_hp": 55,
+   "base_sp_attack": 50,
+   "base_sp_defense": 70,
+   "base_speed": 97,
+   "catch_rate": 127,
+   "held_item1": 139,
+   "held_item2": 142,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "200": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 60,
+   "base_defense": 60,
+   "base_exp_yield": 147,
+   "base_hp": 60,
+   "base_sp_attack": 85,
+   "base_sp_defense": 85,
+   "base_speed": 85,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 213,
+   "type_names": [
+    "Ghost"
+   ],
+   "types": [
+    7
+   ]
+  },
+  "201": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 72,
+   "base_defense": 48,
+   "base_exp_yield": 61,
+   "base_hp": 48,
+   "base_sp_attack": 72,
+   "base_sp_defense": 48,
+   "base_speed": 48,
+   "catch_rate": 225,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "202": {
+   "ability1": 23,
+   "ability2": 0,
+   "base_attack": 33,
+   "base_defense": 58,
+   "base_exp_yield": 177,
+   "base_hp": 190,
+   "base_sp_attack": 33,
+   "base_sp_defense": 58,
+   "base_speed": 33,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "203": {
+   "ability1": 39,
+   "ability2": 48,
+   "base_attack": 80,
+   "base_defense": 65,
+   "base_exp_yield": 149,
+   "base_hp": 70,
+   "base_sp_attack": 90,
+   "base_sp_defense": 65,
+   "base_speed": 85,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 140,
+   "type_names": [
+    "Normal",
+    "Psychic"
+   ],
+   "types": [
+    0,
+    14
+   ]
+  },
+  "204": {
+   "ability1": 5,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 90,
+   "base_exp_yield": 60,
+   "base_hp": 50,
+   "base_sp_attack": 35,
+   "base_sp_defense": 35,
+   "base_speed": 15,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug"
+   ],
+   "types": [
+    6
+   ]
+  },
+  "205": {
+   "ability1": 5,
+   "ability2": 0,
+   "base_attack": 90,
+   "base_defense": 140,
+   "base_exp_yield": 118,
+   "base_hp": 75,
+   "base_sp_attack": 60,
+   "base_sp_defense": 60,
+   "base_speed": 40,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Steel"
+   ],
+   "types": [
+    6,
+    8
+   ]
+  },
+  "206": {
+   "ability1": 32,
+   "ability2": 50,
+   "base_attack": 70,
+   "base_defense": 70,
+   "base_exp_yield": 75,
+   "base_hp": 100,
+   "base_sp_attack": 65,
+   "base_sp_defense": 65,
+   "base_speed": 45,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "207": {
+   "ability1": 52,
+   "ability2": 8,
+   "base_attack": 75,
+   "base_defense": 105,
+   "base_exp_yield": 108,
+   "base_hp": 65,
+   "base_sp_attack": 35,
+   "base_sp_defense": 65,
+   "base_speed": 85,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ground",
+    "Flying"
+   ],
+   "types": [
+    4,
+    2
+   ]
+  },
+  "208": {
+   "ability1": 69,
+   "ability2": 5,
+   "base_attack": 85,
+   "base_defense": 200,
+   "base_exp_yield": 196,
+   "base_hp": 75,
+   "base_sp_attack": 55,
+   "base_sp_defense": 65,
+   "base_speed": 30,
+   "catch_rate": 25,
+   "held_item1": 0,
+   "held_item2": 199,
+   "type_names": [
+    "Steel",
+    "Ground"
+   ],
+   "types": [
+    8,
+    4
+   ]
+  },
+  "209": {
+   "ability1": 22,
+   "ability2": 50,
+   "base_attack": 80,
+   "base_defense": 50,
+   "base_exp_yield": 63,
+   "base_hp": 60,
+   "base_sp_attack": 40,
+   "base_sp_defense": 40,
+   "base_speed": 30,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "21": {
+   "ability1": 51,
+   "ability2": 0,
+   "base_attack": 60,
+   "base_defense": 30,
+   "base_exp_yield": 58,
+   "base_hp": 40,
+   "base_sp_attack": 31,
+   "base_sp_defense": 31,
+   "base_speed": 70,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal",
+    "Flying"
+   ],
+   "types": [
+    0,
+    2
+   ]
+  },
+  "210": {
+   "ability1": 22,
+   "ability2": 22,
+   "base_attack": 120,
+   "base_defense": 75,
+   "base_exp_yield": 178,
+   "base_hp": 90,
+   "base_sp_attack": 60,
+   "base_sp_defense": 60,
+   "base_speed": 45,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "211": {
+   "ability1": 38,
+   "ability2": 33,
+   "base_attack": 95,
+   "base_defense": 75,
+   "base_exp_yield": 100,
+   "base_hp": 65,
+   "base_sp_attack": 55,
+   "base_sp_defense": 55,
+   "base_speed": 85,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Poison"
+   ],
+   "types": [
+    11,
+    3
+   ]
+  },
+  "212": {
+   "ability1": 68,
+   "ability2": 0,
+   "base_attack": 130,
+   "base_defense": 100,
+   "base_exp_yield": 200,
+   "base_hp": 70,
+   "base_sp_attack": 55,
+   "base_sp_defense": 80,
+   "base_speed": 65,
+   "catch_rate": 25,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Steel"
+   ],
+   "types": [
+    6,
+    8
+   ]
+  },
+  "213": {
+   "ability1": 5,
+   "ability2": 0,
+   "base_attack": 10,
+   "base_defense": 230,
+   "base_exp_yield": 80,
+   "base_hp": 20,
+   "base_sp_attack": 10,
+   "base_sp_defense": 230,
+   "base_speed": 5,
+   "catch_rate": 190,
+   "held_item1": 44,
+   "held_item2": 44,
+   "type_names": [
+    "Bug",
+    "Rock"
+   ],
+   "types": [
+    6,
+    5
+   ]
+  },
+  "214": {
+   "ability1": 68,
+   "ability2": 62,
+   "base_attack": 125,
+   "base_defense": 75,
+   "base_exp_yield": 200,
+   "base_hp": 80,
+   "base_sp_attack": 40,
+   "base_sp_defense": 95,
+   "base_speed": 85,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Fighting"
+   ],
+   "types": [
+    6,
+    1
+   ]
+  },
+  "215": {
+   "ability1": 39,
+   "ability2": 51,
+   "base_attack": 95,
+   "base_defense": 55,
+   "base_exp_yield": 132,
+   "base_hp": 55,
+   "base_sp_attack": 35,
+   "base_sp_defense": 75,
+   "base_speed": 115,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Dark",
+    "Ice"
+   ],
+   "types": [
+    17,
+    15
+   ]
+  },
+  "216": {
+   "ability1": 53,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 50,
+   "base_exp_yield": 124,
+   "base_hp": 60,
+   "base_sp_attack": 50,
+   "base_sp_defense": 50,
+   "base_speed": 40,
+   "catch_rate": 120,
+   "held_item1": 139,
+   "held_item2": 142,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "217": {
+   "ability1": 62,
+   "ability2": 0,
+   "base_attack": 130,
+   "base_defense": 75,
+   "base_exp_yield": 189,
+   "base_hp": 90,
+   "base_sp_attack": 75,
+   "base_sp_defense": 75,
+   "base_speed": 55,
+   "catch_rate": 60,
+   "held_item1": 139,
+   "held_item2": 142,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "218": {
+   "ability1": 40,
+   "ability2": 49,
+   "base_attack": 40,
+   "base_defense": 40,
+   "base_exp_yield": 78,
+   "base_hp": 40,
+   "base_sp_attack": 70,
+   "base_sp_defense": 40,
+   "base_speed": 20,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "219": {
+   "ability1": 40,
+   "ability2": 49,
+   "base_attack": 50,
+   "base_defense": 120,
+   "base_exp_yield": 154,
+   "base_hp": 50,
+   "base_sp_attack": 80,
+   "base_sp_defense": 80,
+   "base_speed": 30,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire",
+    "Rock"
+   ],
+   "types": [
+    10,
+    5
+   ]
+  },
+  "22": {
+   "ability1": 51,
+   "ability2": 0,
+   "base_attack": 90,
+   "base_defense": 65,
+   "base_exp_yield": 162,
+   "base_hp": 65,
+   "base_sp_attack": 61,
+   "base_sp_defense": 61,
+   "base_speed": 100,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 210,
+   "type_names": [
+    "Normal",
+    "Flying"
+   ],
+   "types": [
+    0,
+    2
+   ]
+  },
+  "220": {
+   "ability1": 12,
+   "ability2": 0,
+   "base_attack": 50,
+   "base_defense": 40,
+   "base_exp_yield": 78,
+   "base_hp": 50,
+   "base_sp_attack": 30,
+   "base_sp_defense": 30,
+   "base_speed": 50,
+   "catch_rate": 225,
+   "held_item1": 137,
+   "held_item2": 0,
+   "type_names": [
+    "Ice",
+    "Ground"
+   ],
+   "types": [
+    15,
+    4
+   ]
+  },
+  "221": {
+   "ability1": 12,
+   "ability2": 0,
+   "base_attack": 100,
+   "base_defense": 80,
+   "base_exp_yield": 160,
+   "base_hp": 100,
+   "base_sp_attack": 60,
+   "base_sp_defense": 60,
+   "base_speed": 50,
+   "catch_rate": 75,
+   "held_item1": 137,
+   "held_item2": 212,
+   "type_names": [
+    "Ice",
+    "Ground"
+   ],
+   "types": [
+    15,
+    4
+   ]
+  },
+  "222": {
+   "ability1": 55,
+   "ability2": 30,
+   "base_attack": 55,
+   "base_defense": 85,
+   "base_exp_yield": 113,
+   "base_hp": 55,
+   "base_sp_attack": 65,
+   "base_sp_defense": 85,
+   "base_speed": 35,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 48,
+   "type_names": [
+    "Water",
+    "Rock"
+   ],
+   "types": [
+    11,
+    5
+   ]
+  },
+  "223": {
+   "ability1": 55,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 35,
+   "base_exp_yield": 78,
+   "base_hp": 35,
+   "base_sp_attack": 65,
+   "base_sp_defense": 35,
+   "base_speed": 65,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "224": {
+   "ability1": 21,
+   "ability2": 0,
+   "base_attack": 105,
+   "base_defense": 75,
+   "base_exp_yield": 164,
+   "base_hp": 75,
+   "base_sp_attack": 105,
+   "base_sp_defense": 75,
+   "base_speed": 45,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "225": {
+   "ability1": 72,
+   "ability2": 55,
+   "base_attack": 55,
+   "base_defense": 45,
+   "base_exp_yield": 183,
+   "base_hp": 45,
+   "base_sp_attack": 65,
+   "base_sp_defense": 45,
+   "base_speed": 75,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ice",
+    "Flying"
+   ],
+   "types": [
+    15,
+    2
+   ]
+  },
+  "226": {
+   "ability1": 33,
+   "ability2": 11,
+   "base_attack": 40,
+   "base_defense": 70,
+   "base_exp_yield": 168,
+   "base_hp": 65,
+   "base_sp_attack": 80,
+   "base_sp_defense": 140,
+   "base_speed": 70,
+   "catch_rate": 25,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Flying"
+   ],
+   "types": [
+    11,
+    2
+   ]
+  },
+  "227": {
+   "ability1": 51,
+   "ability2": 5,
+   "base_attack": 80,
+   "base_defense": 140,
+   "base_exp_yield": 168,
+   "base_hp": 65,
+   "base_sp_attack": 40,
+   "base_sp_defense": 70,
+   "base_speed": 70,
+   "catch_rate": 25,
+   "held_item1": 0,
+   "held_item2": 210,
+   "type_names": [
+    "Steel",
+    "Flying"
+   ],
+   "types": [
+    8,
+    2
+   ]
+  },
+  "228": {
+   "ability1": 48,
+   "ability2": 18,
+   "base_attack": 60,
+   "base_defense": 30,
+   "base_exp_yield": 114,
+   "base_hp": 45,
+   "base_sp_attack": 80,
+   "base_sp_defense": 50,
+   "base_speed": 65,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Dark",
+    "Fire"
+   ],
+   "types": [
+    17,
+    10
+   ]
+  },
+  "229": {
+   "ability1": 48,
+   "ability2": 18,
+   "base_attack": 90,
+   "base_defense": 50,
+   "base_exp_yield": 204,
+   "base_hp": 75,
+   "base_sp_attack": 110,
+   "base_sp_defense": 80,
+   "base_speed": 95,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Dark",
+    "Fire"
+   ],
+   "types": [
+    17,
+    10
+   ]
+  },
+  "23": {
+   "ability1": 22,
+   "ability2": 61,
+   "base_attack": 60,
+   "base_defense": 44,
+   "base_exp_yield": 62,
+   "base_hp": 35,
+   "base_sp_attack": 40,
+   "base_sp_defense": 54,
+   "base_speed": 55,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison"
+   ],
+   "types": [
+    3
+   ]
+  },
+  "230": {
+   "ability1": 33,
+   "ability2": 0,
+   "base_attack": 95,
+   "base_defense": 95,
+   "base_exp_yield": 207,
+   "base_hp": 75,
+   "base_sp_attack": 95,
+   "base_sp_defense": 95,
+   "base_speed": 85,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 201,
+   "type_names": [
+    "Water",
+    "Dragon"
+   ],
+   "types": [
+    11,
+    16
+   ]
+  },
+  "231": {
+   "ability1": 53,
+   "ability2": 0,
+   "base_attack": 60,
+   "base_defense": 60,
+   "base_exp_yield": 124,
+   "base_hp": 90,
+   "base_sp_attack": 40,
+   "base_sp_defense": 40,
+   "base_speed": 40,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ground"
+   ],
+   "types": [
+    4
+   ]
+  },
+  "232": {
+   "ability1": 5,
+   "ability2": 0,
+   "base_attack": 120,
+   "base_defense": 120,
+   "base_exp_yield": 189,
+   "base_hp": 90,
+   "base_sp_attack": 60,
+   "base_sp_defense": 60,
+   "base_speed": 50,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ground"
+   ],
+   "types": [
+    4
+   ]
+  },
+  "233": {
+   "ability1": 36,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 90,
+   "base_exp_yield": 180,
+   "base_hp": 85,
+   "base_sp_attack": 105,
+   "base_sp_defense": 95,
+   "base_speed": 60,
+   "catch_rate": 45,
+   "held_item1": 218,
+   "held_item2": 218,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "234": {
+   "ability1": 22,
+   "ability2": 0,
+   "base_attack": 95,
+   "base_defense": 62,
+   "base_exp_yield": 165,
+   "base_hp": 73,
+   "base_sp_attack": 85,
+   "base_sp_defense": 65,
+   "base_speed": 85,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "235": {
+   "ability1": 20,
+   "ability2": 0,
+   "base_attack": 20,
+   "base_defense": 35,
+   "base_exp_yield": 106,
+   "base_hp": 55,
+   "base_sp_attack": 20,
+   "base_sp_defense": 45,
+   "base_speed": 75,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "236": {
+   "ability1": 62,
+   "ability2": 0,
+   "base_attack": 35,
+   "base_defense": 35,
+   "base_exp_yield": 91,
+   "base_hp": 35,
+   "base_sp_attack": 35,
+   "base_sp_defense": 35,
+   "base_speed": 35,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fighting"
+   ],
+   "types": [
+    1
+   ]
+  },
+  "237": {
+   "ability1": 22,
+   "ability2": 0,
+   "base_attack": 95,
+   "base_defense": 95,
+   "base_exp_yield": 138,
+   "base_hp": 50,
+   "base_sp_attack": 35,
+   "base_sp_defense": 110,
+   "base_speed": 70,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fighting"
+   ],
+   "types": [
+    1
+   ]
+  },
+  "238": {
+   "ability1": 12,
+   "ability2": 0,
+   "base_attack": 30,
+   "base_defense": 15,
+   "base_exp_yield": 87,
+   "base_hp": 45,
+   "base_sp_attack": 85,
+   "base_sp_defense": 65,
+   "base_speed": 65,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ice",
+    "Psychic"
+   ],
+   "types": [
+    15,
+    14
+   ]
+  },
+  "239": {
+   "ability1": 9,
+   "ability2": 0,
+   "base_attack": 63,
+   "base_defense": 37,
+   "base_exp_yield": 106,
+   "base_hp": 45,
+   "base_sp_attack": 65,
+   "base_sp_defense": 55,
+   "base_speed": 95,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "24": {
+   "ability1": 22,
+   "ability2": 61,
+   "base_attack": 85,
+   "base_defense": 69,
+   "base_exp_yield": 147,
+   "base_hp": 60,
+   "base_sp_attack": 65,
+   "base_sp_defense": 79,
+   "base_speed": 80,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 211,
+   "type_names": [
+    "Poison"
+   ],
+   "types": [
+    3
+   ]
+  },
+  "240": {
+   "ability1": 49,
+   "ability2": 0,
+   "base_attack": 75,
+   "base_defense": 37,
+   "base_exp_yield": 117,
+   "base_hp": 45,
+   "base_sp_attack": 70,
+   "base_sp_defense": 55,
+   "base_speed": 83,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "241": {
+   "ability1": 47,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 105,
+   "base_exp_yield": 200,
+   "base_hp": 95,
+   "base_sp_attack": 40,
+   "base_sp_defense": 70,
+   "base_speed": 100,
+   "catch_rate": 45,
+   "held_item1": 29,
+   "held_item2": 29,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "242": {
+   "ability1": 30,
+   "ability2": 32,
+   "base_attack": 10,
+   "base_defense": 10,
+   "base_exp_yield": 255,
+   "base_hp": 255,
+   "base_sp_attack": 75,
+   "base_sp_defense": 135,
+   "base_speed": 55,
+   "catch_rate": 30,
+   "held_item1": 0,
+   "held_item2": 197,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "243": {
+   "ability1": 46,
+   "ability2": 0,
+   "base_attack": 85,
+   "base_defense": 75,
+   "base_exp_yield": 216,
+   "base_hp": 90,
+   "base_sp_attack": 115,
+   "base_sp_defense": 100,
+   "base_speed": 115,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "244": {
+   "ability1": 46,
+   "ability2": 0,
+   "base_attack": 115,
+   "base_defense": 85,
+   "base_exp_yield": 217,
+   "base_hp": 115,
+   "base_sp_attack": 90,
+   "base_sp_defense": 75,
+   "base_speed": 100,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "245": {
+   "ability1": 46,
+   "ability2": 0,
+   "base_attack": 75,
+   "base_defense": 115,
+   "base_exp_yield": 215,
+   "base_hp": 100,
+   "base_sp_attack": 90,
+   "base_sp_defense": 115,
+   "base_speed": 85,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "246": {
+   "ability1": 62,
+   "ability2": 0,
+   "base_attack": 64,
+   "base_defense": 50,
+   "base_exp_yield": 67,
+   "base_hp": 50,
+   "base_sp_attack": 45,
+   "base_sp_defense": 50,
+   "base_speed": 41,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock",
+    "Ground"
+   ],
+   "types": [
+    5,
+    4
+   ]
+  },
+  "247": {
+   "ability1": 61,
+   "ability2": 0,
+   "base_attack": 84,
+   "base_defense": 70,
+   "base_exp_yield": 144,
+   "base_hp": 70,
+   "base_sp_attack": 65,
+   "base_sp_defense": 70,
+   "base_speed": 51,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock",
+    "Ground"
+   ],
+   "types": [
+    5,
+    4
+   ]
+  },
+  "248": {
+   "ability1": 45,
+   "ability2": 0,
+   "base_attack": 134,
+   "base_defense": 110,
+   "base_exp_yield": 218,
+   "base_hp": 100,
+   "base_sp_attack": 95,
+   "base_sp_defense": 100,
+   "base_speed": 61,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock",
+    "Dark"
+   ],
+   "types": [
+    5,
+    17
+   ]
+  },
+  "249": {
+   "ability1": 46,
+   "ability2": 0,
+   "base_attack": 90,
+   "base_defense": 130,
+   "base_exp_yield": 220,
+   "base_hp": 106,
+   "base_sp_attack": 90,
+   "base_sp_defense": 154,
+   "base_speed": 110,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic",
+    "Flying"
+   ],
+   "types": [
+    14,
+    2
+   ]
+  },
+  "25": {
+   "ability1": 9,
+   "ability2": 0,
+   "base_attack": 55,
+   "base_defense": 30,
+   "base_exp_yield": 82,
+   "base_hp": 35,
+   "base_sp_attack": 50,
+   "base_sp_defense": 40,
+   "base_speed": 90,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "250": {
+   "ability1": 46,
+   "ability2": 0,
+   "base_attack": 130,
+   "base_defense": 90,
+   "base_exp_yield": 220,
+   "base_hp": 106,
+   "base_sp_attack": 110,
+   "base_sp_defense": 154,
+   "base_speed": 90,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire",
+    "Flying"
+   ],
+   "types": [
+    10,
+    2
+   ]
+  },
+  "251": {
+   "ability1": 30,
+   "ability2": 0,
+   "base_attack": 100,
+   "base_defense": 100,
+   "base_exp_yield": 64,
+   "base_hp": 100,
+   "base_sp_attack": 100,
+   "base_sp_defense": 100,
+   "base_speed": 100,
+   "catch_rate": 45,
+   "held_item1": 141,
+   "held_item2": 141,
+   "type_names": [
+    "Psychic",
+    "Grass"
+   ],
+   "types": [
+    14,
+    12
+   ]
+  },
+  "252": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "253": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "254": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "255": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "256": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "257": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "258": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "259": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "26": {
+   "ability1": 9,
+   "ability2": 0,
+   "base_attack": 90,
+   "base_defense": 55,
+   "base_exp_yield": 122,
+   "base_hp": 60,
+   "base_sp_attack": 90,
+   "base_sp_defense": 80,
+   "base_speed": 100,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "260": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "261": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "262": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "263": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "264": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "265": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "266": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "267": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "268": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "269": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "27": {
+   "ability1": 8,
+   "ability2": 0,
+   "base_attack": 75,
+   "base_defense": 85,
+   "base_exp_yield": 93,
+   "base_hp": 50,
+   "base_sp_attack": 20,
+   "base_sp_defense": 30,
+   "base_speed": 40,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ground"
+   ],
+   "types": [
+    4
+   ]
+  },
+  "270": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "271": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "272": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "273": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "274": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "275": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "276": {
+   "ability1": 0,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 1,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "277": {
+   "ability1": 65,
+   "ability2": 0,
+   "base_attack": 45,
+   "base_defense": 35,
+   "base_exp_yield": 65,
+   "base_hp": 40,
+   "base_sp_attack": 65,
+   "base_sp_defense": 55,
+   "base_speed": 70,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass"
+   ],
+   "types": [
+    12
+   ]
+  },
+  "278": {
+   "ability1": 65,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 45,
+   "base_exp_yield": 141,
+   "base_hp": 50,
+   "base_sp_attack": 85,
+   "base_sp_defense": 65,
+   "base_speed": 95,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass"
+   ],
+   "types": [
+    12
+   ]
+  },
+  "279": {
+   "ability1": 65,
+   "ability2": 0,
+   "base_attack": 85,
+   "base_defense": 65,
+   "base_exp_yield": 208,
+   "base_hp": 70,
+   "base_sp_attack": 105,
+   "base_sp_defense": 85,
+   "base_speed": 120,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass"
+   ],
+   "types": [
+    12
+   ]
+  },
+  "28": {
+   "ability1": 8,
+   "ability2": 0,
+   "base_attack": 100,
+   "base_defense": 110,
+   "base_exp_yield": 163,
+   "base_hp": 75,
+   "base_sp_attack": 45,
+   "base_sp_defense": 55,
+   "base_speed": 65,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 203,
+   "type_names": [
+    "Ground"
+   ],
+   "types": [
+    4
+   ]
+  },
+  "280": {
+   "ability1": 66,
+   "ability2": 0,
+   "base_attack": 60,
+   "base_defense": 40,
+   "base_exp_yield": 65,
+   "base_hp": 45,
+   "base_sp_attack": 70,
+   "base_sp_defense": 50,
+   "base_speed": 45,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "281": {
+   "ability1": 66,
+   "ability2": 0,
+   "base_attack": 85,
+   "base_defense": 60,
+   "base_exp_yield": 142,
+   "base_hp": 60,
+   "base_sp_attack": 85,
+   "base_sp_defense": 60,
+   "base_speed": 55,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire",
+    "Fighting"
+   ],
+   "types": [
+    10,
+    1
+   ]
+  },
+  "282": {
+   "ability1": 66,
+   "ability2": 0,
+   "base_attack": 120,
+   "base_defense": 70,
+   "base_exp_yield": 209,
+   "base_hp": 80,
+   "base_sp_attack": 110,
+   "base_sp_defense": 70,
+   "base_speed": 80,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire",
+    "Fighting"
+   ],
+   "types": [
+    10,
+    1
+   ]
+  },
+  "283": {
+   "ability1": 67,
+   "ability2": 0,
+   "base_attack": 70,
+   "base_defense": 50,
+   "base_exp_yield": 65,
+   "base_hp": 50,
+   "base_sp_attack": 50,
+   "base_sp_defense": 50,
+   "base_speed": 40,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "284": {
+   "ability1": 67,
+   "ability2": 0,
+   "base_attack": 85,
+   "base_defense": 70,
+   "base_exp_yield": 143,
+   "base_hp": 70,
+   "base_sp_attack": 60,
+   "base_sp_defense": 70,
+   "base_speed": 50,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Ground"
+   ],
+   "types": [
+    11,
+    4
+   ]
+  },
+  "285": {
+   "ability1": 67,
+   "ability2": 0,
+   "base_attack": 110,
+   "base_defense": 90,
+   "base_exp_yield": 210,
+   "base_hp": 100,
+   "base_sp_attack": 85,
+   "base_sp_defense": 90,
+   "base_speed": 60,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Ground"
+   ],
+   "types": [
+    11,
+    4
+   ]
+  },
+  "286": {
+   "ability1": 50,
+   "ability2": 0,
+   "base_attack": 55,
+   "base_defense": 35,
+   "base_exp_yield": 55,
+   "base_hp": 35,
+   "base_sp_attack": 30,
+   "base_sp_defense": 30,
+   "base_speed": 35,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 135,
+   "type_names": [
+    "Dark"
+   ],
+   "types": [
+    17
+   ]
+  },
+  "287": {
+   "ability1": 22,
+   "ability2": 0,
+   "base_attack": 90,
+   "base_defense": 70,
+   "base_exp_yield": 128,
+   "base_hp": 70,
+   "base_sp_attack": 60,
+   "base_sp_defense": 60,
+   "base_speed": 70,
+   "catch_rate": 127,
+   "held_item1": 0,
+   "held_item2": 135,
+   "type_names": [
+    "Dark"
+   ],
+   "types": [
+    17
+   ]
+  },
+  "288": {
+   "ability1": 53,
+   "ability2": 0,
+   "base_attack": 30,
+   "base_defense": 41,
+   "base_exp_yield": 60,
+   "base_hp": 38,
+   "base_sp_attack": 30,
+   "base_sp_defense": 41,
+   "base_speed": 60,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 139,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "289": {
+   "ability1": 53,
+   "ability2": 0,
+   "base_attack": 70,
+   "base_defense": 61,
+   "base_exp_yield": 128,
+   "base_hp": 78,
+   "base_sp_attack": 50,
+   "base_sp_defense": 61,
+   "base_speed": 100,
+   "catch_rate": 90,
+   "held_item1": 139,
+   "held_item2": 142,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "29": {
+   "ability1": 38,
+   "ability2": 0,
+   "base_attack": 47,
+   "base_defense": 52,
+   "base_exp_yield": 59,
+   "base_hp": 55,
+   "base_sp_attack": 40,
+   "base_sp_defense": 40,
+   "base_speed": 41,
+   "catch_rate": 235,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison"
+   ],
+   "types": [
+    3
+   ]
+  },
+  "290": {
+   "ability1": 19,
+   "ability2": 0,
+   "base_attack": 45,
+   "base_defense": 35,
+   "base_exp_yield": 54,
+   "base_hp": 45,
+   "base_sp_attack": 20,
+   "base_sp_defense": 30,
+   "base_speed": 20,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug"
+   ],
+   "types": [
+    6
+   ]
+  },
+  "291": {
+   "ability1": 61,
+   "ability2": 0,
+   "base_attack": 35,
+   "base_defense": 55,
+   "base_exp_yield": 71,
+   "base_hp": 50,
+   "base_sp_attack": 25,
+   "base_sp_defense": 25,
+   "base_speed": 15,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug"
+   ],
+   "types": [
+    6
+   ]
+  },
+  "292": {
+   "ability1": 68,
+   "ability2": 0,
+   "base_attack": 70,
+   "base_defense": 50,
+   "base_exp_yield": 161,
+   "base_hp": 60,
+   "base_sp_attack": 90,
+   "base_sp_defense": 50,
+   "base_speed": 65,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 188,
+   "type_names": [
+    "Bug",
+    "Flying"
+   ],
+   "types": [
+    6,
+    2
+   ]
+  },
+  "293": {
+   "ability1": 61,
+   "ability2": 0,
+   "base_attack": 35,
+   "base_defense": 55,
+   "base_exp_yield": 72,
+   "base_hp": 50,
+   "base_sp_attack": 25,
+   "base_sp_defense": 25,
+   "base_speed": 15,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug"
+   ],
+   "types": [
+    6
+   ]
+  },
+  "294": {
+   "ability1": 19,
+   "ability2": 0,
+   "base_attack": 50,
+   "base_defense": 70,
+   "base_exp_yield": 160,
+   "base_hp": 60,
+   "base_sp_attack": 50,
+   "base_sp_defense": 90,
+   "base_speed": 65,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 188,
+   "type_names": [
+    "Bug",
+    "Poison"
+   ],
+   "types": [
+    6,
+    3
+   ]
+  },
+  "295": {
+   "ability1": 33,
+   "ability2": 44,
+   "base_attack": 30,
+   "base_defense": 30,
+   "base_exp_yield": 74,
+   "base_hp": 40,
+   "base_sp_attack": 40,
+   "base_sp_defense": 50,
+   "base_speed": 30,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Grass"
+   ],
+   "types": [
+    11,
+    12
+   ]
+  },
+  "296": {
+   "ability1": 33,
+   "ability2": 44,
+   "base_attack": 50,
+   "base_defense": 50,
+   "base_exp_yield": 141,
+   "base_hp": 60,
+   "base_sp_attack": 60,
+   "base_sp_defense": 70,
+   "base_speed": 50,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Grass"
+   ],
+   "types": [
+    11,
+    12
+   ]
+  },
+  "297": {
+   "ability1": 33,
+   "ability2": 44,
+   "base_attack": 70,
+   "base_defense": 70,
+   "base_exp_yield": 181,
+   "base_hp": 80,
+   "base_sp_attack": 90,
+   "base_sp_defense": 100,
+   "base_speed": 70,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Grass"
+   ],
+   "types": [
+    11,
+    12
+   ]
+  },
+  "298": {
+   "ability1": 34,
+   "ability2": 48,
+   "base_attack": 40,
+   "base_defense": 50,
+   "base_exp_yield": 74,
+   "base_hp": 40,
+   "base_sp_attack": 30,
+   "base_sp_defense": 30,
+   "base_speed": 30,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass"
+   ],
+   "types": [
+    12
+   ]
+  },
+  "299": {
+   "ability1": 34,
+   "ability2": 48,
+   "base_attack": 70,
+   "base_defense": 40,
+   "base_exp_yield": 141,
+   "base_hp": 70,
+   "base_sp_attack": 60,
+   "base_sp_defense": 40,
+   "base_speed": 60,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Dark"
+   ],
+   "types": [
+    12,
+    17
+   ]
+  },
+  "3": {
+   "ability1": 65,
+   "ability2": 0,
+   "base_attack": 82,
+   "base_defense": 83,
+   "base_exp_yield": 208,
+   "base_hp": 80,
+   "base_sp_attack": 100,
+   "base_sp_defense": 100,
+   "base_speed": 80,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Poison"
+   ],
+   "types": [
+    12,
+    3
+   ]
+  },
+  "30": {
+   "ability1": 38,
+   "ability2": 0,
+   "base_attack": 62,
+   "base_defense": 67,
+   "base_exp_yield": 117,
+   "base_hp": 70,
+   "base_sp_attack": 55,
+   "base_sp_defense": 55,
+   "base_speed": 56,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison"
+   ],
+   "types": [
+    3
+   ]
+  },
+  "300": {
+   "ability1": 34,
+   "ability2": 48,
+   "base_attack": 100,
+   "base_defense": 60,
+   "base_exp_yield": 181,
+   "base_hp": 90,
+   "base_sp_attack": 90,
+   "base_sp_defense": 60,
+   "base_speed": 80,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Dark"
+   ],
+   "types": [
+    12,
+    17
+   ]
+  },
+  "301": {
+   "ability1": 14,
+   "ability2": 0,
+   "base_attack": 45,
+   "base_defense": 90,
+   "base_exp_yield": 65,
+   "base_hp": 31,
+   "base_sp_attack": 30,
+   "base_sp_defense": 30,
+   "base_speed": 40,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Ground"
+   ],
+   "types": [
+    6,
+    4
+   ]
+  },
+  "302": {
+   "ability1": 3,
+   "ability2": 0,
+   "base_attack": 90,
+   "base_defense": 45,
+   "base_exp_yield": 155,
+   "base_hp": 61,
+   "base_sp_attack": 50,
+   "base_sp_defense": 50,
+   "base_speed": 160,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Flying"
+   ],
+   "types": [
+    6,
+    2
+   ]
+  },
+  "303": {
+   "ability1": 25,
+   "ability2": 0,
+   "base_attack": 90,
+   "base_defense": 45,
+   "base_exp_yield": 95,
+   "base_hp": 1,
+   "base_sp_attack": 30,
+   "base_sp_defense": 30,
+   "base_speed": 40,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Ghost"
+   ],
+   "types": [
+    6,
+    7
+   ]
+  },
+  "304": {
+   "ability1": 62,
+   "ability2": 0,
+   "base_attack": 55,
+   "base_defense": 30,
+   "base_exp_yield": 59,
+   "base_hp": 40,
+   "base_sp_attack": 30,
+   "base_sp_defense": 30,
+   "base_speed": 85,
+   "catch_rate": 200,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal",
+    "Flying"
+   ],
+   "types": [
+    0,
+    2
+   ]
+  },
+  "305": {
+   "ability1": 62,
+   "ability2": 0,
+   "base_attack": 85,
+   "base_defense": 60,
+   "base_exp_yield": 162,
+   "base_hp": 60,
+   "base_sp_attack": 50,
+   "base_sp_defense": 50,
+   "base_speed": 125,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal",
+    "Flying"
+   ],
+   "types": [
+    0,
+    2
+   ]
+  },
+  "306": {
+   "ability1": 27,
+   "ability2": 0,
+   "base_attack": 40,
+   "base_defense": 60,
+   "base_exp_yield": 65,
+   "base_hp": 60,
+   "base_sp_attack": 40,
+   "base_sp_defense": 60,
+   "base_speed": 35,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass"
+   ],
+   "types": [
+    12
+   ]
+  },
+  "307": {
+   "ability1": 27,
+   "ability2": 0,
+   "base_attack": 130,
+   "base_defense": 80,
+   "base_exp_yield": 165,
+   "base_hp": 60,
+   "base_sp_attack": 60,
+   "base_sp_defense": 60,
+   "base_speed": 70,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Fighting"
+   ],
+   "types": [
+    12,
+    1
+   ]
+  },
+  "308": {
+   "ability1": 20,
+   "ability2": 0,
+   "base_attack": 60,
+   "base_defense": 60,
+   "base_exp_yield": 85,
+   "base_hp": 60,
+   "base_sp_attack": 60,
+   "base_sp_defense": 60,
+   "base_speed": 60,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 134,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "309": {
+   "ability1": 51,
+   "ability2": 0,
+   "base_attack": 30,
+   "base_defense": 30,
+   "base_exp_yield": 64,
+   "base_hp": 40,
+   "base_sp_attack": 55,
+   "base_sp_defense": 30,
+   "base_speed": 85,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Flying"
+   ],
+   "types": [
+    11,
+    2
+   ]
+  },
+  "31": {
+   "ability1": 38,
+   "ability2": 0,
+   "base_attack": 82,
+   "base_defense": 87,
+   "base_exp_yield": 194,
+   "base_hp": 90,
+   "base_sp_attack": 75,
+   "base_sp_defense": 85,
+   "base_speed": 76,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison",
+    "Ground"
+   ],
+   "types": [
+    3,
+    4
+   ]
+  },
+  "310": {
+   "ability1": 51,
+   "ability2": 0,
+   "base_attack": 50,
+   "base_defense": 100,
+   "base_exp_yield": 164,
+   "base_hp": 60,
+   "base_sp_attack": 85,
+   "base_sp_defense": 70,
+   "base_speed": 65,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Flying"
+   ],
+   "types": [
+    11,
+    2
+   ]
+  },
+  "311": {
+   "ability1": 33,
+   "ability2": 0,
+   "base_attack": 30,
+   "base_defense": 32,
+   "base_exp_yield": 63,
+   "base_hp": 40,
+   "base_sp_attack": 50,
+   "base_sp_defense": 52,
+   "base_speed": 65,
+   "catch_rate": 200,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Water"
+   ],
+   "types": [
+    6,
+    11
+   ]
+  },
+  "312": {
+   "ability1": 22,
+   "ability2": 0,
+   "base_attack": 60,
+   "base_defense": 62,
+   "base_exp_yield": 128,
+   "base_hp": 70,
+   "base_sp_attack": 80,
+   "base_sp_defense": 82,
+   "base_speed": 60,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 188,
+   "type_names": [
+    "Bug",
+    "Flying"
+   ],
+   "types": [
+    6,
+    2
+   ]
+  },
+  "313": {
+   "ability1": 41,
+   "ability2": 12,
+   "base_attack": 70,
+   "base_defense": 35,
+   "base_exp_yield": 137,
+   "base_hp": 130,
+   "base_sp_attack": 70,
+   "base_sp_defense": 35,
+   "base_speed": 60,
+   "catch_rate": 125,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "314": {
+   "ability1": 41,
+   "ability2": 12,
+   "base_attack": 90,
+   "base_defense": 45,
+   "base_exp_yield": 206,
+   "base_hp": 170,
+   "base_sp_attack": 90,
+   "base_sp_defense": 45,
+   "base_speed": 60,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "315": {
+   "ability1": 56,
+   "ability2": 0,
+   "base_attack": 45,
+   "base_defense": 45,
+   "base_exp_yield": 65,
+   "base_hp": 50,
+   "base_sp_attack": 35,
+   "base_sp_defense": 35,
+   "base_speed": 50,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 138,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "316": {
+   "ability1": 56,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 65,
+   "base_exp_yield": 138,
+   "base_hp": 70,
+   "base_sp_attack": 55,
+   "base_sp_defense": 55,
+   "base_speed": 70,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 138,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "317": {
+   "ability1": 16,
+   "ability2": 0,
+   "base_attack": 90,
+   "base_defense": 70,
+   "base_exp_yield": 132,
+   "base_hp": 60,
+   "base_sp_attack": 60,
+   "base_sp_defense": 120,
+   "base_speed": 40,
+   "catch_rate": 200,
+   "held_item1": 0,
+   "held_item2": 140,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "318": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 40,
+   "base_defense": 55,
+   "base_exp_yield": 58,
+   "base_hp": 40,
+   "base_sp_attack": 40,
+   "base_sp_defense": 70,
+   "base_speed": 55,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ground",
+    "Psychic"
+   ],
+   "types": [
+    4,
+    14
+   ]
+  },
+  "319": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 70,
+   "base_defense": 105,
+   "base_exp_yield": 189,
+   "base_hp": 60,
+   "base_sp_attack": 70,
+   "base_sp_defense": 120,
+   "base_speed": 75,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ground",
+    "Psychic"
+   ],
+   "types": [
+    4,
+    14
+   ]
+  },
+  "32": {
+   "ability1": 38,
+   "ability2": 0,
+   "base_attack": 57,
+   "base_defense": 40,
+   "base_exp_yield": 60,
+   "base_hp": 46,
+   "base_sp_attack": 40,
+   "base_sp_defense": 40,
+   "base_speed": 50,
+   "catch_rate": 235,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison"
+   ],
+   "types": [
+    3
+   ]
+  },
+  "320": {
+   "ability1": 5,
+   "ability2": 42,
+   "base_attack": 45,
+   "base_defense": 135,
+   "base_exp_yield": 108,
+   "base_hp": 30,
+   "base_sp_attack": 45,
+   "base_sp_defense": 90,
+   "base_speed": 30,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock"
+   ],
+   "types": [
+    5
+   ]
+  },
+  "321": {
+   "ability1": 73,
+   "ability2": 0,
+   "base_attack": 85,
+   "base_defense": 140,
+   "base_exp_yield": 161,
+   "base_hp": 70,
+   "base_sp_attack": 85,
+   "base_sp_defense": 70,
+   "base_speed": 20,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "322": {
+   "ability1": 51,
+   "ability2": 0,
+   "base_attack": 75,
+   "base_defense": 75,
+   "base_exp_yield": 98,
+   "base_hp": 50,
+   "base_sp_attack": 65,
+   "base_sp_defense": 65,
+   "base_speed": 50,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Dark",
+    "Ghost"
+   ],
+   "types": [
+    17,
+    7
+   ]
+  },
+  "323": {
+   "ability1": 12,
+   "ability2": 0,
+   "base_attack": 48,
+   "base_defense": 43,
+   "base_exp_yield": 92,
+   "base_hp": 50,
+   "base_sp_attack": 46,
+   "base_sp_defense": 41,
+   "base_speed": 60,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Ground"
+   ],
+   "types": [
+    11,
+    4
+   ]
+  },
+  "324": {
+   "ability1": 12,
+   "ability2": 0,
+   "base_attack": 78,
+   "base_defense": 73,
+   "base_exp_yield": 158,
+   "base_hp": 110,
+   "base_sp_attack": 76,
+   "base_sp_defense": 71,
+   "base_speed": 60,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Ground"
+   ],
+   "types": [
+    11,
+    4
+   ]
+  },
+  "325": {
+   "ability1": 33,
+   "ability2": 0,
+   "base_attack": 30,
+   "base_defense": 55,
+   "base_exp_yield": 110,
+   "base_hp": 43,
+   "base_sp_attack": 40,
+   "base_sp_defense": 65,
+   "base_speed": 97,
+   "catch_rate": 225,
+   "held_item1": 111,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "326": {
+   "ability1": 52,
+   "ability2": 75,
+   "base_attack": 80,
+   "base_defense": 65,
+   "base_exp_yield": 111,
+   "base_hp": 43,
+   "base_sp_attack": 50,
+   "base_sp_defense": 35,
+   "base_speed": 35,
+   "catch_rate": 205,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "327": {
+   "ability1": 52,
+   "ability2": 75,
+   "base_attack": 120,
+   "base_defense": 85,
+   "base_exp_yield": 161,
+   "base_hp": 63,
+   "base_sp_attack": 90,
+   "base_sp_defense": 55,
+   "base_speed": 55,
+   "catch_rate": 155,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Dark"
+   ],
+   "types": [
+    11,
+    17
+   ]
+  },
+  "328": {
+   "ability1": 33,
+   "ability2": 0,
+   "base_attack": 15,
+   "base_defense": 20,
+   "base_exp_yield": 61,
+   "base_hp": 20,
+   "base_sp_attack": 10,
+   "base_sp_defense": 55,
+   "base_speed": 80,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "329": {
+   "ability1": 63,
+   "ability2": 0,
+   "base_attack": 60,
+   "base_defense": 79,
+   "base_exp_yield": 213,
+   "base_hp": 95,
+   "base_sp_attack": 100,
+   "base_sp_defense": 125,
+   "base_speed": 81,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "33": {
+   "ability1": 38,
+   "ability2": 0,
+   "base_attack": 72,
+   "base_defense": 57,
+   "base_exp_yield": 118,
+   "base_hp": 61,
+   "base_sp_attack": 55,
+   "base_sp_defense": 55,
+   "base_speed": 65,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison"
+   ],
+   "types": [
+    3
+   ]
+  },
+  "330": {
+   "ability1": 24,
+   "ability2": 0,
+   "base_attack": 90,
+   "base_defense": 20,
+   "base_exp_yield": 88,
+   "base_hp": 45,
+   "base_sp_attack": 65,
+   "base_sp_defense": 20,
+   "base_speed": 65,
+   "catch_rate": 225,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Dark"
+   ],
+   "types": [
+    11,
+    17
+   ]
+  },
+  "331": {
+   "ability1": 24,
+   "ability2": 0,
+   "base_attack": 120,
+   "base_defense": 40,
+   "base_exp_yield": 175,
+   "base_hp": 70,
+   "base_sp_attack": 95,
+   "base_sp_defense": 40,
+   "base_speed": 95,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Dark"
+   ],
+   "types": [
+    11,
+    17
+   ]
+  },
+  "332": {
+   "ability1": 52,
+   "ability2": 71,
+   "base_attack": 100,
+   "base_defense": 45,
+   "base_exp_yield": 73,
+   "base_hp": 45,
+   "base_sp_attack": 45,
+   "base_sp_defense": 45,
+   "base_speed": 10,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 203,
+   "type_names": [
+    "Ground"
+   ],
+   "types": [
+    4
+   ]
+  },
+  "333": {
+   "ability1": 26,
+   "ability2": 26,
+   "base_attack": 70,
+   "base_defense": 50,
+   "base_exp_yield": 126,
+   "base_hp": 50,
+   "base_sp_attack": 50,
+   "base_sp_defense": 50,
+   "base_speed": 70,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ground",
+    "Dragon"
+   ],
+   "types": [
+    4,
+    16
+   ]
+  },
+  "334": {
+   "ability1": 26,
+   "ability2": 26,
+   "base_attack": 100,
+   "base_defense": 80,
+   "base_exp_yield": 197,
+   "base_hp": 80,
+   "base_sp_attack": 80,
+   "base_sp_defense": 80,
+   "base_speed": 100,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ground",
+    "Dragon"
+   ],
+   "types": [
+    4,
+    16
+   ]
+  },
+  "335": {
+   "ability1": 47,
+   "ability2": 62,
+   "base_attack": 60,
+   "base_defense": 30,
+   "base_exp_yield": 87,
+   "base_hp": 72,
+   "base_sp_attack": 20,
+   "base_sp_defense": 30,
+   "base_speed": 25,
+   "catch_rate": 180,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fighting"
+   ],
+   "types": [
+    1
+   ]
+  },
+  "336": {
+   "ability1": 47,
+   "ability2": 62,
+   "base_attack": 120,
+   "base_defense": 60,
+   "base_exp_yield": 184,
+   "base_hp": 144,
+   "base_sp_attack": 40,
+   "base_sp_defense": 60,
+   "base_speed": 50,
+   "catch_rate": 200,
+   "held_item1": 0,
+   "held_item2": 187,
+   "type_names": [
+    "Fighting"
+   ],
+   "types": [
+    1
+   ]
+  },
+  "337": {
+   "ability1": 9,
+   "ability2": 31,
+   "base_attack": 45,
+   "base_defense": 40,
+   "base_exp_yield": 104,
+   "base_hp": 40,
+   "base_sp_attack": 65,
+   "base_sp_defense": 40,
+   "base_speed": 65,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "338": {
+   "ability1": 9,
+   "ability2": 31,
+   "base_attack": 75,
+   "base_defense": 60,
+   "base_exp_yield": 168,
+   "base_hp": 70,
+   "base_sp_attack": 105,
+   "base_sp_defense": 60,
+   "base_speed": 105,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "339": {
+   "ability1": 12,
+   "ability2": 0,
+   "base_attack": 60,
+   "base_defense": 40,
+   "base_exp_yield": 88,
+   "base_hp": 60,
+   "base_sp_attack": 65,
+   "base_sp_defense": 45,
+   "base_speed": 35,
+   "catch_rate": 255,
+   "held_item1": 136,
+   "held_item2": 136,
+   "type_names": [
+    "Fire",
+    "Ground"
+   ],
+   "types": [
+    10,
+    4
+   ]
+  },
+  "34": {
+   "ability1": 38,
+   "ability2": 0,
+   "base_attack": 92,
+   "base_defense": 77,
+   "base_exp_yield": 195,
+   "base_hp": 81,
+   "base_sp_attack": 85,
+   "base_sp_defense": 75,
+   "base_speed": 85,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison",
+    "Ground"
+   ],
+   "types": [
+    3,
+    4
+   ]
+  },
+  "340": {
+   "ability1": 40,
+   "ability2": 0,
+   "base_attack": 100,
+   "base_defense": 70,
+   "base_exp_yield": 175,
+   "base_hp": 70,
+   "base_sp_attack": 105,
+   "base_sp_defense": 75,
+   "base_speed": 40,
+   "catch_rate": 150,
+   "held_item1": 136,
+   "held_item2": 136,
+   "type_names": [
+    "Fire",
+    "Ground"
+   ],
+   "types": [
+    10,
+    4
+   ]
+  },
+  "341": {
+   "ability1": 47,
+   "ability2": 0,
+   "base_attack": 40,
+   "base_defense": 50,
+   "base_exp_yield": 75,
+   "base_hp": 70,
+   "base_sp_attack": 55,
+   "base_sp_defense": 50,
+   "base_speed": 25,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ice",
+    "Water"
+   ],
+   "types": [
+    15,
+    11
+   ]
+  },
+  "342": {
+   "ability1": 47,
+   "ability2": 0,
+   "base_attack": 60,
+   "base_defense": 70,
+   "base_exp_yield": 128,
+   "base_hp": 90,
+   "base_sp_attack": 75,
+   "base_sp_defense": 70,
+   "base_speed": 45,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ice",
+    "Water"
+   ],
+   "types": [
+    15,
+    11
+   ]
+  },
+  "343": {
+   "ability1": 47,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 90,
+   "base_exp_yield": 192,
+   "base_hp": 110,
+   "base_sp_attack": 95,
+   "base_sp_defense": 90,
+   "base_speed": 65,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ice",
+    "Water"
+   ],
+   "types": [
+    15,
+    11
+   ]
+  },
+  "344": {
+   "ability1": 8,
+   "ability2": 0,
+   "base_attack": 85,
+   "base_defense": 40,
+   "base_exp_yield": 97,
+   "base_hp": 50,
+   "base_sp_attack": 85,
+   "base_sp_defense": 40,
+   "base_speed": 35,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 211,
+   "type_names": [
+    "Grass"
+   ],
+   "types": [
+    12
+   ]
+  },
+  "345": {
+   "ability1": 8,
+   "ability2": 0,
+   "base_attack": 115,
+   "base_defense": 60,
+   "base_exp_yield": 177,
+   "base_hp": 70,
+   "base_sp_attack": 115,
+   "base_sp_defense": 60,
+   "base_speed": 55,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 211,
+   "type_names": [
+    "Grass",
+    "Dark"
+   ],
+   "types": [
+    12,
+    17
+   ]
+  },
+  "346": {
+   "ability1": 39,
+   "ability2": 0,
+   "base_attack": 50,
+   "base_defense": 50,
+   "base_exp_yield": 74,
+   "base_hp": 50,
+   "base_sp_attack": 50,
+   "base_sp_defense": 50,
+   "base_speed": 50,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ice"
+   ],
+   "types": [
+    15
+   ]
+  },
+  "347": {
+   "ability1": 39,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 80,
+   "base_exp_yield": 187,
+   "base_hp": 80,
+   "base_sp_attack": 80,
+   "base_sp_defense": 80,
+   "base_speed": 80,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 212,
+   "type_names": [
+    "Ice"
+   ],
+   "types": [
+    15
+   ]
+  },
+  "348": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 55,
+   "base_defense": 65,
+   "base_exp_yield": 150,
+   "base_hp": 70,
+   "base_sp_attack": 95,
+   "base_sp_defense": 85,
+   "base_speed": 70,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 94,
+   "type_names": [
+    "Rock",
+    "Psychic"
+   ],
+   "types": [
+    5,
+    14
+   ]
+  },
+  "349": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 95,
+   "base_defense": 85,
+   "base_exp_yield": 150,
+   "base_hp": 70,
+   "base_sp_attack": 55,
+   "base_sp_defense": 65,
+   "base_speed": 70,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 93,
+   "type_names": [
+    "Rock",
+    "Psychic"
+   ],
+   "types": [
+    5,
+    14
+   ]
+  },
+  "35": {
+   "ability1": 56,
+   "ability2": 0,
+   "base_attack": 45,
+   "base_defense": 48,
+   "base_exp_yield": 68,
+   "base_hp": 70,
+   "base_sp_attack": 60,
+   "base_sp_defense": 65,
+   "base_speed": 35,
+   "catch_rate": 150,
+   "held_item1": 0,
+   "held_item2": 94,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "350": {
+   "ability1": 47,
+   "ability2": 37,
+   "base_attack": 20,
+   "base_defense": 40,
+   "base_exp_yield": 33,
+   "base_hp": 50,
+   "base_sp_attack": 20,
+   "base_sp_defense": 40,
+   "base_speed": 20,
+   "catch_rate": 150,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "351": {
+   "ability1": 47,
+   "ability2": 20,
+   "base_attack": 25,
+   "base_defense": 35,
+   "base_exp_yield": 89,
+   "base_hp": 60,
+   "base_sp_attack": 70,
+   "base_sp_defense": 80,
+   "base_speed": 60,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "352": {
+   "ability1": 47,
+   "ability2": 20,
+   "base_attack": 45,
+   "base_defense": 65,
+   "base_exp_yield": 164,
+   "base_hp": 80,
+   "base_sp_attack": 90,
+   "base_sp_defense": 110,
+   "base_speed": 80,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "353": {
+   "ability1": 57,
+   "ability2": 0,
+   "base_attack": 50,
+   "base_defense": 40,
+   "base_exp_yield": 120,
+   "base_hp": 60,
+   "base_sp_attack": 85,
+   "base_sp_defense": 75,
+   "base_speed": 95,
+   "catch_rate": 200,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "354": {
+   "ability1": 58,
+   "ability2": 0,
+   "base_attack": 40,
+   "base_defense": 50,
+   "base_exp_yield": 120,
+   "base_hp": 60,
+   "base_sp_attack": 75,
+   "base_sp_defense": 85,
+   "base_speed": 95,
+   "catch_rate": 200,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric"
+   ],
+   "types": [
+    13
+   ]
+  },
+  "355": {
+   "ability1": 52,
+   "ability2": 22,
+   "base_attack": 85,
+   "base_defense": 85,
+   "base_exp_yield": 98,
+   "base_hp": 50,
+   "base_sp_attack": 55,
+   "base_sp_defense": 55,
+   "base_speed": 50,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Steel"
+   ],
+   "types": [
+    8
+   ]
+  },
+  "356": {
+   "ability1": 74,
+   "ability2": 0,
+   "base_attack": 40,
+   "base_defense": 55,
+   "base_exp_yield": 91,
+   "base_hp": 30,
+   "base_sp_attack": 40,
+   "base_sp_defense": 55,
+   "base_speed": 60,
+   "catch_rate": 180,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fighting",
+    "Psychic"
+   ],
+   "types": [
+    1,
+    14
+   ]
+  },
+  "357": {
+   "ability1": 74,
+   "ability2": 0,
+   "base_attack": 60,
+   "base_defense": 75,
+   "base_exp_yield": 153,
+   "base_hp": 60,
+   "base_sp_attack": 60,
+   "base_sp_defense": 75,
+   "base_speed": 80,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fighting",
+    "Psychic"
+   ],
+   "types": [
+    1,
+    14
+   ]
+  },
+  "358": {
+   "ability1": 30,
+   "ability2": 0,
+   "base_attack": 40,
+   "base_defense": 60,
+   "base_exp_yield": 74,
+   "base_hp": 45,
+   "base_sp_attack": 40,
+   "base_sp_defense": 75,
+   "base_speed": 50,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal",
+    "Flying"
+   ],
+   "types": [
+    0,
+    2
+   ]
+  },
+  "359": {
+   "ability1": 30,
+   "ability2": 0,
+   "base_attack": 70,
+   "base_defense": 90,
+   "base_exp_yield": 188,
+   "base_hp": 75,
+   "base_sp_attack": 70,
+   "base_sp_defense": 105,
+   "base_speed": 80,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Dragon",
+    "Flying"
+   ],
+   "types": [
+    16,
+    2
+   ]
+  },
+  "36": {
+   "ability1": 56,
+   "ability2": 0,
+   "base_attack": 70,
+   "base_defense": 73,
+   "base_exp_yield": 129,
+   "base_hp": 95,
+   "base_sp_attack": 85,
+   "base_sp_defense": 90,
+   "base_speed": 60,
+   "catch_rate": 25,
+   "held_item1": 0,
+   "held_item2": 94,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "360": {
+   "ability1": 23,
+   "ability2": 0,
+   "base_attack": 23,
+   "base_defense": 48,
+   "base_exp_yield": 44,
+   "base_hp": 95,
+   "base_sp_attack": 23,
+   "base_sp_defense": 48,
+   "base_speed": 23,
+   "catch_rate": 125,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "361": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 40,
+   "base_defense": 90,
+   "base_exp_yield": 97,
+   "base_hp": 20,
+   "base_sp_attack": 30,
+   "base_sp_defense": 90,
+   "base_speed": 25,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 213,
+   "type_names": [
+    "Ghost"
+   ],
+   "types": [
+    7
+   ]
+  },
+  "362": {
+   "ability1": 46,
+   "ability2": 0,
+   "base_attack": 70,
+   "base_defense": 130,
+   "base_exp_yield": 179,
+   "base_hp": 40,
+   "base_sp_attack": 60,
+   "base_sp_defense": 130,
+   "base_speed": 25,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 213,
+   "type_names": [
+    "Ghost"
+   ],
+   "types": [
+    7
+   ]
+  },
+  "363": {
+   "ability1": 30,
+   "ability2": 38,
+   "base_attack": 60,
+   "base_defense": 45,
+   "base_exp_yield": 152,
+   "base_hp": 50,
+   "base_sp_attack": 100,
+   "base_sp_defense": 80,
+   "base_speed": 65,
+   "catch_rate": 150,
+   "held_item1": 0,
+   "held_item2": 211,
+   "type_names": [
+    "Grass",
+    "Poison"
+   ],
+   "types": [
+    12,
+    3
+   ]
+  },
+  "364": {
+   "ability1": 54,
+   "ability2": 0,
+   "base_attack": 60,
+   "base_defense": 60,
+   "base_exp_yield": 83,
+   "base_hp": 60,
+   "base_sp_attack": 35,
+   "base_sp_defense": 35,
+   "base_speed": 30,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "365": {
+   "ability1": 72,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 80,
+   "base_exp_yield": 126,
+   "base_hp": 80,
+   "base_sp_attack": 55,
+   "base_sp_defense": 55,
+   "base_speed": 90,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "366": {
+   "ability1": 54,
+   "ability2": 0,
+   "base_attack": 160,
+   "base_defense": 100,
+   "base_exp_yield": 210,
+   "base_hp": 150,
+   "base_sp_attack": 95,
+   "base_sp_defense": 65,
+   "base_speed": 100,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "367": {
+   "ability1": 64,
+   "ability2": 60,
+   "base_attack": 43,
+   "base_defense": 53,
+   "base_exp_yield": 75,
+   "base_hp": 70,
+   "base_sp_attack": 43,
+   "base_sp_defense": 53,
+   "base_speed": 40,
+   "catch_rate": 225,
+   "held_item1": 0,
+   "held_item2": 107,
+   "type_names": [
+    "Poison"
+   ],
+   "types": [
+    3
+   ]
+  },
+  "368": {
+   "ability1": 64,
+   "ability2": 60,
+   "base_attack": 73,
+   "base_defense": 83,
+   "base_exp_yield": 168,
+   "base_hp": 100,
+   "base_sp_attack": 73,
+   "base_sp_defense": 83,
+   "base_speed": 55,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 107,
+   "type_names": [
+    "Poison"
+   ],
+   "types": [
+    3
+   ]
+  },
+  "369": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 68,
+   "base_defense": 83,
+   "base_exp_yield": 169,
+   "base_hp": 99,
+   "base_sp_attack": 72,
+   "base_sp_defense": 87,
+   "base_speed": 51,
+   "catch_rate": 200,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Flying"
+   ],
+   "types": [
+    12,
+    2
+   ]
+  },
+  "37": {
+   "ability1": 18,
+   "ability2": 0,
+   "base_attack": 41,
+   "base_defense": 40,
+   "base_exp_yield": 63,
+   "base_hp": 38,
+   "base_sp_attack": 50,
+   "base_sp_defense": 65,
+   "base_speed": 65,
+   "catch_rate": 190,
+   "held_item1": 136,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "370": {
+   "ability1": 43,
+   "ability2": 0,
+   "base_attack": 51,
+   "base_defense": 23,
+   "base_exp_yield": 68,
+   "base_hp": 64,
+   "base_sp_attack": 51,
+   "base_sp_defense": 23,
+   "base_speed": 28,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 134,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "371": {
+   "ability1": 43,
+   "ability2": 0,
+   "base_attack": 71,
+   "base_defense": 43,
+   "base_exp_yield": 126,
+   "base_hp": 84,
+   "base_sp_attack": 71,
+   "base_sp_defense": 43,
+   "base_speed": 48,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 134,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "372": {
+   "ability1": 43,
+   "ability2": 0,
+   "base_attack": 91,
+   "base_defense": 63,
+   "base_exp_yield": 184,
+   "base_hp": 104,
+   "base_sp_attack": 91,
+   "base_sp_defense": 63,
+   "base_speed": 68,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 134,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "373": {
+   "ability1": 75,
+   "ability2": 0,
+   "base_attack": 64,
+   "base_defense": 85,
+   "base_exp_yield": 142,
+   "base_hp": 35,
+   "base_sp_attack": 74,
+   "base_sp_defense": 55,
+   "base_speed": 32,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 49,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "374": {
+   "ability1": 33,
+   "ability2": 0,
+   "base_attack": 104,
+   "base_defense": 105,
+   "base_exp_yield": 178,
+   "base_hp": 55,
+   "base_sp_attack": 94,
+   "base_sp_defense": 75,
+   "base_speed": 52,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "375": {
+   "ability1": 33,
+   "ability2": 0,
+   "base_attack": 84,
+   "base_defense": 105,
+   "base_exp_yield": 178,
+   "base_hp": 55,
+   "base_sp_attack": 114,
+   "base_sp_defense": 75,
+   "base_speed": 52,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "376": {
+   "ability1": 46,
+   "ability2": 0,
+   "base_attack": 130,
+   "base_defense": 60,
+   "base_exp_yield": 174,
+   "base_hp": 65,
+   "base_sp_attack": 75,
+   "base_sp_defense": 60,
+   "base_speed": 75,
+   "catch_rate": 30,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Dark"
+   ],
+   "types": [
+    17
+   ]
+  },
+  "377": {
+   "ability1": 15,
+   "ability2": 0,
+   "base_attack": 75,
+   "base_defense": 35,
+   "base_exp_yield": 97,
+   "base_hp": 44,
+   "base_sp_attack": 63,
+   "base_sp_defense": 33,
+   "base_speed": 45,
+   "catch_rate": 225,
+   "held_item1": 0,
+   "held_item2": 213,
+   "type_names": [
+    "Ghost"
+   ],
+   "types": [
+    7
+   ]
+  },
+  "378": {
+   "ability1": 15,
+   "ability2": 0,
+   "base_attack": 115,
+   "base_defense": 65,
+   "base_exp_yield": 179,
+   "base_hp": 64,
+   "base_sp_attack": 83,
+   "base_sp_defense": 63,
+   "base_speed": 65,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 213,
+   "type_names": [
+    "Ghost"
+   ],
+   "types": [
+    7
+   ]
+  },
+  "379": {
+   "ability1": 61,
+   "ability2": 0,
+   "base_attack": 100,
+   "base_defense": 60,
+   "base_exp_yield": 165,
+   "base_hp": 73,
+   "base_sp_attack": 100,
+   "base_sp_defense": 60,
+   "base_speed": 65,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison"
+   ],
+   "types": [
+    3
+   ]
+  },
+  "38": {
+   "ability1": 18,
+   "ability2": 0,
+   "base_attack": 76,
+   "base_defense": 75,
+   "base_exp_yield": 178,
+   "base_hp": 73,
+   "base_sp_attack": 81,
+   "base_sp_defense": 100,
+   "base_speed": 100,
+   "catch_rate": 75,
+   "held_item1": 136,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "380": {
+   "ability1": 17,
+   "ability2": 0,
+   "base_attack": 115,
+   "base_defense": 60,
+   "base_exp_yield": 165,
+   "base_hp": 73,
+   "base_sp_attack": 60,
+   "base_sp_defense": 60,
+   "base_speed": 90,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "381": {
+   "ability1": 33,
+   "ability2": 69,
+   "base_attack": 90,
+   "base_defense": 130,
+   "base_exp_yield": 198,
+   "base_hp": 100,
+   "base_sp_attack": 45,
+   "base_sp_defense": 65,
+   "base_speed": 55,
+   "catch_rate": 25,
+   "held_item1": 0,
+   "held_item2": 51,
+   "type_names": [
+    "Water",
+    "Rock"
+   ],
+   "types": [
+    11,
+    5
+   ]
+  },
+  "382": {
+   "ability1": 5,
+   "ability2": 69,
+   "base_attack": 70,
+   "base_defense": 100,
+   "base_exp_yield": 96,
+   "base_hp": 50,
+   "base_sp_attack": 40,
+   "base_sp_defense": 40,
+   "base_speed": 30,
+   "catch_rate": 180,
+   "held_item1": 0,
+   "held_item2": 204,
+   "type_names": [
+    "Steel",
+    "Rock"
+   ],
+   "types": [
+    8,
+    5
+   ]
+  },
+  "383": {
+   "ability1": 5,
+   "ability2": 69,
+   "base_attack": 90,
+   "base_defense": 140,
+   "base_exp_yield": 152,
+   "base_hp": 60,
+   "base_sp_attack": 50,
+   "base_sp_defense": 50,
+   "base_speed": 40,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 204,
+   "type_names": [
+    "Steel",
+    "Rock"
+   ],
+   "types": [
+    8,
+    5
+   ]
+  },
+  "384": {
+   "ability1": 5,
+   "ability2": 69,
+   "base_attack": 110,
+   "base_defense": 180,
+   "base_exp_yield": 205,
+   "base_hp": 70,
+   "base_sp_attack": 60,
+   "base_sp_defense": 60,
+   "base_speed": 50,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 204,
+   "type_names": [
+    "Steel",
+    "Rock"
+   ],
+   "types": [
+    8,
+    5
+   ]
+  },
+  "385": {
+   "ability1": 59,
+   "ability2": 0,
+   "base_attack": 70,
+   "base_defense": 70,
+   "base_exp_yield": 145,
+   "base_hp": 70,
+   "base_sp_attack": 70,
+   "base_sp_defense": 70,
+   "base_speed": 70,
+   "catch_rate": 45,
+   "held_item1": 209,
+   "held_item2": 209,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "386": {
+   "ability1": 35,
+   "ability2": 68,
+   "base_attack": 73,
+   "base_defense": 55,
+   "base_exp_yield": 146,
+   "base_hp": 65,
+   "base_sp_attack": 47,
+   "base_sp_defense": 75,
+   "base_speed": 85,
+   "catch_rate": 150,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug"
+   ],
+   "types": [
+    6
+   ]
+  },
+  "387": {
+   "ability1": 12,
+   "ability2": 0,
+   "base_attack": 47,
+   "base_defense": 55,
+   "base_exp_yield": 146,
+   "base_hp": 65,
+   "base_sp_attack": 73,
+   "base_sp_defense": 75,
+   "base_speed": 85,
+   "catch_rate": 150,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug"
+   ],
+   "types": [
+    6
+   ]
+  },
+  "388": {
+   "ability1": 21,
+   "ability2": 0,
+   "base_attack": 41,
+   "base_defense": 77,
+   "base_exp_yield": 121,
+   "base_hp": 66,
+   "base_sp_attack": 61,
+   "base_sp_defense": 87,
+   "base_speed": 23,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock",
+    "Grass"
+   ],
+   "types": [
+    5,
+    12
+   ]
+  },
+  "389": {
+   "ability1": 21,
+   "ability2": 0,
+   "base_attack": 81,
+   "base_defense": 97,
+   "base_exp_yield": 201,
+   "base_hp": 86,
+   "base_sp_attack": 81,
+   "base_sp_defense": 107,
+   "base_speed": 43,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock",
+    "Grass"
+   ],
+   "types": [
+    5,
+    12
+   ]
+  },
+  "39": {
+   "ability1": 56,
+   "ability2": 0,
+   "base_attack": 45,
+   "base_defense": 20,
+   "base_exp_yield": 76,
+   "base_hp": 115,
+   "base_sp_attack": 45,
+   "base_sp_defense": 25,
+   "base_speed": 20,
+   "catch_rate": 170,
+   "held_item1": 139,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "390": {
+   "ability1": 4,
+   "ability2": 0,
+   "base_attack": 95,
+   "base_defense": 50,
+   "base_exp_yield": 119,
+   "base_hp": 45,
+   "base_sp_attack": 40,
+   "base_sp_defense": 50,
+   "base_speed": 75,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock",
+    "Bug"
+   ],
+   "types": [
+    5,
+    6
+   ]
+  },
+  "391": {
+   "ability1": 4,
+   "ability2": 0,
+   "base_attack": 125,
+   "base_defense": 100,
+   "base_exp_yield": 200,
+   "base_hp": 75,
+   "base_sp_attack": 70,
+   "base_sp_defense": 80,
+   "base_speed": 45,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock",
+    "Bug"
+   ],
+   "types": [
+    5,
+    6
+   ]
+  },
+  "392": {
+   "ability1": 28,
+   "ability2": 36,
+   "base_attack": 25,
+   "base_defense": 25,
+   "base_exp_yield": 70,
+   "base_hp": 28,
+   "base_sp_attack": 45,
+   "base_sp_defense": 35,
+   "base_speed": 40,
+   "catch_rate": 235,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "393": {
+   "ability1": 28,
+   "ability2": 36,
+   "base_attack": 35,
+   "base_defense": 35,
+   "base_exp_yield": 140,
+   "base_hp": 38,
+   "base_sp_attack": 65,
+   "base_sp_defense": 55,
+   "base_speed": 50,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "394": {
+   "ability1": 28,
+   "ability2": 36,
+   "base_attack": 65,
+   "base_defense": 65,
+   "base_exp_yield": 208,
+   "base_hp": 68,
+   "base_sp_attack": 125,
+   "base_sp_defense": 115,
+   "base_speed": 80,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "395": {
+   "ability1": 69,
+   "ability2": 0,
+   "base_attack": 75,
+   "base_defense": 60,
+   "base_exp_yield": 89,
+   "base_hp": 45,
+   "base_sp_attack": 40,
+   "base_sp_defense": 30,
+   "base_speed": 50,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 201,
+   "type_names": [
+    "Dragon"
+   ],
+   "types": [
+    16
+   ]
+  },
+  "396": {
+   "ability1": 69,
+   "ability2": 0,
+   "base_attack": 95,
+   "base_defense": 100,
+   "base_exp_yield": 144,
+   "base_hp": 65,
+   "base_sp_attack": 60,
+   "base_sp_defense": 50,
+   "base_speed": 50,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 201,
+   "type_names": [
+    "Dragon"
+   ],
+   "types": [
+    16
+   ]
+  },
+  "397": {
+   "ability1": 22,
+   "ability2": 0,
+   "base_attack": 135,
+   "base_defense": 80,
+   "base_exp_yield": 218,
+   "base_hp": 95,
+   "base_sp_attack": 110,
+   "base_sp_defense": 80,
+   "base_speed": 100,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 201,
+   "type_names": [
+    "Dragon",
+    "Flying"
+   ],
+   "types": [
+    16,
+    2
+   ]
+  },
+  "398": {
+   "ability1": 29,
+   "ability2": 0,
+   "base_attack": 55,
+   "base_defense": 80,
+   "base_exp_yield": 103,
+   "base_hp": 40,
+   "base_sp_attack": 35,
+   "base_sp_defense": 60,
+   "base_speed": 30,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 199,
+   "type_names": [
+    "Steel",
+    "Psychic"
+   ],
+   "types": [
+    8,
+    14
+   ]
+  },
+  "399": {
+   "ability1": 29,
+   "ability2": 0,
+   "base_attack": 75,
+   "base_defense": 100,
+   "base_exp_yield": 153,
+   "base_hp": 60,
+   "base_sp_attack": 55,
+   "base_sp_defense": 80,
+   "base_speed": 50,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 199,
+   "type_names": [
+    "Steel",
+    "Psychic"
+   ],
+   "types": [
+    8,
+    14
+   ]
+  },
+  "4": {
+   "ability1": 66,
+   "ability2": 0,
+   "base_attack": 52,
+   "base_defense": 43,
+   "base_exp_yield": 65,
+   "base_hp": 39,
+   "base_sp_attack": 60,
+   "base_sp_defense": 50,
+   "base_speed": 65,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "40": {
+   "ability1": 56,
+   "ability2": 0,
+   "base_attack": 70,
+   "base_defense": 45,
+   "base_exp_yield": 109,
+   "base_hp": 140,
+   "base_sp_attack": 75,
+   "base_sp_defense": 50,
+   "base_speed": 45,
+   "catch_rate": 50,
+   "held_item1": 139,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "400": {
+   "ability1": 29,
+   "ability2": 0,
+   "base_attack": 135,
+   "base_defense": 130,
+   "base_exp_yield": 210,
+   "base_hp": 80,
+   "base_sp_attack": 95,
+   "base_sp_defense": 90,
+   "base_speed": 70,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 199,
+   "type_names": [
+    "Steel",
+    "Psychic"
+   ],
+   "types": [
+    8,
+    14
+   ]
+  },
+  "401": {
+   "ability1": 29,
+   "ability2": 0,
+   "base_attack": 100,
+   "base_defense": 200,
+   "base_exp_yield": 217,
+   "base_hp": 80,
+   "base_sp_attack": 50,
+   "base_sp_defense": 100,
+   "base_speed": 50,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock"
+   ],
+   "types": [
+    5
+   ]
+  },
+  "402": {
+   "ability1": 29,
+   "ability2": 0,
+   "base_attack": 50,
+   "base_defense": 100,
+   "base_exp_yield": 216,
+   "base_hp": 80,
+   "base_sp_attack": 100,
+   "base_sp_defense": 200,
+   "base_speed": 50,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ice"
+   ],
+   "types": [
+    15
+   ]
+  },
+  "403": {
+   "ability1": 29,
+   "ability2": 0,
+   "base_attack": 75,
+   "base_defense": 150,
+   "base_exp_yield": 215,
+   "base_hp": 80,
+   "base_sp_attack": 75,
+   "base_sp_defense": 150,
+   "base_speed": 50,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Steel"
+   ],
+   "types": [
+    8
+   ]
+  },
+  "404": {
+   "ability1": 2,
+   "ability2": 0,
+   "base_attack": 100,
+   "base_defense": 90,
+   "base_exp_yield": 218,
+   "base_hp": 100,
+   "base_sp_attack": 150,
+   "base_sp_defense": 140,
+   "base_speed": 90,
+   "catch_rate": 5,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "405": {
+   "ability1": 70,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 140,
+   "base_exp_yield": 218,
+   "base_hp": 100,
+   "base_sp_attack": 100,
+   "base_sp_defense": 90,
+   "base_speed": 90,
+   "catch_rate": 5,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ground"
+   ],
+   "types": [
+    4
+   ]
+  },
+  "406": {
+   "ability1": 77,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 90,
+   "base_exp_yield": 220,
+   "base_hp": 105,
+   "base_sp_attack": 150,
+   "base_sp_defense": 90,
+   "base_speed": 95,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Dragon",
+    "Flying"
+   ],
+   "types": [
+    16,
+    2
+   ]
+  },
+  "407": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 90,
+   "base_exp_yield": 211,
+   "base_hp": 80,
+   "base_sp_attack": 110,
+   "base_sp_defense": 130,
+   "base_speed": 110,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Dragon",
+    "Psychic"
+   ],
+   "types": [
+    16,
+    14
+   ]
+  },
+  "408": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 90,
+   "base_defense": 80,
+   "base_exp_yield": 211,
+   "base_hp": 80,
+   "base_sp_attack": 130,
+   "base_sp_defense": 110,
+   "base_speed": 110,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Dragon",
+    "Psychic"
+   ],
+   "types": [
+    16,
+    14
+   ]
+  },
+  "409": {
+   "ability1": 32,
+   "ability2": 0,
+   "base_attack": 100,
+   "base_defense": 100,
+   "base_exp_yield": 215,
+   "base_hp": 100,
+   "base_sp_attack": 100,
+   "base_sp_defense": 100,
+   "base_speed": 100,
+   "catch_rate": 3,
+   "held_item1": 109,
+   "held_item2": 109,
+   "type_names": [
+    "Steel",
+    "Psychic"
+   ],
+   "types": [
+    8,
+    14
+   ]
+  },
+  "41": {
+   "ability1": 39,
+   "ability2": 0,
+   "base_attack": 45,
+   "base_defense": 35,
+   "base_exp_yield": 54,
+   "base_hp": 40,
+   "base_sp_attack": 30,
+   "base_sp_defense": 40,
+   "base_speed": 55,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison",
+    "Flying"
+   ],
+   "types": [
+    3,
+    2
+   ]
+  },
+  "410": {
+   "ability1": 46,
+   "ability2": 0,
+   "base_attack": 150,
+   "base_defense": 50,
+   "base_exp_yield": 215,
+   "base_hp": 50,
+   "base_sp_attack": 150,
+   "base_sp_defense": 50,
+   "base_speed": 150,
+   "catch_rate": 3,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "411": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 50,
+   "base_defense": 70,
+   "base_exp_yield": 147,
+   "base_hp": 65,
+   "base_sp_attack": 95,
+   "base_sp_defense": 80,
+   "base_speed": 65,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "42": {
+   "ability1": 39,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 70,
+   "base_exp_yield": 171,
+   "base_hp": 75,
+   "base_sp_attack": 65,
+   "base_sp_defense": 75,
+   "base_speed": 90,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison",
+    "Flying"
+   ],
+   "types": [
+    3,
+    2
+   ]
+  },
+  "43": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 50,
+   "base_defense": 55,
+   "base_exp_yield": 78,
+   "base_hp": 45,
+   "base_sp_attack": 75,
+   "base_sp_defense": 65,
+   "base_speed": 30,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Poison"
+   ],
+   "types": [
+    12,
+    3
+   ]
+  },
+  "44": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 70,
+   "base_exp_yield": 132,
+   "base_hp": 60,
+   "base_sp_attack": 85,
+   "base_sp_defense": 75,
+   "base_speed": 40,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Poison"
+   ],
+   "types": [
+    12,
+    3
+   ]
+  },
+  "45": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 85,
+   "base_exp_yield": 184,
+   "base_hp": 75,
+   "base_sp_attack": 100,
+   "base_sp_defense": 90,
+   "base_speed": 50,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Poison"
+   ],
+   "types": [
+    12,
+    3
+   ]
+  },
+  "46": {
+   "ability1": 27,
+   "ability2": 0,
+   "base_attack": 70,
+   "base_defense": 55,
+   "base_exp_yield": 70,
+   "base_hp": 35,
+   "base_sp_attack": 45,
+   "base_sp_defense": 55,
+   "base_speed": 25,
+   "catch_rate": 190,
+   "held_item1": 103,
+   "held_item2": 104,
+   "type_names": [
+    "Bug",
+    "Grass"
+   ],
+   "types": [
+    6,
+    12
+   ]
+  },
+  "47": {
+   "ability1": 27,
+   "ability2": 0,
+   "base_attack": 95,
+   "base_defense": 80,
+   "base_exp_yield": 128,
+   "base_hp": 60,
+   "base_sp_attack": 60,
+   "base_sp_defense": 80,
+   "base_speed": 30,
+   "catch_rate": 75,
+   "held_item1": 103,
+   "held_item2": 104,
+   "type_names": [
+    "Bug",
+    "Grass"
+   ],
+   "types": [
+    6,
+    12
+   ]
+  },
+  "48": {
+   "ability1": 14,
+   "ability2": 0,
+   "base_attack": 55,
+   "base_defense": 50,
+   "base_exp_yield": 75,
+   "base_hp": 60,
+   "base_sp_attack": 40,
+   "base_sp_defense": 55,
+   "base_speed": 45,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Bug",
+    "Poison"
+   ],
+   "types": [
+    6,
+    3
+   ]
+  },
+  "49": {
+   "ability1": 19,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 60,
+   "base_exp_yield": 138,
+   "base_hp": 70,
+   "base_sp_attack": 90,
+   "base_sp_defense": 75,
+   "base_speed": 90,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 188,
+   "type_names": [
+    "Bug",
+    "Poison"
+   ],
+   "types": [
+    6,
+    3
+   ]
+  },
+  "5": {
+   "ability1": 66,
+   "ability2": 0,
+   "base_attack": 64,
+   "base_defense": 58,
+   "base_exp_yield": 142,
+   "base_hp": 58,
+   "base_sp_attack": 80,
+   "base_sp_defense": 65,
+   "base_speed": 80,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "50": {
+   "ability1": 8,
+   "ability2": 71,
+   "base_attack": 55,
+   "base_defense": 25,
+   "base_exp_yield": 81,
+   "base_hp": 10,
+   "base_sp_attack": 35,
+   "base_sp_defense": 45,
+   "base_speed": 95,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ground"
+   ],
+   "types": [
+    4
+   ]
+  },
+  "51": {
+   "ability1": 8,
+   "ability2": 71,
+   "base_attack": 80,
+   "base_defense": 50,
+   "base_exp_yield": 153,
+   "base_hp": 35,
+   "base_sp_attack": 50,
+   "base_sp_defense": 70,
+   "base_speed": 120,
+   "catch_rate": 50,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ground"
+   ],
+   "types": [
+    4
+   ]
+  },
+  "52": {
+   "ability1": 53,
+   "ability2": 0,
+   "base_attack": 45,
+   "base_defense": 35,
+   "base_exp_yield": 69,
+   "base_hp": 40,
+   "base_sp_attack": 40,
+   "base_sp_defense": 40,
+   "base_speed": 90,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 110,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "53": {
+   "ability1": 7,
+   "ability2": 0,
+   "base_attack": 70,
+   "base_defense": 60,
+   "base_exp_yield": 148,
+   "base_hp": 65,
+   "base_sp_attack": 65,
+   "base_sp_defense": 65,
+   "base_speed": 115,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal"
+   ],
+   "types": [
+    0
+   ]
+  },
+  "54": {
+   "ability1": 6,
+   "ability2": 13,
+   "base_attack": 52,
+   "base_defense": 48,
+   "base_exp_yield": 80,
+   "base_hp": 50,
+   "base_sp_attack": 65,
+   "base_sp_defense": 50,
+   "base_speed": 55,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "55": {
+   "ability1": 6,
+   "ability2": 13,
+   "base_attack": 82,
+   "base_defense": 78,
+   "base_exp_yield": 174,
+   "base_hp": 80,
+   "base_sp_attack": 95,
+   "base_sp_defense": 80,
+   "base_speed": 85,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "56": {
+   "ability1": 72,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 35,
+   "base_exp_yield": 74,
+   "base_hp": 40,
+   "base_sp_attack": 35,
+   "base_sp_defense": 45,
+   "base_speed": 70,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fighting"
+   ],
+   "types": [
+    1
+   ]
+  },
+  "57": {
+   "ability1": 72,
+   "ability2": 0,
+   "base_attack": 105,
+   "base_defense": 60,
+   "base_exp_yield": 149,
+   "base_hp": 65,
+   "base_sp_attack": 60,
+   "base_sp_defense": 70,
+   "base_speed": 95,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fighting"
+   ],
+   "types": [
+    1
+   ]
+  },
+  "58": {
+   "ability1": 22,
+   "ability2": 18,
+   "base_attack": 70,
+   "base_defense": 45,
+   "base_exp_yield": 91,
+   "base_hp": 55,
+   "base_sp_attack": 70,
+   "base_sp_defense": 50,
+   "base_speed": 60,
+   "catch_rate": 190,
+   "held_item1": 136,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "59": {
+   "ability1": 22,
+   "ability2": 18,
+   "base_attack": 110,
+   "base_defense": 80,
+   "base_exp_yield": 213,
+   "base_hp": 90,
+   "base_sp_attack": 100,
+   "base_sp_defense": 80,
+   "base_speed": 95,
+   "catch_rate": 75,
+   "held_item1": 136,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "6": {
+   "ability1": 66,
+   "ability2": 0,
+   "base_attack": 84,
+   "base_defense": 78,
+   "base_exp_yield": 209,
+   "base_hp": 78,
+   "base_sp_attack": 109,
+   "base_sp_defense": 85,
+   "base_speed": 100,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire",
+    "Flying"
+   ],
+   "types": [
+    10,
+    2
+   ]
+  },
+  "60": {
+   "ability1": 11,
+   "ability2": 6,
+   "base_attack": 50,
+   "base_defense": 40,
+   "base_exp_yield": 77,
+   "base_hp": 40,
+   "base_sp_attack": 40,
+   "base_sp_defense": 40,
+   "base_speed": 90,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "61": {
+   "ability1": 11,
+   "ability2": 6,
+   "base_attack": 65,
+   "base_defense": 65,
+   "base_exp_yield": 131,
+   "base_hp": 65,
+   "base_sp_attack": 50,
+   "base_sp_defense": 50,
+   "base_speed": 90,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "62": {
+   "ability1": 11,
+   "ability2": 6,
+   "base_attack": 85,
+   "base_defense": 95,
+   "base_exp_yield": 185,
+   "base_hp": 90,
+   "base_sp_attack": 70,
+   "base_sp_defense": 90,
+   "base_speed": 70,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Fighting"
+   ],
+   "types": [
+    11,
+    1
+   ]
+  },
+  "63": {
+   "ability1": 28,
+   "ability2": 39,
+   "base_attack": 20,
+   "base_defense": 15,
+   "base_exp_yield": 73,
+   "base_hp": 25,
+   "base_sp_attack": 105,
+   "base_sp_defense": 55,
+   "base_speed": 90,
+   "catch_rate": 200,
+   "held_item1": 0,
+   "held_item2": 214,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "64": {
+   "ability1": 28,
+   "ability2": 39,
+   "base_attack": 35,
+   "base_defense": 30,
+   "base_exp_yield": 145,
+   "base_hp": 40,
+   "base_sp_attack": 120,
+   "base_sp_defense": 70,
+   "base_speed": 105,
+   "catch_rate": 100,
+   "held_item1": 0,
+   "held_item2": 214,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "65": {
+   "ability1": 28,
+   "ability2": 39,
+   "base_attack": 50,
+   "base_defense": 45,
+   "base_exp_yield": 186,
+   "base_hp": 55,
+   "base_sp_attack": 135,
+   "base_sp_defense": 85,
+   "base_speed": 120,
+   "catch_rate": 50,
+   "held_item1": 0,
+   "held_item2": 214,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "66": {
+   "ability1": 62,
+   "ability2": 0,
+   "base_attack": 80,
+   "base_defense": 50,
+   "base_exp_yield": 88,
+   "base_hp": 70,
+   "base_sp_attack": 35,
+   "base_sp_defense": 35,
+   "base_speed": 35,
+   "catch_rate": 180,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fighting"
+   ],
+   "types": [
+    1
+   ]
+  },
+  "67": {
+   "ability1": 62,
+   "ability2": 0,
+   "base_attack": 100,
+   "base_defense": 70,
+   "base_exp_yield": 146,
+   "base_hp": 80,
+   "base_sp_attack": 50,
+   "base_sp_defense": 60,
+   "base_speed": 45,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 196,
+   "type_names": [
+    "Fighting"
+   ],
+   "types": [
+    1
+   ]
+  },
+  "68": {
+   "ability1": 62,
+   "ability2": 0,
+   "base_attack": 130,
+   "base_defense": 80,
+   "base_exp_yield": 193,
+   "base_hp": 90,
+   "base_sp_attack": 65,
+   "base_sp_defense": 85,
+   "base_speed": 55,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 196,
+   "type_names": [
+    "Fighting"
+   ],
+   "types": [
+    1
+   ]
+  },
+  "69": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 75,
+   "base_defense": 35,
+   "base_exp_yield": 84,
+   "base_hp": 50,
+   "base_sp_attack": 70,
+   "base_sp_defense": 30,
+   "base_speed": 40,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Poison"
+   ],
+   "types": [
+    12,
+    3
+   ]
+  },
+  "7": {
+   "ability1": 67,
+   "ability2": 0,
+   "base_attack": 48,
+   "base_defense": 65,
+   "base_exp_yield": 66,
+   "base_hp": 44,
+   "base_sp_attack": 50,
+   "base_sp_defense": 64,
+   "base_speed": 43,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "70": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 90,
+   "base_defense": 50,
+   "base_exp_yield": 151,
+   "base_hp": 65,
+   "base_sp_attack": 85,
+   "base_sp_defense": 45,
+   "base_speed": 55,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Poison"
+   ],
+   "types": [
+    12,
+    3
+   ]
+  },
+  "71": {
+   "ability1": 34,
+   "ability2": 0,
+   "base_attack": 105,
+   "base_defense": 65,
+   "base_exp_yield": 191,
+   "base_hp": 80,
+   "base_sp_attack": 100,
+   "base_sp_defense": 60,
+   "base_speed": 70,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Grass",
+    "Poison"
+   ],
+   "types": [
+    12,
+    3
+   ]
+  },
+  "72": {
+   "ability1": 29,
+   "ability2": 64,
+   "base_attack": 40,
+   "base_defense": 35,
+   "base_exp_yield": 105,
+   "base_hp": 40,
+   "base_sp_attack": 50,
+   "base_sp_defense": 100,
+   "base_speed": 70,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Poison"
+   ],
+   "types": [
+    11,
+    3
+   ]
+  },
+  "73": {
+   "ability1": 29,
+   "ability2": 64,
+   "base_attack": 70,
+   "base_defense": 65,
+   "base_exp_yield": 205,
+   "base_hp": 80,
+   "base_sp_attack": 80,
+   "base_sp_defense": 120,
+   "base_speed": 100,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Poison"
+   ],
+   "types": [
+    11,
+    3
+   ]
+  },
+  "74": {
+   "ability1": 69,
+   "ability2": 5,
+   "base_attack": 80,
+   "base_defense": 100,
+   "base_exp_yield": 86,
+   "base_hp": 40,
+   "base_sp_attack": 30,
+   "base_sp_defense": 30,
+   "base_speed": 20,
+   "catch_rate": 255,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Rock",
+    "Ground"
+   ],
+   "types": [
+    5,
+    4
+   ]
+  },
+  "75": {
+   "ability1": 69,
+   "ability2": 5,
+   "base_attack": 95,
+   "base_defense": 115,
+   "base_exp_yield": 134,
+   "base_hp": 55,
+   "base_sp_attack": 45,
+   "base_sp_defense": 45,
+   "base_speed": 35,
+   "catch_rate": 120,
+   "held_item1": 0,
+   "held_item2": 204,
+   "type_names": [
+    "Rock",
+    "Ground"
+   ],
+   "types": [
+    5,
+    4
+   ]
+  },
+  "76": {
+   "ability1": 69,
+   "ability2": 5,
+   "base_attack": 110,
+   "base_defense": 130,
+   "base_exp_yield": 177,
+   "base_hp": 80,
+   "base_sp_attack": 55,
+   "base_sp_defense": 65,
+   "base_speed": 45,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 204,
+   "type_names": [
+    "Rock",
+    "Ground"
+   ],
+   "types": [
+    5,
+    4
+   ]
+  },
+  "77": {
+   "ability1": 50,
+   "ability2": 18,
+   "base_attack": 85,
+   "base_defense": 55,
+   "base_exp_yield": 152,
+   "base_hp": 50,
+   "base_sp_attack": 65,
+   "base_sp_defense": 65,
+   "base_speed": 90,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "78": {
+   "ability1": 50,
+   "ability2": 18,
+   "base_attack": 100,
+   "base_defense": 70,
+   "base_exp_yield": 192,
+   "base_hp": 65,
+   "base_sp_attack": 80,
+   "base_sp_defense": 80,
+   "base_speed": 105,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Fire"
+   ],
+   "types": [
+    10
+   ]
+  },
+  "79": {
+   "ability1": 12,
+   "ability2": 20,
+   "base_attack": 65,
+   "base_defense": 65,
+   "base_exp_yield": 99,
+   "base_hp": 90,
+   "base_sp_attack": 40,
+   "base_sp_defense": 40,
+   "base_speed": 15,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Psychic"
+   ],
+   "types": [
+    11,
+    14
+   ]
+  },
+  "8": {
+   "ability1": 67,
+   "ability2": 0,
+   "base_attack": 63,
+   "base_defense": 80,
+   "base_exp_yield": 143,
+   "base_hp": 59,
+   "base_sp_attack": 65,
+   "base_sp_defense": 80,
+   "base_speed": 58,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "80": {
+   "ability1": 12,
+   "ability2": 20,
+   "base_attack": 75,
+   "base_defense": 110,
+   "base_exp_yield": 164,
+   "base_hp": 95,
+   "base_sp_attack": 100,
+   "base_sp_defense": 80,
+   "base_speed": 30,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water",
+    "Psychic"
+   ],
+   "types": [
+    11,
+    14
+   ]
+  },
+  "81": {
+   "ability1": 42,
+   "ability2": 5,
+   "base_attack": 35,
+   "base_defense": 70,
+   "base_exp_yield": 89,
+   "base_hp": 25,
+   "base_sp_attack": 95,
+   "base_sp_defense": 55,
+   "base_speed": 45,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Electric",
+    "Steel"
+   ],
+   "types": [
+    13,
+    8
+   ]
+  },
+  "82": {
+   "ability1": 42,
+   "ability2": 5,
+   "base_attack": 60,
+   "base_defense": 95,
+   "base_exp_yield": 161,
+   "base_hp": 50,
+   "base_sp_attack": 120,
+   "base_sp_defense": 70,
+   "base_speed": 70,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 208,
+   "type_names": [
+    "Electric",
+    "Steel"
+   ],
+   "types": [
+    13,
+    8
+   ]
+  },
+  "83": {
+   "ability1": 51,
+   "ability2": 39,
+   "base_attack": 65,
+   "base_defense": 55,
+   "base_exp_yield": 94,
+   "base_hp": 52,
+   "base_sp_attack": 58,
+   "base_sp_defense": 62,
+   "base_speed": 60,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 225,
+   "type_names": [
+    "Normal",
+    "Flying"
+   ],
+   "types": [
+    0,
+    2
+   ]
+  },
+  "84": {
+   "ability1": 50,
+   "ability2": 48,
+   "base_attack": 85,
+   "base_defense": 45,
+   "base_exp_yield": 96,
+   "base_hp": 35,
+   "base_sp_attack": 35,
+   "base_sp_defense": 35,
+   "base_speed": 75,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Normal",
+    "Flying"
+   ],
+   "types": [
+    0,
+    2
+   ]
+  },
+  "85": {
+   "ability1": 50,
+   "ability2": 48,
+   "base_attack": 110,
+   "base_defense": 70,
+   "base_exp_yield": 158,
+   "base_hp": 60,
+   "base_sp_attack": 60,
+   "base_sp_defense": 60,
+   "base_speed": 100,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 210,
+   "type_names": [
+    "Normal",
+    "Flying"
+   ],
+   "types": [
+    0,
+    2
+   ]
+  },
+  "86": {
+   "ability1": 47,
+   "ability2": 0,
+   "base_attack": 45,
+   "base_defense": 55,
+   "base_exp_yield": 100,
+   "base_hp": 65,
+   "base_sp_attack": 45,
+   "base_sp_defense": 70,
+   "base_speed": 45,
+   "catch_rate": 190,
+   "held_item1": 137,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "87": {
+   "ability1": 47,
+   "ability2": 0,
+   "base_attack": 70,
+   "base_defense": 80,
+   "base_exp_yield": 176,
+   "base_hp": 90,
+   "base_sp_attack": 70,
+   "base_sp_defense": 95,
+   "base_speed": 70,
+   "catch_rate": 75,
+   "held_item1": 137,
+   "held_item2": 212,
+   "type_names": [
+    "Water",
+    "Ice"
+   ],
+   "types": [
+    11,
+    15
+   ]
+  },
+  "88": {
+   "ability1": 1,
+   "ability2": 60,
+   "base_attack": 80,
+   "base_defense": 50,
+   "base_exp_yield": 90,
+   "base_hp": 80,
+   "base_sp_attack": 40,
+   "base_sp_defense": 50,
+   "base_speed": 25,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison"
+   ],
+   "types": [
+    3
+   ]
+  },
+  "89": {
+   "ability1": 1,
+   "ability2": 60,
+   "base_attack": 105,
+   "base_defense": 75,
+   "base_exp_yield": 157,
+   "base_hp": 105,
+   "base_sp_attack": 65,
+   "base_sp_defense": 100,
+   "base_speed": 50,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Poison"
+   ],
+   "types": [
+    3
+   ]
+  },
+  "9": {
+   "ability1": 67,
+   "ability2": 0,
+   "base_attack": 83,
+   "base_defense": 100,
+   "base_exp_yield": 210,
+   "base_hp": 79,
+   "base_sp_attack": 85,
+   "base_sp_defense": 105,
+   "base_speed": 78,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "90": {
+   "ability1": 75,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 100,
+   "base_exp_yield": 97,
+   "base_hp": 30,
+   "base_sp_attack": 45,
+   "base_sp_defense": 25,
+   "base_speed": 40,
+   "catch_rate": 190,
+   "held_item1": 106,
+   "held_item2": 107,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "91": {
+   "ability1": 75,
+   "ability2": 0,
+   "base_attack": 95,
+   "base_defense": 180,
+   "base_exp_yield": 203,
+   "base_hp": 50,
+   "base_sp_attack": 85,
+   "base_sp_defense": 45,
+   "base_speed": 70,
+   "catch_rate": 60,
+   "held_item1": 106,
+   "held_item2": 107,
+   "type_names": [
+    "Water",
+    "Ice"
+   ],
+   "types": [
+    11,
+    15
+   ]
+  },
+  "92": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 35,
+   "base_defense": 30,
+   "base_exp_yield": 95,
+   "base_hp": 30,
+   "base_sp_attack": 100,
+   "base_sp_defense": 35,
+   "base_speed": 80,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Ghost",
+    "Poison"
+   ],
+   "types": [
+    7,
+    3
+   ]
+  },
+  "93": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 50,
+   "base_defense": 45,
+   "base_exp_yield": 126,
+   "base_hp": 45,
+   "base_sp_attack": 115,
+   "base_sp_defense": 55,
+   "base_speed": 95,
+   "catch_rate": 90,
+   "held_item1": 0,
+   "held_item2": 213,
+   "type_names": [
+    "Ghost",
+    "Poison"
+   ],
+   "types": [
+    7,
+    3
+   ]
+  },
+  "94": {
+   "ability1": 26,
+   "ability2": 0,
+   "base_attack": 65,
+   "base_defense": 60,
+   "base_exp_yield": 190,
+   "base_hp": 60,
+   "base_sp_attack": 130,
+   "base_sp_defense": 75,
+   "base_speed": 110,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 213,
+   "type_names": [
+    "Ghost",
+    "Poison"
+   ],
+   "types": [
+    7,
+    3
+   ]
+  },
+  "95": {
+   "ability1": 69,
+   "ability2": 5,
+   "base_attack": 45,
+   "base_defense": 160,
+   "base_exp_yield": 108,
+   "base_hp": 35,
+   "base_sp_attack": 30,
+   "base_sp_defense": 45,
+   "base_speed": 70,
+   "catch_rate": 45,
+   "held_item1": 0,
+   "held_item2": 204,
+   "type_names": [
+    "Rock",
+    "Ground"
+   ],
+   "types": [
+    5,
+    4
+   ]
+  },
+  "96": {
+   "ability1": 15,
+   "ability2": 0,
+   "base_attack": 48,
+   "base_defense": 45,
+   "base_exp_yield": 102,
+   "base_hp": 60,
+   "base_sp_attack": 43,
+   "base_sp_defense": 90,
+   "base_speed": 42,
+   "catch_rate": 190,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "97": {
+   "ability1": 15,
+   "ability2": 0,
+   "base_attack": 73,
+   "base_defense": 70,
+   "base_exp_yield": 165,
+   "base_hp": 85,
+   "base_sp_attack": 73,
+   "base_sp_defense": 115,
+   "base_speed": 67,
+   "catch_rate": 75,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Psychic"
+   ],
+   "types": [
+    14
+   ]
+  },
+  "98": {
+   "ability1": 52,
+   "ability2": 75,
+   "base_attack": 105,
+   "base_defense": 90,
+   "base_exp_yield": 115,
+   "base_hp": 30,
+   "base_sp_attack": 25,
+   "base_sp_defense": 25,
+   "base_speed": 50,
+   "catch_rate": 225,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  },
+  "99": {
+   "ability1": 52,
+   "ability2": 75,
+   "base_attack": 130,
+   "base_defense": 115,
+   "base_exp_yield": 206,
+   "base_hp": 55,
+   "base_sp_attack": 50,
+   "base_sp_defense": 50,
+   "base_speed": 75,
+   "catch_rate": 60,
+   "held_item1": 0,
+   "held_item2": 0,
+   "type_names": [
+    "Water"
+   ],
+   "types": [
+    11
+   ]
+  }
+ }
+}

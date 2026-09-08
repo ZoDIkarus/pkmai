@@ -1,330 +1,126 @@
 #!/usr/bin/env python3
-"""PKMAI Schnellstatus - liest die Runtime-JSONs und fasst sie kompakt zusammen.
+"""Compact live status for the active 2x2 Navigation/Battle architecture."""
+from __future__ import annotations
 
-Aufruf:
-    python tools/pkmai_status.py           # aktualisiert automatisch jede Sekunde
-    python tools/pkmai_status.py --once     # nur einmal ausgeben
-    python tools/pkmai_status.py -n 10       # Intervall auf 10s setzen
-Beenden mit Ctrl+C.
-"""
+import argparse
 import glob
 import json
 import os
-import sys
 import time
-from collections import Counter
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RT = os.path.join(ROOT, "runtime")
-WIDTH = 82
+WIDTH = 86
 
 
 def load(*parts):
     try:
         with open(os.path.join(RT, *parts)) as f:
-            return json.load(f) or {}
+            value = json.load(f)
+        return value if isinstance(value, dict) else {}
     except Exception:
         return {}
 
 
-def fmt(n):
+def fmt(value):
     try:
-        return f"{int(n):,}".replace(",", ".")
+        return f"{int(value):,}".replace(",", ".")
     except Exception:
-        return str(n)
+        return str(value)
 
 
-def score(m):
-    """Muss exakt zu MilestoneCheckpointCallback._score in src/train.py passen,
-    damit ein Candidate ohne last_eval_result (alter Statusstand) genauso
-    gegen den Champion bewertet werden kann wie beim Trainer-Neustart."""
-    return (
-        int(m.get("max_badges", 0)),
-        int(m.get("max_stage", 0)),
-        int(m.get("full_starter_permille", 0)),
-        int(m.get("full_exit_permille", 0)),
-        int(m.get("full_stairs_permille", 0)),
-        int(m.get("full_intro_permille", 0)),
-        int(m.get("max_level", 0)),
-        int(m.get("max_maps", 0)),
-        -int(m.get("full_best_stage_steps", 1_000_000) or 1_000_000),
-    )
-
-
-def load_history():
-    try:
-        with open(os.path.join(RT, "training_history.json")) as f:
-            data = json.load(f)
-        return data if isinstance(data, list) else []
-    except Exception:
-        return []
-
-
-def brain_section(ts, cs, m):
-    """Kompakte Antwort auf die Frage: lernt das Netz weiter?"""
-    lines = []
-    has_champion = os.path.exists(
-        os.path.join(RT, "checkpoints", "pokemon_model_champion.zip")
-    )
-    champion_label = (
-        f"Champion v{cs.get('version', 0):06d} @ {fmt(cs.get('timesteps', 0))} Steps"
-        if has_champion
-        else "noch kein bestätigter Champion"
-    )
-    lines.append("  🧠 BRAIN")
-    lines.append(f"     {champion_label}")
-    lines.append(
-        f"     Learner: {fmt(ts.get('learner_steps', 0))} Steps  "
-        f"(+{fmt(ts.get('delta_steps', 0))} seit Champion)"
-    )
-    lines.append("     Beststand:")
-    lines.append(f"       Orden:      {m.get('max_badges', 0)}")
-    lines.append(f"       Weltstufe:  {m.get('max_stage', 0)}")
-    lines.append(f"       Level:      {m.get('max_level', 0)}")
-    lines.append(f"       Maps:       {m.get('max_maps', 0)}")
-    lines.append(
-        f"       Tempo:      {fmt(m.get('full_best_stage_steps', 0))} Weg-Steps"
-    )
-
-    last_eval = ts.get("last_eval_metrics") or {}
-    last_eval_result = str(ts.get("last_eval_result", "") or "")
-    champion_score = cs.get("score")
-    if (
-        last_eval
-        and not last_eval_result
-        and isinstance(champion_score, list)
-        and score(last_eval) <= tuple(champion_score)
-    ):
-        # Alter Statusstand ohne last_eval_result (vor der Migration in
-        # train.py geschrieben): Candidate lag unter dem Champion, also
-        # eindeutig nicht uebernommen. Sonst wuerde dieser Datenpunkt in der
-        # Anzeige verloren gehen, sobald der naechste Eval-Zyklus laeuft.
-        last_eval_result = "rejected"
-    if last_eval and last_eval_result in {"rejected", "regression"}:
-        label = (
-            "wegen Regression verworfen"
-            if last_eval_result == "regression"
-            else "nicht übernommen"
-        )
-        eval_step = int(ts.get("last_eval_at_step", 0) or 0)
-        lines.append(f"     Letzter Candidate: {label}")
-        if eval_step:
-            lines.append(f"       geprüft bei: {fmt(eval_step)} Learner-Steps")
-        lines.append(
-            f"       erreicht:    Stufe {int(last_eval.get('max_stage', 0) or 0)}, "
-            f"Level {int(last_eval.get('max_level', 0) or 0)}, "
-            f"Maps {int(last_eval.get('max_maps', 0) or 0)}"
-        )
-        lines.append(
-            f"       Bestweg:     {fmt(last_eval.get('full_best_stage_steps', 0))} "
-            f"Weg-Steps ({int(last_eval.get('full_episodes', 0) or 0)} Full-Runs)"
-        )
-
-    hist = load_history()
-    if not hist:
-        lines.append("                 (noch keine Reward-Historie)")
-    else:
-        now_pt = hist[-1]
-        base_idx = 0
-        for i in range(len(hist) - 1, 0, -1):
-            if int(hist[i].get("timesteps", 0) or 0) < int(hist[i - 1].get("timesteps", 0) or 0):
-                base_idx = i
-                break
-        cmp_idx = max(base_idx, len(hist) - 1 - 40)
-        old_pt = hist[cmp_idx]
-        best_now = float(now_pt.get("best_episode_reward", 0) or 0)
-        best_old = float(old_pt.get("best_episode_reward", 0) or 0)
-        avg_now = float(now_pt.get("avg_episode_reward", 0) or 0)
-        delta = best_now - best_old
-        arrow = "▲" if delta > 0 else ("▼" if delta < 0 else "▬")
-        lines.append(
-            f"     Reward: Best {best_now:.0f} ({arrow}{delta:+.0f})  |  Ø {avg_now:.0f}"
-        )
-    strikes = int(ts.get("regression_strikes", 0) or 0)
-    rollbacks = int(ts.get("rollback_count", 0) or 0)
-    if strikes or rollbacks:
-        lines.append(
-            f"     ⚠ Schutz: {strikes} Regression(en), {rollbacks} Rollback(s)"
-        )
-    return lines
+def _instances():
+    runners, watcher = [], {}
+    for path in glob.glob(os.path.join(RT, "instances_data", "inst_*.json")):
+        try:
+            with open(path) as f:
+                row = json.load(f) or {}
+            aid = int(row.get("id", -1))
+        except Exception:
+            continue
+        if aid == 120:
+            watcher = row
+        elif 0 <= aid < 40:
+            runners.append(row)
+    return sorted(runners, key=lambda r: int(r.get("id", 0))), watcher
 
 
 def render():
-    ts = load("trainer_status.json")
-    cs = load("champion_score.json")
-    gp = load("exploration_memory", "global_progress.json")
-    m = cs.get("metrics", {})
+    nav = load("navigation", "trainer_status.json")
+    nav_champ = load("navigation", "champion_score.json")
+    battle = load("battle", "battle_stats.json")
+    bc = battle.get("counters") or {}
+    scenarios = load("battle", "scenarios", "index.json").get("scenarios") or []
+    runners, watcher = _instances()
+    metrics = nav.get("last_eval_metrics") or nav_champ.get("metrics") or {}
 
-    v20 = load("curriculum_v20", "state.json")
-    # Flotten-Rekord = tiefste je beruehrte Stufe (global_progress.json). Das ist
-    # eine Bestmarke, KEIN "freigeschaltet" - ein einzelner (evtl. Glitch-)Schritt
-    # reicht. Was zaehlt: was der Champion reproduziert + was das Curriculum als
-    # gemeistert/entdeckt fuehrt.
-    record_depth = int(gp.get("max_world_stage", 0))
-    if gp.get("progress_schema") != "geography_v1":
-        record_depth = {4: 1, 5: 1, 6: 4, 7: 5, 8: 6, 9: 6}.get(record_depth, record_depth)
-    champ_depth = int(m.get("max_stage", 0) or 0)
-    discovered = int(v20.get("discovered_stage", 0) or 0)
-    mastered = int(v20.get("mastered_stage", 0) or 0)
-    bottleneck = v20.get("current_bottleneck")
-    stage_names = {
-        0: "Start/innen", 1: "Alabastia", 2: "Route 1",
-        3: "Vertania", 4: "Route 2", 5: "Vertania-Wald", 6: "Marmoria",
-    }
-    # Die Wand steht am ersten NICHT gemeisterten Uebergang, nicht am Rekord.
-    _trans = v20.get("transitions") or {}
-    if bottleneck:
-        b = int(bottleneck)
-        wall = f"  <-- haengt {stage_names.get(b, b)} -> {stage_names.get(b + 1, b + 1)}"
-    else:
-        wall = ""
-    # Zusaetzlich: der tiefste Uebergang, der oft versucht aber NIE geschafft
-    # wurde - die eigentliche Front-Wand (z.B. Route 1 -> Vertania: 0/246).
-    hard_wall = ""
-    for _k, _rec in sorted(_trans.items(), key=lambda kv: int(kv[0]), reverse=True):
-        _att = int((_rec or {}).get("attempts", 0) or 0)
-        _suc = int((_rec or {}).get("successes", 0) or 0)
-        if _att >= 20 and _suc == 0:
-            _h = int(_k)
-            hard_wall = (
-                f"     Front-Wand:  {stage_names.get(_h, _h)} -> "
-                f"{stage_names.get(_h + 1, _h + 1)}  ({_suc}/{_att} Querungen geschafft)"
-            )
-            break
+    nav_steps = int(nav.get("learner_steps", 0) or 0)
+    champ_steps = int(nav.get("champion_steps", 0)
+                      or nav_champ.get("timesteps", 0) or 0)
+    nav_version = int(nav.get("champion_version", 0)
+                      or nav_champ.get("version", 0) or 0)
+    battle_version = int(battle.get("champion_version", 0) or 0)
+    battle_learner_version = int(battle.get("learner_version", 0) or 0)
+    battle_next_check = int(battle.get("next_promotion_step", 0) or 0)
+    battle_phase = str(battle.get("phase") or "training")
+    areas = sorted({str(s.get("area") or "unknown") for s in scenarios})
 
-    instances = {}
-    watcher = {}
-    for fp in glob.glob(os.path.join(RT, "instances_data", "inst_*.json")):
-        try:
-            with open(fp) as f:
-                data = json.load(f) or {}
-            agent_id = int(data.get("id", -1))
-        except Exception:
-            continue
-        if agent_id == 120:
-            watcher = data
-        elif agent_id >= 0:
-            # Kein festes Envs-Limit mehr - NUM_ENVS aendert sich (32/50/...),
-            # nur die Watcher-ID 120 ist reserviert und wird ausgeschlossen.
-            instances[agent_id] = data
+    in_battle = sum(bool(r.get("in_battle")) for r in runners)
+    maps = max((int(r.get("visited_maps", 0) or 0)
+                for r in runners), default=0)
+    max_stage = max((int(r.get("world_stage", 0) or 0) for r in runners),
+                    default=0)
 
-    out = []
-    out.append("=" * WIDTH)
-    out.append(f"  {datetime.now():%H:%M:%S}")
-    out.append("=" * WIDTH)
+    lines = ["=" * WIDTH,
+             f"  PKMai 2x2 STATUS  ·  {datetime.now():%H:%M:%S}",
+             "=" * WIDTH,
+             "  🧠 NAVIGATION BRAIN · LIVE",
+             f"     State: {str(nav.get('training_phase') or 'training').upper()}  |  40 FULL Agents vom Master-Start",
+             f"     Learner:  {fmt(nav_steps)} Steps",
+             f"     Champion: v{nav_version:06d} @ {fmt(champ_steps)} Steps",
+             f"     Seit Champion: +{fmt(int(nav.get('delta_steps', nav_steps-champ_steps) or 0))}",
+             f"     Progress: Stage {int(metrics.get('max_stage', 0) or 0)}  ·  Maps {int(metrics.get('max_maps', 0) or 0)}  ·  Orden {int(metrics.get('max_badges', 0) or 0)}  ·  FULL Runs {int(nav.get('recent_full_done', 0) or 0)}",
+             f"     Letzte Prüfung: {str(nav.get('last_eval_result') or 'noch keine')} @ {fmt(nav.get('last_eval_at_step', 0))}",
+             "-" * WIDTH,
+             "  ⚔️  BATTLE BRAIN · LIVE",
+             f"     State: {battle_phase.upper().replace('_', ' ')}  |  {int(battle.get('n_workers', 9) or 9)} lernende Fighter",
+             f"     Training: Learner v{battle_learner_version}  ·  {fmt(bc.get('env_steps', 0))} Battle-Steps  ·  {fmt(bc.get('ppo_updates', 0))} PPO-Updates",
+             "     Live:     Champion " + (f"v{battle_version}" if battle_version else "RULE FALLBACK (noch kein PPO-Champion)"),
+             f"     Episoden {fmt(bc.get('episodes', 0))}  ·  Siege {fmt(bc.get('wins', 0))}  ·  K.O. {fmt(bc.get('kos', 0))}  ·  Wipes {fmt(bc.get('wipes', 0))}",
+             f"     Fluchten {fmt(bc.get('flees', 0))}  ·  Timeouts/ohne Ergebnis {fmt(bc.get('timeouts', 0))}",
+             f"     Szenarien: {len(scenarios)}  ·  Gebiete: {', '.join(areas) if areas else 'noch keine'}"]
+    if battle_phase == "champion_evaluation":
+        lines.append("     Nächste Prüfung: läuft gerade (40 echte Kämpfe; Trainings-Rollouts pausieren).")
+    elif battle_next_check:
+        lines.append(f"     Nächste Prüfung: bei {fmt(battle_next_check)} Battle-Steps (dann 40 echte Kämpfe)")
 
-    # 1) BRAIN zuerst: die eine Frage die zaehlt - wird das Netz besser?
-    out.extend(brain_section(ts, cs, m))
-
-    # 2) WELT: wo steht die Front gerade.
-    out.append("-" * WIDTH)
-    out.append(
-        f"  🗺️ WELT        Champion Stufe {champ_depth}: "
-        f"{stage_names.get(champ_depth, '?')}{wall}"
-    )
-    out.append(
-        f"                 Curriculum: entdeckt {discovered} / gemeistert {mastered}"
-        f"   |   Flotten-Rekord je: {record_depth} ({stage_names.get(record_depth, '?')})"
-    )
-    if hard_wall:
-        out.append(hard_wall)
-
-    # V17.2: die SCHIGGI-Sektion (Starter-Erfolgsquote) ist seit dem
-    # Savestate-Start ueberfluessig geworden - der Starter ist bereits Teil
-    # des fixen Episodenstarts und liegt praktisch immer bei ~100 %. War
-    # reiner Log-Ballast ("Falscher Starter aktuell: 0" jede Sekunde).
-    all_agents = list(instances.values())
-
-    # 3b) K.O.-Bilanz: wie oft stirbt die Flotte gerade (Party-Wipe),
-    # gegen wie oft sie selbst K.O.s landet - fleet-weite Summe ueber
-    # reward_stats.run_stats aus allen Instanz-JSONs.
-    party_wipes = 0
-    enemy_faints = 0
-    for d in all_agents:
-        rs = (d.get("reward_stats") or {}).get("run_stats") or {}
-        party_wipes += int(rs.get("party_wipes", 0) or 0)
-        enemy_faints += int(rs.get("enemy_faints", 0) or 0)
-    out.append("-" * WIDTH)
-    out.append("  ☠️ K.O.-BILANZ (Summe ueber die Flotte)")
-    out.append(
-        f"     Eigene Party K.O. (wiped): {fmt(party_wipes)}   |   "
-        f"Gegner-K.O.: {fmt(enemy_faints)}"
-    )
-
-    # 4) WATCHER: der sichtbare Einzel-Lauf.
+    lines.extend(["-" * WIDTH,
+                  "  🧭 FULL FLEET",
+                  f"     Telemetrie: {len(runners)}/40  ·  im Kampf: {in_battle}  ·  aktuelle Best-Stage: {max_stage}  ·  max. besuchte Maps: {maps}"])
     if watcher:
-        wbs = watcher.get("battle_stats") or {}
-        out.append("-" * WIDTH)
-        out.append("  👁️ WATCHER")
-        out.append(f"     Modell:   {watcher.get('loaded_model', '?')}")
-        out.append(
-            f"     Position: {watcher.get('bank')}/{watcher.get('map')} "
-            f"@ {watcher.get('x')},{watcher.get('y')}  |  Level {watcher.get('level', 0)}"
-        )
-        out.append(
-            f"     Schritte: Weg {fmt(watcher.get('route_steps', watcher.get('steps', 0)))}  |  "
-            f"Kampf {fmt(watcher.get('battle_steps', 0))}"
-        )
-        out.append(
-            f"     Reward:   {watcher.get('reward', 0)}"
-        )
-        fights_started = int(wbs.get("started", 0) or 0)
-        fights_done = int(wbs.get("completed", 0) or 0)
-        if fights_started or fights_done:
-            out.append(f"     Kämpfe:   {fights_started} gestartet, {fights_done} beendet")
-
-    maps_seen = Counter()
-    for d in instances.values():
-        maps_seen[f"{d.get('bank')},{d.get('map')}"] += 1
-    if instances:
-        out.append("-" * WIDTH)
-        out.append(f"  🤖 FLOTTE       {len(instances)} Agenten")
-        out.append("     Auf Maps: " + "  ".join(f"{k}:{v}" for k, v in maps_seen.most_common(6)))
-
-    stages = sorted(glob.glob(os.path.join(RT, "curriculum_shared", "stage_*.state.gz")))
-    if stages:
-        deepest = max(int(os.path.basename(p).removesuffix(".state.gz").rsplit("_", 1)[1]) for p in stages)
-        out.append("-" * WIDTH)
-        out.append(f"  💾 CHECKPOINTS  tiefster stage_{deepest}  ({len(stages)} State-Dateien)")
-    out.append("=" * WIDTH)
-    return "\n".join(out)
+        lines.extend(["-" * WIDTH,
+                      "  👁️  FULL WATCHER (Inference, lernt nicht)",
+                      f"     Navigation Champion v{int(watcher.get('model_version', nav_version) or nav_version):06d}  ·  Ort {watcher.get('bank', '?')}/{watcher.get('map', '?')} @ {watcher.get('x', '?')},{watcher.get('y', '?')}  ·  Steps {fmt(watcher.get('steps', 0))}"])
+    lines.extend(["=" * WIDTH, "  Ctrl-C beendet nur diese Statusanzeige."])
+    return "\n".join(lines)
 
 
 def main():
-    args = sys.argv[1:]
-    once = "--once" in args or "-1" in args
-    interval = 1
-    if "-n" in args:
-        try:
-            interval = int(args[args.index("-n") + 1])
-        except Exception:
-            pass
-
-    if once:
-        print(render())
-        return
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-n", "--interval", type=float, default=1.0)
+    parser.add_argument("--once", action="store_true")
+    args = parser.parse_args()
     try:
-        body = render()
-        last_pull = time.time()
         while True:
-            now = time.time()
-            if now - last_pull >= interval:
-                body = render()
-                last_pull = now
-            remaining = max(0, int(round(interval - (now - last_pull))))
-            bar = "#" * (interval - remaining) + "-" * remaining
-            sys.stdout.write("\033[2J\033[H")
-            sys.stdout.write(
-                body
-                + f"\n\n  naechste Aktualisierung in {remaining}s  [{bar}]"
-                + "   (Ctrl+C beendet)\n"
-            )
-            sys.stdout.flush()
-            time.sleep(1)
+            if not args.once:
+                print("\033[2J\033[H", end="")
+            print(render(), flush=True)
+            if args.once:
+                return
+            time.sleep(max(0.2, args.interval))
     except KeyboardInterrupt:
-        print()
+        print("\nStatusanzeige beendet.")
 
 
 if __name__ == "__main__":

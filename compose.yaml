@@ -84,3 +84,19 @@ services:
     mem_limit: 1g
     memswap_limit: 1200m
     restart: unless-stopped
+
+  stage-evaluator:
+    image: pkmai-trainer:local
+    container_name: pkmai-stage-evaluator
+    profiles: ["evaluator"]
+    entrypoint: ["python", "-u", "src/stage_evaluator.py"]
+    environment:
+      PKMAI_STAGE_EVAL_EPISODES: "10"
+      PKMAI_STAGE_EVAL_SEED: "1729"
+    volumes:
+      - ./runtime:/app/runtime
+      - ./local:/app/local:ro
+    cpus: 1.0
+    mem_limit: 1g
+    memswap_limit: 1200m
+    restart: unless-stopped

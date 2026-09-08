@@ -304,6 +304,8 @@ class PokemonFireRedEnv(gym.Env):
         shared_lock=None,
         agent_count=120,
         is_watcher=False,
+        episode_start_override=None,
+        training_objective_override=None,
     ):
         super().__init__()
 
@@ -311,6 +313,8 @@ class PokemonFireRedEnv(gym.Env):
         # The visible watcher is an observer, not a bounded training rollout.
         # It may reset only through real safety guards or emulator recovery.
         self.is_watcher = bool(is_watcher)
+        self.episode_start_override = episode_start_override
+        self.training_objective_override = training_objective_override
         self.agent_count = max(1, int(agent_count))
         self.shared_edges = shared_edges
         self.shared_maps = shared_maps
@@ -1932,6 +1936,10 @@ class PokemonFireRedEnv(gym.Env):
     def _choose_episode_start(self):
         self.saved_milestones = self._discover_saved_milestones()
         self.full_chain_ready = self._champion_full_starter_ready()
+        episode_start_override = getattr(self, "episode_start_override", None)
+        if episode_start_override is not None:
+            self.training_objective = getattr(self, "training_objective_override", None) or "full"
+            return str(episode_start_override)
         if getattr(self, "is_watcher", False):
             # The public watcher is a full-journey regression check, never a
             # specialist replay.  On every process/episode reset it must

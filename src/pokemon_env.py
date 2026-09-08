@@ -2066,6 +2066,8 @@ class PokemonFireRedEnv(gym.Env):
         map_id = int(loc["map_id"]) if loc["valid"] else 0
         x = int(loc["x_pos"]) if loc["valid"] else 0
         y = int(loc["y_pos"]) if loc["valid"] else 0
+        if loc["valid"]:
+            self._sync_story_progress_from_location(bank, map_id)
 
         if self._valid_coord(bank, map_id, x, y):
             coord_key = (bank, map_id, x, y)
@@ -2100,6 +2102,18 @@ class PokemonFireRedEnv(gym.Env):
             badges,
             int(info.get("in_battle", 0))
         )
+
+    def _sync_story_progress_from_location(self, bank, map_id):
+        """Restore monotonic early-story flags from a trusted later map."""
+        if int(bank) == 4 and int(map_id) == 0:
+            self.intro_complete_rewarded = True
+            self.stairs_down_rewarded = True
+        elif int(bank) == self.OVERWORLD_BANK:
+            self.intro_complete_rewarded = True
+            self.stairs_down_rewarded = True
+            self.left_house_rewarded = True
+            self.left_house_confirmed = True
+            self.outdoor_confirm_reads = self.OUTDOOR_CONFIRM_READS
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -2442,6 +2456,8 @@ class PokemonFireRedEnv(gym.Env):
         map_id = int(loc["map_id"]) if loc["valid"] else 0
         x = int(loc["x_pos"]) if loc["valid"] else 0
         y = int(loc["y_pos"]) if loc["valid"] else 0
+        if loc["valid"]:
+            self._sync_story_progress_from_location(bank, map_id)
         try:
             battle_party = read_enemy_party(self.env)
         except Exception:

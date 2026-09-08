@@ -42,6 +42,19 @@ class NavigationRecoveryTests(unittest.TestCase):
         self.assertEqual(env._target_coords_for_stage(4, 0), [(5, 8)])
         self.assertEqual(env._nav_target(4, 0, 10, 2), (5, 8))
 
+    def test_trusted_downstairs_map_restores_prior_story_flags(self):
+        env = PokemonFireRedEnv.__new__(PokemonFireRedEnv)
+        env.intro_complete_rewarded = False
+        env.stairs_down_rewarded = False
+        env.left_house_rewarded = False
+        env.left_house_confirmed = False
+
+        env._sync_story_progress_from_location(4, 0)
+
+        self.assertTrue(env.intro_complete_rewarded)
+        self.assertTrue(env.stairs_down_rewarded)
+        self.assertFalse(env.left_house_confirmed)
+
     def test_missing_confirmed_stairs_does_not_invent_a_recovery_target(self):
         self.warps["stairs"] = set()
         self.assertEqual(self.env._target_coords_for_stage(4, 1), [])

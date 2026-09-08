@@ -170,6 +170,11 @@ def main() -> None:
                 recent_reward_events,
                 info.get("reward_events"),
             )
+            if reward < 0.0 and not info.get("reward_events"):
+                recent_reward_events = append_recent_reward_events(
+                    recent_reward_events,
+                    [f"step_reward:{float(reward):+.3f}"],
+                )
             write_watcher_stream_frame(
                 annotate_frame(env.env.get_screen(), policy_version, action),
                 PROJECT_ROOT / "runtime" / "watcher.jpg",

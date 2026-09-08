@@ -101,14 +101,33 @@ class DynamicLearnerTests(unittest.TestCase):
         self.assertEqual(summary[1]["success_rate"], 0.5)
         self.assertEqual(summary[2]["median_success_steps"], 80.0)
 
+    def test_stage_summary_counts_only_terminal_episode_outcomes(self):
+        summary = dynamic_brain.rollout_stage_summary({
+            "objective_code": np.array([2, 2, 2, 3, 3], dtype=np.int8),
+            "objective_success": np.array([False, False, True, False, False], dtype=np.bool_),
+            "success_steps": np.array([-1, -1, 80, -1, -1], dtype=np.int32),
+            "dones": np.array([False, False, True, False, True], dtype=np.bool_),
+        })
+
+        self.assertEqual(summary[2]["samples"], 1.0)
+        self.assertEqual(summary[2]["successes"], 1.0)
+        self.assertEqual(summary[3]["samples"], 1.0)
+        self.assertEqual(summary[3]["success_rate"], 0.0)
+
     def test_stage_gate_blocks_regression_of_confirmed_stage(self):
         self.assertFalse(dynamic_brain.stage_gate_allows_promotion(
             {1: {"samples": 64, "success_rate": 0.2}},
             {"1": {"samples": 64, "success_rate": 0.9}},
         ))
 
-    def test_stage_gate_allows_unobserved_stage(self):
-        self.assertTrue(dynamic_brain.stage_gate_allows_promotion(
+    def test_stage_gate_requires_evidence_for_every_confirmed_stage(self):
+        self.assertFalse(dynamic_brain.stage_gate_allows_promotion(
+            {2: {"samples": 64, "success_rate": 0.9}},
+            {"1": {"samples": 64, "success_rate": 0.9}},
+        ))
+
+    def test_stage_gate_blocks_insufficient_episode_evidence(self):
+        self.assertFalse(dynamic_brain.stage_gate_allows_promotion(
             {2: {"samples": 8, "success_rate": 0.0}},
             {"2": {"samples": 64, "success_rate": 0.9}},
         ))

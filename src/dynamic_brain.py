@@ -25,6 +25,8 @@ CHECKPOINTS_DIR = CLUSTER_DIR / "brain_checkpoints"
 ACTION_EXPLORATION_FLOOR = min(
     0.35, max(0.0, float(os.getenv("PKMAI_ACTION_EXPLORATION_FLOOR", "0.35")))
 )
+MIN_STAGE_EVALUATION_EPISODES = 10
+MIN_STAGE_SUCCESS_RATE = 0.60
 
 
 def combine_rollouts(batches: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
@@ -46,13 +48,20 @@ def load_best_mean_reward(path: Path = BEST_SCORE_FILE) -> tuple[int, float, flo
 
 
 def stage_gate_allows_promotion(candidate, baseline) -> bool:
-    """Protect earlier skills when a candidate contains enough stage samples."""
+    """Protect verified stages; missing episode evidence is not a pass."""
     for code in (1, 2, 3, 4):
         current = (candidate or {}).get(code)
         previous = (baseline or {}).get(str(code), (baseline or {}).get(code))
-        if not current or not previous or current["samples"] < 32:
+        if not previous:
             continue
-        if previous.get("success_rate", 0.0) >= 0.5 and current["success_rate"] < 0.5:
+        if (
+            previous.get("samples", 0) < MIN_STAGE_EVALUATION_EPISODES
+            or previous.get("success_rate", 0.0) < MIN_STAGE_SUCCESS_RATE
+        ):
+            continue
+        if not current or current.get("samples", 0) < MIN_STAGE_EVALUATION_EPISODES:
+            return False
+        if current.get("success_rate", 0.0) < MIN_STAGE_SUCCESS_RATE:
             return False
     return True
 
@@ -68,13 +77,14 @@ def rollout_quality(batch: dict[str, np.ndarray], mean_reward: float) -> tuple[i
 
 
 def rollout_stage_summary(batch: dict[str, np.ndarray]) -> dict[int, dict[str, float]]:
-    """Summarize explicit objective outcomes without confusing shaping rewards."""
+    """Summarize completed objective episodes, never individual action steps."""
     codes = np.asarray(batch.get("objective_code", []), dtype=np.int8)
     successes = np.asarray(batch.get("objective_success", []), dtype=np.bool_)
     steps = np.asarray(batch.get("success_steps", []), dtype=np.int32)
+    terminals = np.asarray(batch.get("dones", np.ones(len(codes), dtype=np.bool_)), dtype=np.bool_)
     result = {}
-    for code in sorted(set(int(value) for value in codes)):
-        mask = codes == code
+    for code in sorted(set(int(value) for value in codes[terminals])):
+        mask = (codes == code) & terminals
         success_mask = mask & successes
         result[code] = {
             "samples": float(mask.sum()),

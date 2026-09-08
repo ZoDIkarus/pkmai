@@ -167,13 +167,22 @@ def get_cluster_status() -> dict:
     }
     known_tiles = _load_json(KNOWN_TILES_FILE)
     known_warps = []
-    for memory_file in EXPLORATION_MEMORY_DIR.glob("agent_*.json"):
+    warp_sources = list(EXPLORATION_MEMORY_DIR.glob("agent_*.json"))
+    warp_sources += list((RUNTIME_DIR / "curriculum_shared" / "confirmed_story_warps_v2").glob("*.json"))
+    warp_sources += list((RUNTIME_DIR / "curriculum_shared" / "exit_routes_v2").glob("*.json"))
+    for memory_file in warp_sources:
         memory = _load_json(memory_file)
-        for transition in memory.get("transitions", []) if isinstance(memory, dict) else []:
+        transitions = []
+        if isinstance(memory, dict):
+            transitions.extend(memory.get("transitions", []))
+            transitions.extend(memory.get("edges", []))
+            if isinstance(memory.get("transition"), list):
+                transitions.append(memory["transition"])
+        for transition in transitions:
             if isinstance(transition, list) and len(transition) == 8:
-                warp = transition[:4]
-                if warp not in known_warps:
-                    known_warps.append(warp)
+                for endpoint in (transition[:4], transition[4:]):
+                    if endpoint not in known_warps:
+                        known_warps.append(endpoint)
     objective_counts = Counter(
         worker["training_objective"]
         for worker in workers

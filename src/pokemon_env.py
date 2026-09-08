@@ -1901,10 +1901,21 @@ class PokemonFireRedEnv(gym.Env):
 
     def _agent_role(self):
         saved = set(getattr(self, "saved_milestones", ()) or ())
+        watcher_validation = None
+        try:
+            with open(os.path.join(RUNTIME_DIR, "watcher.json"), "r", encoding="utf-8") as handle:
+                watcher = json.load(handle) or {}
+            active_goal = (watcher.get("active_goal") or {}).get("key")
+            watcher_validation = {
+                "intro_complete": {"passed": active_goal != "intro_complete"}
+            }
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
         roles = curriculum_roles(
             self.agent_count,
             saved,
             load_status(CURRICULUM_QUALITY_FILE).get("stages", {}),
+            watcher_validation,
         )
         role = roles[min(max(0, int(self.rank)), len(roles) - 1)]
         labels = {

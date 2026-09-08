@@ -2066,8 +2066,6 @@ class PokemonFireRedEnv(gym.Env):
         map_id = int(loc["map_id"]) if loc["valid"] else 0
         x = int(loc["x_pos"]) if loc["valid"] else 0
         y = int(loc["y_pos"]) if loc["valid"] else 0
-        if loc["valid"]:
-            self._sync_story_progress_from_location(bank, map_id)
 
         if self._valid_coord(bank, map_id, x, y):
             coord_key = (bank, map_id, x, y)
@@ -2103,17 +2101,24 @@ class PokemonFireRedEnv(gym.Env):
             int(info.get("in_battle", 0))
         )
 
-    def _sync_story_progress_from_location(self, bank, map_id):
-        """Restore monotonic early-story flags from a trusted later map."""
-        if int(bank) == 4 and int(map_id) == 0:
-            self.intro_complete_rewarded = True
-            self.stairs_down_rewarded = True
-        elif int(bank) == self.OVERWORLD_BANK:
-            self.intro_complete_rewarded = True
-            self.stairs_down_rewarded = True
-            self.left_house_rewarded = True
-            self.left_house_confirmed = True
-            self.outdoor_confirm_reads = self.OUTDOOR_CONFIRM_READS
+    def _restore_story_progress_for_start(self, start):
+        """Restore all prerequisite story stages for a loaded curriculum state."""
+        if start == "beginning":
+            return
+        self.intro_complete_rewarded = True
+        self.episode_milestone_steps["intro_complete"] = 0
+        if start == "intro_complete":
+            return
+        self.stairs_down_rewarded = True
+        self.episode_milestone_steps["stairs_down"] = 0
+        if start == "stairs_down":
+            return
+        self.left_house_rewarded = True
+        self.left_house_confirmed = True
+        self.outdoor_confirm_reads = self.OUTDOOR_CONFIRM_READS
+        if start == "left_house":
+            return
+        self.has_starter = True
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -2269,35 +2274,7 @@ class PokemonFireRedEnv(gym.Env):
             loc_override=verified_loc
         )
 
-        if self.episode_start != "beginning":
-            self.intro_complete_rewarded = True
-
-            # Gezielte Early-Game-Curriculum-States muessen ihre Story-Stufe
-            # explizit wiederherstellen. Der RAM-Ort allein sagt nicht sicher,
-            # ob die Treppe bereits als Lern-Meilenstein erreicht wurde.
-            if self.episode_start == "intro_complete":
-                self.episode_milestone_steps["intro_complete"] = 0
-
-            elif self.episode_start == "stairs_down":
-                self.stairs_down_rewarded = True
-                self.episode_milestone_steps["intro_complete"] = 0
-                self.episode_milestone_steps["stairs_down"] = 0
-
-            elif (
-                self.episode_start == "left_house"
-                or self.episode_start == "starter"
-                or self.episode_start.startswith("progress_")
-                or self.episode_start.startswith("maps_")
-                or self.episode_start.startswith("level_")
-                or self.episode_start.startswith("badge_")
-            ):
-                # Spaetere Curriculum-States liegen nach dem Haus.
-                self.stairs_down_rewarded = True
-                self.left_house_rewarded = True
-                self.left_house_confirmed = True
-                self.outdoor_confirm_reads = self.OUTDOOR_CONFIRM_READS
-                self.episode_milestone_steps["intro_complete"] = 0
-                self.episode_milestone_steps["stairs_down"] = 0
+        self._restore_story_progress_for_start(self.episode_start)
 
         return (
             self._make_obs(
@@ -2456,8 +2433,6 @@ class PokemonFireRedEnv(gym.Env):
         map_id = int(loc["map_id"]) if loc["valid"] else 0
         x = int(loc["x_pos"]) if loc["valid"] else 0
         y = int(loc["y_pos"]) if loc["valid"] else 0
-        if loc["valid"]:
-            self._sync_story_progress_from_location(bank, map_id)
         try:
             battle_party = read_enemy_party(self.env)
         except Exception:

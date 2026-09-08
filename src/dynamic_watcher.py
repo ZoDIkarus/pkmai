@@ -74,10 +74,28 @@ def watcher_active_goal(env: PokemonFireRedEnv) -> dict[str, str]:
     return {"key": "progress", "label": "Weitere Karten erschließen"}
 
 
+def sync_watcher_story_progress(env: PokemonFireRedEnv) -> None:
+    """Infer already-passed house stages from a trusted current map."""
+    location = getattr(env, "cached_loc", {}) or {}
+    if not location.get("valid"):
+        return
+    bank = int(location.get("map_bank", 0) or 0)
+    map_id = int(location.get("map_id", 0) or 0)
+    if bank == 4 and map_id == 0:
+        env.intro_complete_rewarded = True
+        env.stairs_down_rewarded = True
+    elif bank == 3:
+        env.intro_complete_rewarded = True
+        env.stairs_down_rewarded = True
+        env.left_house_confirmed = True
+        env.left_house_rewarded = True
+
+
 def watcher_telemetry(
     env: PokemonFireRedEnv, reward: float, reward_events: list[str] | None = None
 ) -> dict:
     location = getattr(env, "cached_loc", {}) or {}
+    sync_watcher_story_progress(env)
     return {
         "reward": round(float(reward), 3),
         "episode_reward": round(float(getattr(env, "current_reward", reward) or 0.0), 3),

@@ -13,11 +13,25 @@ from dynamic_watcher import (
     choose_watcher_action,
     select_published_model,
     watcher_telemetry,
+    sync_watcher_story_progress,
     write_watcher_status,
 )
 
 
 class DynamicWatcherTests(unittest.TestCase):
+    def test_syncs_completed_house_stages_from_trusted_downstairs_map(self):
+        env = type("WatcherEnvironment", (), {
+            "cached_loc": {"valid": True, "map_bank": 4, "map_id": 0},
+            "intro_complete_rewarded": False,
+            "stairs_down_rewarded": False,
+            "left_house_confirmed": False,
+            "left_house_rewarded": False,
+        })()
+        sync_watcher_story_progress(env)
+        self.assertTrue(env.intro_complete_rewarded)
+        self.assertTrue(env.stairs_down_rewarded)
+        self.assertFalse(env.left_house_confirmed)
+
     def test_frame_keeps_the_emulator_screen_without_a_text_overlay(self):
         screen = np.zeros((40, 96, 3), dtype=np.uint8)
         screen[10, 10] = (20, 40, 60)

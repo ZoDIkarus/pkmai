@@ -35,6 +35,10 @@ def stage_step_limit(stage):
     return int(STAGE_STEP_LIMITS[str(stage)])
 
 
+def should_block_stage(summary):
+    return int(summary.get("episodes", 0) or 0) >= 3 and int(summary.get("successes", 0) or 0) == 0
+
+
 def summarize_stage_results(results):
     summary = {}
     for stage in sorted({str(row["stage"]) for row in results}):
@@ -86,8 +90,8 @@ def evaluate_stage(policy, stage, start, objective, seed, episodes, on_result=No
                 if terminated or truncated:
                     result = {"stage": stage, "success": bool(info.get("objective_success", False)), "steps": int(info.get("episode_steps", env.total_steps))}
                     results.append(result)
-                    if on_result is not None:
-                        on_result(result)
+                    if on_result is not None and on_result(result):
+                        break
                     break
             else:
                 result = {
@@ -97,8 +101,8 @@ def evaluate_stage(policy, stage, start, objective, seed, episodes, on_result=No
                     "truncation_reason": "evaluator_step_limit",
                 }
                 results.append(result)
-                if on_result is not None:
-                    on_result(result)
+                if on_result is not None and on_result(result):
+                    break
         finally:
             env.close()
     return results
@@ -121,9 +125,10 @@ def main():
                         payload["stages"] = summarize_stage_results(rows)
                         payload["updated_at"] = time.time()
                         write_result(payload)
+                        return should_block_stage(payload["stages"].get(stage, {}))
                     evaluate_stage(policy, stage, start, objective, seed + index * 1000, episodes, publish_partial)
                     stage_summary = payload["stages"].get(stage, {})
-                    if stage_summary.get("episodes", 0) >= 3 and stage_summary.get("successes", 0) == 0:
+                    if should_block_stage(stage_summary):
                         payload["status"] = "blocked"
                         payload["blocked_stage"] = stage
                         payload["updated_at"] = time.time()

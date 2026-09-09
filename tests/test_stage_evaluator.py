@@ -1,6 +1,6 @@
 import unittest
 
-from stage_evaluator import stage_step_limit, summarize_stage_results
+from stage_evaluator import should_block_stage, stage_step_limit, summarize_stage_results
 
 
 class StageEvaluatorTests(unittest.TestCase):
@@ -21,6 +21,11 @@ class StageEvaluatorTests(unittest.TestCase):
         self.assertEqual(stage_step_limit("stairs_down"), 640)
         self.assertEqual(stage_step_limit("left_house"), 768)
         self.assertEqual(stage_step_limit("starter"), 1024)
+
+    def test_three_terminal_failures_block_downstream_evaluation_early(self):
+        self.assertFalse(should_block_stage({"episodes": 2, "successes": 0}))
+        self.assertFalse(should_block_stage({"episodes": 3, "successes": 1}))
+        self.assertTrue(should_block_stage({"episodes": 3, "successes": 0}))
 
 
 if __name__ == "__main__":

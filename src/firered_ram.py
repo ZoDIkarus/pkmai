@@ -214,6 +214,8 @@ def read_player_location(env, allow_scan=True):
 PLAYER_PARTY_OFFSET = 0x24284
 ENEMY_PARTY_OFFSET = 0x2402C
 BATTLE_TYPE_FLAGS_OFFSET = 0x22B4C  # BPRE gBattleTypeFlags (0x02022B4C - EWRAM base)
+TRAINER_OPPONENT_OFFSET = 0x386AE  # BPRE gTrainerBattleOpponent
+BATTLE_OUTCOME_OFFSET = 0x23E8A  # BPRE gBattleOutcome
 POKEMON_STRUCT_SIZE = 100
 MAX_PARTY_SIZE = 6
 
@@ -452,3 +454,20 @@ def read_battle_type_flags(env):
     if ram is None or len(ram) < BATTLE_TYPE_FLAGS_OFFSET + 4:
         return 0
     return _u32(ram, BATTLE_TYPE_FLAGS_OFFSET)
+
+
+def read_trainer_battle(env):
+    """Return a validated FireRed trainer id and battle outcome.
+
+    The caller must additionally establish that a battle is currently active;
+    stale RAM alone never establishes a trainer encounter.
+    """
+    try:
+        ram = env.get_ram()
+        if ram is None or len(ram) < TRAINER_OPPONENT_OFFSET + 2 or len(ram) <= BATTLE_OUTCOME_OFFSET:
+            return 0, None
+        trainer_id = _u16(ram, TRAINER_OPPONENT_OFFSET)
+        outcome = int(ram[BATTLE_OUTCOME_OFFSET])
+        return (trainer_id if 0 < trainer_id < 743 else 0), (outcome if 0 <= outcome <= 9 else None)
+    except Exception:
+        return 0, None

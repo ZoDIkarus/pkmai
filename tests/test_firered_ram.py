@@ -42,6 +42,19 @@ class PlayerPartyValidationTests(unittest.TestCase):
             self.assertEqual(firered_ram.read_player_party(env), [valid])
 
 
+class TrainerBattleRamTests(unittest.TestCase):
+    def test_trainer_reader_returns_validated_id_and_outcome(self):
+        env = _RamEnv(0x40000)
+        env.ram[0x386AE:0x386B0] = (414).to_bytes(2, "little")
+        env.ram[0x23E8A] = 1
+        self.assertEqual(firered_ram.read_trainer_battle(env), (414, 1))
+
+        env.ram[0x386AE:0x386B0] = (743).to_bytes(2, "little")
+        env.ram[0x23E8A] = 10
+        self.assertEqual(firered_ram.read_trainer_battle(env), (0, None))
+
+
+
 class RamLocationSafetyTests(unittest.TestCase):
     def test_reads_source_backed_early_story_scene_variables(self):
         env = _RamEnv(firered_ram.EWRAM_SIZE + 0x8000)

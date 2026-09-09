@@ -104,6 +104,13 @@ def intro_bedroom_arrival(location):
     return tuple(location[:2]) == (4, 1)
 
 
+def intro_downstairs_recovery(location):
+    """Recover a missed bedroom read only for the trusted lower-house map."""
+    if location is None or len(location) < 2:
+        return False
+    return tuple(location[:2]) == (4, 0)
+
+
 def intro_speed_bonus(steps, limit=2500, maximum=25.0):
     """Reward only a fast, confirmed arrival at the bedroom."""
     elapsed = max(0, int(steps))
@@ -2808,10 +2815,19 @@ class PokemonFireRedEnv(gym.Env):
             gameplay_ready
             and self.episode_start == "beginning"
             and not self.intro_complete_rewarded
-            and intro_bedroom_arrival((bank, map_id, x, y))
+            and (
+                intro_bedroom_arrival((bank, map_id, x, y))
+                or intro_downstairs_recovery((bank, map_id, x, y))
+            )
         ):
-            # Nur die bestaetigte Schlafzimmer-Ankunft beendet das Intro.
+            # A delayed first trusted RAM read can miss B4/M1 and first appear
+            # downstairs in B4/M0. This applies only to a genuine beginning run.
+            recovered_downstairs = intro_downstairs_recovery((bank, map_id, x, y))
             self.intro_complete_rewarded = True
+            if recovered_downstairs:
+                self.stairs_down_rewarded = True
+                self.episode_milestone_steps.setdefault("stairs_down", self.total_steps)
+                reward_events.append("intro_downstairs_recovery:+0")
             reward += 100.0
             reward_events.append("intro_complete:+100")
             speed_bonus = intro_speed_bonus(self.total_steps)

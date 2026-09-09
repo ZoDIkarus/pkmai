@@ -14,6 +14,7 @@ from pokemon_env import (
     stuck_loop_penalty,
     intro_map_transition_completed,
     intro_bedroom_arrival,
+    intro_downstairs_recovery,
     intro_speed_bonus,
     watcher_episode_start,
 )
@@ -29,6 +30,11 @@ class ShortCycleRepeatsTests(unittest.TestCase):
         self.assertFalse(intro_bedroom_arrival(None))
         self.assertFalse(intro_bedroom_arrival((4, 2, 5, 6)))
         self.assertTrue(intro_bedroom_arrival((4, 1, 5, 6)))
+
+    def test_beginning_run_recovers_intro_after_the_first_trusted_downstairs_read(self):
+        self.assertFalse(intro_downstairs_recovery(None))
+        self.assertFalse(intro_downstairs_recovery((4, 1, 5, 6)))
+        self.assertTrue(intro_downstairs_recovery((4, 0, 9, 4)))
 
     def test_intro_reward_depends_only_on_completion_speed(self):
         self.assertGreater(intro_speed_bonus(100), intro_speed_bonus(900))

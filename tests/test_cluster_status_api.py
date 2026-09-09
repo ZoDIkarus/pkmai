@@ -306,6 +306,15 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.assertIn("reward_trace", page)
         self.assertIn("training_objective", page)
 
+    def test_trainer_reward_panel_keeps_window_extremes_with_their_event_values(self):
+        page = web_stream.index()
+
+        self.assertIn("Reward-Extremwerte (höchster + / tiefster −)", page)
+        self.assertIn("const parseEv=(raw)=>", page)
+        self.assertIn("let hi=null,lo=null;", page)
+        self.assertIn("fmtV(p.val)", page)
+        self.assertIn("let hi=null,lo=null", page)
+
     def test_trainer_page_labels_current_fps(self):
         page = web_stream.index()
 

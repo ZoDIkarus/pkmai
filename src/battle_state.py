@@ -64,6 +64,7 @@ class MainBattleReader:
         self.candidates = None
         self.samples = 0
         self.offset = None
+        self.last_result = None
 
     def read(self, ram, frames=14):
         if ram is None or len(ram) < 0x48000:
@@ -80,9 +81,15 @@ class MainBattleReader:
 
         if self.offset is not None:
             if valid(self.offset):
-                return bool(int(ram[self.offset + 0x439]) & 2)
-            self.__init__()
-            return None
+                self.last_result = bool(int(ram[self.offset + 0x439]) & 2)
+                return self.last_result
+            # A callback transition can temporarily invalidate gMain. Keep the
+            # last verified value rather than inventing a false battle exit.
+            last = self.last_result
+            self.candidates = None
+            self.samples = 0
+            self.offset = None
+            return last
 
         if self.candidates is None:
             self.candidates = {
@@ -103,5 +110,6 @@ class MainBattleReader:
             self.samples = 0
         elif len(self.candidates) == 1 and self.samples >= 2:
             self.offset = next(iter(self.candidates))
-            return bool(int(ram[self.offset + 0x439]) & 2)
-        return None
+            self.last_result = bool(int(ram[self.offset + 0x439]) & 2)
+            return self.last_result
+        return self.last_result

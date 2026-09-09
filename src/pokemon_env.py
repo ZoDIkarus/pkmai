@@ -90,6 +90,15 @@ def watcher_episode_start(is_watcher, curriculum_start):
     return "beginning" if bool(is_watcher) else curriculum_start
 
 
+def reset_emulator_to_episode_start(environment, is_watcher, watcher_beginning_state):
+    """Restore the watcher's captured true start instead of a partial core reset."""
+    if bool(is_watcher) and watcher_beginning_state is not None:
+        environment.em.set_state(watcher_beginning_state)
+        return True
+    environment.reset()
+    return False
+
+
 def intro_map_transition_completed(first_map, current_map):
     """Require a trusted map transition after gameplay first becomes readable."""
     if first_map is None or current_map is None:
@@ -2141,8 +2150,14 @@ class PokemonFireRedEnv(gym.Env):
             return
         self.has_starter = True
 
+    def capture_watcher_beginning_state(self):
+        if not self.is_watcher:
+            raise RuntimeError("only the watcher may capture its episode start")
+        return self.env.em.get_state()
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
+        options = options or {}
 
         # Vorherige Episode fuer die Lernstatistik abschliessen.
         if self.total_steps > 0:
@@ -2166,8 +2181,13 @@ class PokemonFireRedEnv(gym.Env):
         # Persistente Exploration vor Episode-Reset sichern.
         self._save_exploration_memory()
 
-        # Erst echter Spielstart.
-        self.env.reset()
+        # The watcher must restore the captured true beginning, not merely
+        # restart emulator bookkeeping while its game state remains advanced.
+        reset_emulator_to_episode_start(
+            self.env,
+            self.is_watcher,
+            options.get("watcher_beginning_state"),
+        )
 
         self.total_steps = 0
         self.episode_battles_started = 0

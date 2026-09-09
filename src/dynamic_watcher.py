@@ -148,6 +148,7 @@ def main() -> None:
     last_reload = 0.0
     recent_reward_events: list[str] = []
     observation, _ = env.reset()
+    beginning_state = env.capture_watcher_beginning_state()
     try:
         while True:
             now = time.monotonic()
@@ -186,7 +187,9 @@ def main() -> None:
                 watcher_telemetry(env, reward, recent_reward_events),
             )
             if terminated or truncated:
-                observation, _ = env.reset()
+                observation, _ = env.reset(
+                    options={"watcher_beginning_state": beginning_state}
+                )
                 print("watcher reset to the true initial game state", flush=True)
     finally:
         env.close()

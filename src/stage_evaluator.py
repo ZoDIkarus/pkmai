@@ -22,6 +22,17 @@ STAGES = (
     ("left_house", "stairs_down", "exit"),
     ("starter", "left_house", "starter"),
 )
+STAGE_STEP_LIMITS = {
+    "intro_complete": 256,
+    "stairs_down": 640,
+    "left_house": 768,
+    "starter": 1024,
+}
+
+
+def stage_step_limit(stage):
+    """Bound held-out episodes without changing training horizons."""
+    return int(STAGE_STEP_LIMITS[str(stage)])
 
 
 def summarize_stage_results(results):
@@ -65,7 +76,7 @@ def evaluate_stage(policy, stage, start, objective, seed, episodes, on_result=No
         try:
             observation, _ = env.reset(seed=seed + episode)
             generator = torch.Generator().manual_seed(seed + episode)
-            while True:
+            for _ in range(stage_step_limit(stage)):
                 image = torch.from_numpy(np.asarray(observation["image"], dtype=np.uint8))[None, ...]
                 nav = torch.from_numpy(np.asarray(observation["nav"], dtype=np.float32))[None, ...]
                 with torch.no_grad():
@@ -78,6 +89,16 @@ def evaluate_stage(policy, stage, start, objective, seed, episodes, on_result=No
                     if on_result is not None:
                         on_result(result)
                     break
+            else:
+                result = {
+                    "stage": stage,
+                    "success": False,
+                    "steps": stage_step_limit(stage),
+                    "truncation_reason": "evaluator_step_limit",
+                }
+                results.append(result)
+                if on_result is not None:
+                    on_result(result)
         finally:
             env.close()
     return results

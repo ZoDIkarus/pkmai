@@ -27,6 +27,7 @@ ACTION_EXPLORATION_FLOOR = min(
 )
 MIN_STAGE_EVALUATION_EPISODES = 10
 MIN_STAGE_SUCCESS_RATE = 0.60
+EVALUATION_STAGE_KEYS = ("intro_complete", "stairs_down", "left_house", "starter")
 
 
 def combine_rollouts(batches: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
@@ -62,6 +63,27 @@ def stage_gate_allows_promotion(candidate, baseline) -> bool:
         if not current or current.get("samples", 0) < MIN_STAGE_EVALUATION_EPISODES:
             return False
         if current.get("success_rate", 0.0) < MIN_STAGE_SUCCESS_RATE:
+            return False
+    return True
+
+
+def complete_evaluation_is_promotable(evaluation, candidate_version) -> bool:
+    """Accept only complete held-out evidence for the exact frozen candidate."""
+    if not isinstance(evaluation, dict) or evaluation.get("status") != "complete":
+        return False
+    if int(evaluation.get("policy_version", -1)) != int(candidate_version):
+        return False
+    episodes = int(evaluation.get("episodes_per_stage", 0) or 0)
+    stages = evaluation.get("stages")
+    if episodes < MIN_STAGE_EVALUATION_EPISODES or not isinstance(stages, dict):
+        return False
+    for stage in EVALUATION_STAGE_KEYS:
+        result = stages.get(stage)
+        if not isinstance(result, dict):
+            return False
+        if int(result.get("episodes", 0) or 0) < episodes:
+            return False
+        if float(result.get("success_rate", 0.0) or 0.0) < MIN_STAGE_SUCCESS_RATE:
             return False
     return True
 

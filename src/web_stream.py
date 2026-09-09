@@ -25,6 +25,7 @@ CLUSTER_WORKERS_FILE = CLUSTER_DIR / "workers.json"
 KNOWN_TILES_FILE = CLUSTER_DIR / "known_tiles.json"
 EXPLORATION_MEMORY_DIR = RUNTIME_DIR / "exploration_memory"
 CURRICULUM_QUALITY_FILE = RUNTIME_DIR / "curriculum_quality.json"
+STAGE_EVALUATION_FILE = CLUSTER_DIR / "stage_evaluation.json"
 LAST_WATCHER_FRAME: bytes | None = None
 
 
@@ -64,6 +65,33 @@ def _public_reward_trace(values) -> list[dict]:
             }
         )
     return result
+
+
+def _public_stage_evaluation(value) -> dict:
+    value = value if isinstance(value, dict) else {}
+    stages = value.get("stages") if isinstance(value.get("stages"), dict) else {}
+    public_stages = {}
+    for key, stage in stages.items():
+        if not isinstance(stage, dict):
+            continue
+        try:
+            public_stages[str(key)[:48]] = {
+                "episodes": max(0, int(stage.get("episodes", 0) or 0)),
+                "successes": max(0, int(stage.get("successes", 0) or 0)),
+                "success_rate": round(min(1.0, max(0.0, float(stage.get("success_rate", 0.0) or 0.0))), 4),
+                "median_success_steps": max(0, int(stage["median_success_steps"])) if stage.get("median_success_steps") is not None else None,
+            }
+        except (TypeError, ValueError):
+            continue
+    status = str(value.get("status", "unavailable"))
+    return {
+        "policy_version": max(0, int(value.get("policy_version", 0) or 0)),
+        "seed": max(0, int(value.get("seed", 0) or 0)),
+        "episodes_per_stage": max(0, int(value.get("episodes_per_stage", 0) or 0)),
+        "status": status if status in {"running", "blocked", "complete"} else "unavailable",
+        "blocked_stage": str(value.get("blocked_stage", ""))[:48],
+        "stages": public_stages,
+    }
 
 
 def get_watchers() -> dict:
@@ -120,6 +148,7 @@ def get_watchers_api() -> dict:
 def get_cluster_status() -> dict:
     now = time.time()
     policy = _load_json(CLUSTER_POLICY_FILE)
+    stage_evaluation = _public_stage_evaluation(_load_json(STAGE_EVALUATION_FILE))
     worker_rows = _load_json(CLUSTER_WORKERS_FILE)
     workers = []
     for worker_id, row in worker_rows.items():
@@ -236,6 +265,7 @@ def get_cluster_status() -> dict:
         "workers": workers,
         "known_tiles": known_tiles if isinstance(known_tiles, list) else [],
         "known_warps": known_warps,
+        "stage_evaluation": stage_evaluation,
     }
 
 
@@ -301,7 +331,7 @@ function watcherPosition(w){const p=w.position||{};return p.valid?`B${p.map_bank
 function renderTrainerDetail(w){const summary=$('trainer-detail-summary'),events=$('trainer-last-events'),extremes=$('trainer-reward-extremes'),trace=$('trainer-reward-trace');const parseEv=(raw)=>{const s=String(raw),m=s.match(/([+-]\d+(?:\.\d+)?)\s*$/);if(!m)return null;const val=Number(m[1]);if(!Number.isFinite(val))return null;let label=s.slice(0,m.index).replace(/:$/,''),step='';const sm=label.match(/^(\d+):(.*)$/);if(sm){step=sm[1];label=sm[2]}return {val,label,step}};const fmtV=v=>(v>0?'+':'')+(Math.abs(v)>=1?v.toFixed(1):v.toFixed(3));if(!w){summary.textContent='Trainer auswählen …';events.replaceChildren();extremes.replaceChildren();trace.replaceChildren();return}summary.textContent=`${w.worker_id} · ${w.fps===null||w.fps===undefined?'FPS wird gemessen':Number(w.fps).toFixed(2)+' FPS'} · Skill ${w.training_objective||'unbekannt'} · Rolle ${w.training_role||'unbekannt'} · Etappe ${w.story_stage||'unbekannt'} · Episode ${w.episode_steps||0} · Gesamt ${Number(w.episode_reward||0).toFixed(3)}`;events.replaceChildren();const last=w.last_reward_events||[];if(!last.length)events.append(make('div','Keine Reward-Events im letzten Step.','muted'));last.slice().reverse().forEach(x=>events.append(make('div',x,'event')));const allEvents=[...last,...(w.reward_trace||[]).flatMap(x=>x.events||[])];let hi=null,lo=null;allEvents.map(parseEv).filter(Boolean).forEach(p=>{if(p.val>0&&(!hi||p.val>hi.val))hi=p;if(p.val<0&&(!lo||p.val<lo.val))lo=p});extremes.replaceChildren();[['⬆',hi,'good'],['⬇',lo,'bad']].forEach(([arrow,p,kind])=>{if(!p)return;const row=make('div',undefined,'event'),dot=make('i');dot.className=kind;row.append(dot,make('b',arrow+' '+p.label+(p.step?' · Schritt '+p.step:'')),make('em',fmtV(p.val),kind==='good'?'good':''));extremes.append(row)});if(!extremes.children.length)extremes.append(make('div','Keine numerischen Reward-Events im aktuellen Rollout.','muted'));trace.replaceChildren();const rows=w.reward_trace||[];if(!rows.length)trace.append(make('div','Noch keine Reward-Rechnungen im aktuellen Rollout.','muted'));rows.slice().reverse().forEach(x=>{const eventText=(x.events||[]).join(' · ')||'keine Events';trace.append(make('div',`Schritt ${x.step} · ${A[x.action]||x.action} · ${Number(x.reward||0).toFixed(4)} · ${eventText}`,'event'))})}
 function renderTrainers(){const root=$('trainer-rows'),workers=state.cluster.workers||[];root.replaceChildren();if(!workers.some(w=>w.worker_id===state.selectedTrainer))state.selectedTrainer=workers[0]?.worker_id||null;workers.forEach(w=>{const r=document.createElement('tr');r.className='trainer-row'+(w.worker_id===state.selectedTrainer?' selected':'');r.tabIndex=0;r.title='Trainer-Details anzeigen';[w.worker_id,w.online?'online':'offline',`${w.training_objective||'unbekannt'} · ${w.training_role||'–'}`,w.story_stage||'–',`v${w.policy_version}`,w.fps===null||w.fps===undefined?'–':Number(w.fps).toFixed(2),position(w),A[w.last_action]||w.last_action,Number(w.last_reward).toFixed(3),Number(w.episode_reward||0).toFixed(2),w.episode_steps,w.in_battle?'ja':'–',w.age_seconds+' s'].forEach((v,i)=>r.append(make('td',v,i===1?(w.online?'online':'offline'):'')));r.onclick=()=>{state.selectedTrainer=w.worker_id;renderTrainers()};r.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();r.click()}};root.append(r)});if(!root.children.length)root.append(make('tr','Keine Trainertelemetrie.','empty'));renderTrainerDetail(workers.find(w=>w.worker_id===state.selectedTrainer))}
 function renderMap(){const workers=state.cluster.workers||[],groups={};(state.cluster.known_tiles||[]).forEach(t=>{if(!Array.isArray(t)||t.length!==4)return;const [b,m,x,y]=t,k=`B${b} · M${m}`;(groups[k]??=[]).push({position:{valid:true,map_bank:b,map_id:m,x,y},known:true})});workers.filter(w=>w.position?.valid).forEach(w=>{const p=w.position,k=`B${p.map_bank} · M${p.map_id}`;(groups[k]??=[]).push(w)});(state.watchers||[]).filter(w=>w.position?.valid).forEach(w=>{const p=w.position,k=`B${p.map_bank} · M${p.map_id}`;(groups[k]??=[]).push({position:p,worker_id:w.id||'watcher',watcher:true})});const atlas=$('map-atlas'),legend=$('map-legend');atlas.replaceChildren();legend.replaceChildren();Object.entries(groups).forEach(([key,rows])=>{const card=make('section',undefined,'map-card'),title=make('h3',key),map=make('div',undefined,'coordinate-map');const xs=rows.map(w=>w.position.x),ys=rows.map(w=>w.position.y),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys),rangeX=Math.max(1,maxX-minX),rangeY=Math.max(1,maxY-minY);const known=new Map(rows.filter(w=>w.known).map(w=>[`${w.position.x},${w.position.y}`,w])),tileSize=80/(Math.max(rangeX,rangeY)+1);known.forEach((w,key)=>{const [x,y]=key.split(',').map(Number),tile=make('div');tile.className='known-tile';tile.style.left=(10+(x-minX)*tileSize)+'%';tile.style.top=(10+(y-minY)*tileSize)+'%';tile.style.width=tileSize+'%';tile.style.height=tileSize+'%';map.append(tile)});(state.cluster.known_warps||[]).filter(w=>Array.isArray(w)&&w.length===4&&`B${w[0]} · M${w[1]}`===key).forEach(w=>{const warp=make('div');warp.className='known-warp';warp.style.left=(10+(w[2]-minX)*tileSize)+'%';warp.style.top=(10+(w[3]-minY)*tileSize)+'%';warp.style.width=tileSize+'%';warp.style.height=tileSize+'%';warp.title='Bekannter Warp';map.append(warp)});rows.filter(w=>!w.known).forEach(w=>{const p=w.position,d=make('div',w.worker_id.replace('local-trainer-',''),'dot'+(w.watcher?' watcher-dot':'')+(w.in_battle?' battle':''));d.style.left=(10+(p.x-minX)*tileSize+tileSize/2)+'%';d.style.top=(10+(p.y-minY)*tileSize+tileSize/2)+'%';d.title=`${w.worker_id}: ${position(w)}`;map.append(d);legend.append(make('div',`${w.worker_id} · ${key} · ${p.x},${p.y}${w.in_battle?' · Battle':''}`))});card.append(title,make('div',`Bekannte Fläche: X ${minX}–${maxX} · Y ${minY}–${maxY}`,'muted'),map);atlas.append(card)});legend.append(make('div','Grün · bekannte Tiles'),make('div','Schwarz · Rand der bekannten Fläche'),make('div','Gelb · bekannte Warps'),make('div','Blau · bekannte Ziele'));if(!Object.keys(groups).length){atlas.append(make('div','Warte auf bekannte Overworld-Tiles.','empty'));legend.append(make('div','Noch keine persistenten Kartendaten vorhanden.','muted'))}}
-function renderStats(){const w=state.cluster.workers||[],valid=w.filter(x=>x.position?.valid),battle=w.filter(x=>x.in_battle),rewards=w.length?w.reduce((a,x)=>a+Number(x.last_reward||0),0)/w.length:0,episodeRewards=w.length?w.reduce((a,x)=>a+Number(x.episode_reward||0),0)/w.length:0;const stats=[['Trainer online',w.filter(x=>x.online).length+'/'+w.length],['Policy-Version','v'+(state.cluster.policy_version||0)],['Trainingsschritte',Number(state.cluster.timesteps||0).toLocaleString('de-DE')],['Kartenpositionen',valid.length],['Aktive Battles',battle.length],['Ø letzter Reward',rewards.toFixed(3)],['Ø Episoden-Reward',episodeRewards.toFixed(2)]];$('stat-cards').replaceChildren(...stats.map(([k,v])=>{const e=make('div',undefined,'card');e.append(make('div',k,'muted'),make('div',v,'metric'));return e}))}
+function renderStats(){const w=state.cluster.workers||[],valid=w.filter(x=>x.position?.valid),battle=w.filter(x=>x.in_battle),rewards=w.length?w.reduce((a,x)=>a+Number(x.last_reward||0),0)/w.length:0,episodeRewards=w.length?w.reduce((a,x)=>a+Number(x.episode_reward||0),0)/w.length:0,ev=state.cluster.stage_evaluation||{},evStatus=ev.status||'unavailable',evProgress=Object.values(ev.stages||{}).reduce((n,s)=>n+Number(s.episodes||0),0),evLabel=evStatus==='blocked'?`blocked · ${ev.blocked_stage||'unbekannt'}`:`${evStatus} · ${evProgress}/${Number(ev.episodes_per_stage||0)*4}`;const stats=[['Trainer online',w.filter(x=>x.online).length+'/'+w.length],['Policy-Version','v'+(state.cluster.policy_version||0)],['Trainingsschritte',Number(state.cluster.timesteps||0).toLocaleString('de-DE')],['Evaluator',evLabel],['Evaluator-Policy',ev.policy_version?'v'+ev.policy_version:'–'],['Kartenpositionen',valid.length],['Aktive Battles',battle.length],['Ø letzter Reward',rewards.toFixed(3)],['Ø Episoden-Reward',episodeRewards.toFixed(2)]];$('stat-cards').replaceChildren(...stats.map(([k,v])=>{const e=make('div',undefined,'card');e.append(make('div',k,'muted'),make('div',v,'metric'));return e}))}
 function renderGoals(){const goals=state.cluster.goals||[],objectives=state.cluster.learning_objectives||[],catalog=$('goal-catalog'),active=$('active-training-objectives');catalog.replaceChildren(...goals.map(g=>{const e=make('div',undefined,'goal'),status=[g.category,g.observed?'Milestone gespeichert':'noch kein Signal'].filter(Boolean).join(' · '),average=g.average_steps===null||g.average_steps===undefined?'Ø Schritte: –':`Ø Schritte: ${Number(g.average_steps).toLocaleString('de-DE')}`;const details=make('div');details.append(make('div',g.label),make('div',average,'muted'));e.append(details,make('span',status,'badge '+(g.observed?'online':'')));return e}));active.replaceChildren(...objectives.map(o=>{const e=make('div',undefined,'goal');e.append(make('div',o.key),make('span',o.trainers+' Trainer','badge online'));return e}));const total=objectives.reduce((sum,o)=>sum+Number(o.trainers||0),0),summary=make('div',undefined,'goal');summary.append(make('div','Trainer gesamt'),make('span',total+' eindeutig zugeordnet','badge online'));active.append(summary)}
 function render(){renderSummary();renderWatchers();renderTrainers();renderMap();renderStats();renderGoals()}async function refresh(){try{const [watchers,cluster]=await Promise.all([fetch('/api/watchers?t='+Date.now(),{cache:'no-store'}).then(r=>r.json()),fetch('/api/cluster-status?t='+Date.now(),{cache:'no-store'}).then(r=>r.json())]);state.watchers=watchers.watchers||[];state.cluster=cluster;render()}catch{ $('summary').replaceChildren(make('span','Cluster nicht erreichbar','chip offline')) }}
 $('nav').onclick=e=>{const page=e.target.dataset.page;if(!page)return;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page))};refresh();setInterval(refresh,1500);setInterval(()=>{const active=state.watchers.find(w=>w.id===state.selectedWatcher)||state.watchers[0];if(active)$('watcher-frame').src=active.stream_url+'?t='+Date.now()},150);

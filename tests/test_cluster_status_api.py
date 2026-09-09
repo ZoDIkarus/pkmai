@@ -27,6 +27,7 @@ class ClusterStatusApiTests(unittest.TestCase):
         self.original_policy = web_stream.CLUSTER_POLICY_FILE
         self.original_workers = web_stream.CLUSTER_WORKERS_FILE
         self.original_curriculum_quality = web_stream.CURRICULUM_QUALITY_FILE
+        self.original_stage_evaluation = web_stream.STAGE_EVALUATION_FILE
         self.original_watcher_status = web_stream.WATCHER_STATUS_FILE
         self.original_watcher_stream = web_stream.WATCHER_STREAM_FILE
         self.original_last_watcher_frame = web_stream.LAST_WATCHER_FRAME
@@ -34,6 +35,7 @@ class ClusterStatusApiTests(unittest.TestCase):
         web_stream.CLUSTER_POLICY_FILE = root / "policy.json"
         web_stream.CLUSTER_WORKERS_FILE = root / "workers.json"
         web_stream.CURRICULUM_QUALITY_FILE = root / "curriculum_quality.json"
+        web_stream.STAGE_EVALUATION_FILE = root / "stage_evaluation.json"
         web_stream.WATCHER_STATUS_FILE = root / "watcher.json"
         web_stream.WATCHER_STREAM_FILE = root / "watcher.jpg"
         web_stream.LAST_WATCHER_FRAME = None
@@ -43,6 +45,7 @@ class ClusterStatusApiTests(unittest.TestCase):
         web_stream.CLUSTER_POLICY_FILE = self.original_policy
         web_stream.CLUSTER_WORKERS_FILE = self.original_workers
         web_stream.CURRICULUM_QUALITY_FILE = self.original_curriculum_quality
+        web_stream.STAGE_EVALUATION_FILE = self.original_stage_evaluation
         web_stream.WATCHER_STATUS_FILE = self.original_watcher_status
         web_stream.WATCHER_STREAM_FILE = self.original_watcher_stream
         web_stream.LAST_WATCHER_FRAME = self.original_last_watcher_frame
@@ -225,6 +228,26 @@ class ClusterStatusApiTests(unittest.TestCase):
 
         self.assertEqual(goals["stairs_down"]["average_steps"], 240)
         self.assertIsNone(goals["starter"]["average_steps"])
+
+    def test_cluster_status_exposes_sanitized_running_stage_evaluation(self):
+        web_stream.STAGE_EVALUATION_FILE.write_text(json.dumps({
+            "policy_version": 42,
+            "seed": 1729,
+            "episodes_per_stage": 10,
+            "status": "running",
+            "stages": {"intro_complete": {"episodes": 3, "successes": 1, "success_rate": 1 / 3, "median_success_steps": 12}},
+            "private_path": "/local/private.pt",
+        }))
+
+        evaluation = web_stream.get_cluster_status()["stage_evaluation"]
+
+        self.assertEqual(evaluation["policy_version"], 42)
+        self.assertEqual(evaluation["status"], "running")
+        self.assertEqual(evaluation["stages"]["intro_complete"]["episodes"], 3)
+        self.assertNotIn("private_path", evaluation)
+        page = web_stream.index()
+        self.assertIn("stage_evaluation", page)
+        self.assertIn("Evaluator", page)
 
     def test_cluster_status_includes_brock_and_frontier_goal_catalog(self):
         now = time.time()

@@ -138,3 +138,17 @@ class DynamicLearnerTests(unittest.TestCase):
             {2: {"samples": 8, "success_rate": 0.0}},
             {"2": {"samples": 64, "success_rate": 0.9}},
         ))
+
+    def test_complete_evaluation_requires_matching_candidate_version(self):
+        evaluation = {
+            "status": "complete",
+            "policy_version": 42,
+            "episodes_per_stage": 10,
+            "stages": {
+                stage: {"episodes": 10, "success_rate": 0.8}
+                for stage in ("intro_complete", "stairs_down", "left_house", "starter")
+            },
+        }
+
+        self.assertTrue(dynamic_brain.complete_evaluation_is_promotable(evaluation, 42))
+        self.assertFalse(dynamic_brain.complete_evaluation_is_promotable(evaluation, 43))

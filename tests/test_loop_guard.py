@@ -18,6 +18,14 @@ class LocalLoopGuardTests(unittest.TestCase):
 
 
 class ShortCycleGuardTests(unittest.TestCase):
+    def test_duplicate_ram_samples_do_not_hide_an_actual_ab_cycle(self):
+        guard = ShortCycleGuard(history=8, min_repeats=3, max_period=3)
+        result = {}
+        for position in ("A", "A", "B", "B", "A", "A", "B", "B", "A", "A", "B", "B"):
+            result = guard.update(position, "pallet")
+        self.assertTrue(result["cycle"])
+        self.assertEqual(result["period"], 2)
+
     def test_ab_cycle_escalates_then_resets_on_real_progress(self):
         guard = ShortCycleGuard(history=8, min_repeats=3, max_period=3, escalate_every=1)
         results = [guard.update((3, 0, step % 2, 0), "pallet") for step in range(7)]

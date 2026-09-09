@@ -72,7 +72,10 @@ class ShortCycleGuard:
         if not active or position is None:
             return {"penalty": 0.0, "suppress_shaping": self.in_cycle,
                     "truncate": False, "cycle": self.in_cycle, "period": 0}
-        self.positions.append(position)
+        # RAM coordinates can persist across several agent actions. Track actual
+        # movement transitions so repeated samples cannot obscure an A-B cycle.
+        if not self.positions or self.positions[-1] != position:
+            self.positions.append(position)
         period = self._detect_period()
         if not period:
             if self.in_cycle and len(set(list(self.positions)[-4:])) >= 4:

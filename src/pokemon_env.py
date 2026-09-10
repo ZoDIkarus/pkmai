@@ -8,8 +8,10 @@ import json
 import gzip
 import random
 from battle_state import BattleState, MainBattleReader
+from trainer_rewards import TrainerRewards
 from firered_ram import (
     read_battle_type_flags,
+    read_trainer_battle,
     read_enemy_party,
     read_player_location,
     read_player_party,
@@ -363,6 +365,7 @@ class PokemonFireRedEnv(gym.Env):
         self.last_in_battle = 0
         self.battle_state = BattleState()
         self.main_battle_reader = MainBattleReader()
+        self.trainer_rewards = TrainerRewards(brock_start=self.BROCK_BATTLE_START_REWARD)
         self.local_loop_guard = LocalLoopGuard()
         self.short_cycle_guard = ShortCycleGuard()
         self.wipe_active = False
@@ -2202,6 +2205,7 @@ class PokemonFireRedEnv(gym.Env):
         self.episode_enemy_faints = 0
         self.battle_state = BattleState()
         self.main_battle_reader = MainBattleReader()
+        self.trainer_rewards.reset()
         self.local_loop_guard = LocalLoopGuard()
         self.short_cycle_guard = ShortCycleGuard()
         self.wipe_active = False
@@ -2612,12 +2616,18 @@ class PokemonFireRedEnv(gym.Env):
             reward += self._pewter_arrival_reward(
                 current_stage, self.player_party_cache, reward_events
             )
-        if previous_battle_state == 0 and in_battle == 1:
-            reward += self._brock_battle_start_reward(
-                current_stage,
-                bool(int(getattr(self.battle_state, "raw_flags", 0)) & 0x8),
-                reward_events,
-            )
+        # Verified trainer RAM replaces the former stage-only Brock heuristic.
+        trainer_id, trainer_outcome = read_trainer_battle(self.env)
+        for event, value in self.trainer_rewards.update(
+            bool(in_battle),
+            bool(int(getattr(self.battle_state, "raw_flags", 0)) & 0x8),
+            trainer_id,
+            trainer_outcome,
+        ):
+            reward += value
+            reward_events.append(f"{event}:+{value:.0f}")
+            if event == "brock_battle_start":
+                self.episode_brock_battle_started = True
         if gameplay_ready and not self._wipe_cooldown_active():
             if map_key in self.POKECENTER_MAPS and map_key not in self.pokecenter_entered_this_episode:
                 self.pokecenter_entered_this_episode.add(map_key)
